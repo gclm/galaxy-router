@@ -2233,27 +2233,9 @@ fn is_key_retryable_upstream_error(status: StatusCode, body: &str) -> bool {
     .any(|needle| lower.contains(needle))
 }
 
-/// 解析 models 字段，兼容旧格式 {"available_models":[...],"model_maps":{}} 和新格式 ["m1","m2"]
+/// 解析 models 字段
 fn parse_models(models_str: &str) -> Vec<String> {
-    let value: serde_json::Value = serde_json::from_str(models_str).unwrap_or_default();
-
-    // 新格式：直接是数组
-    if let Some(arr) = value.as_array() {
-        return arr
-            .iter()
-            .filter_map(|v| v.as_str().map(String::from))
-            .collect();
-    }
-
-    // 旧格式：从 available_models 字段提取
-    if let Some(available) = value["available_models"].as_array() {
-        return available
-            .iter()
-            .filter_map(|v| v.as_str().map(String::from))
-            .collect();
-    }
-
-    Vec::new()
+    serde_json::from_str(models_str).unwrap_or_default()
 }
 
 #[cfg(test)]

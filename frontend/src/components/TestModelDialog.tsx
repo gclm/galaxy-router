@@ -26,6 +26,7 @@ interface ModelTestResult {
   latency_ms?: number
   time_to_first_token_ms?: number
   error?: string
+  input_prompt?: string
   output_content?: string
   prompt_tokens?: number
   completion_tokens?: number
@@ -38,6 +39,54 @@ function maskKey(key: string) {
 
 function keyLabel(k: { key: string; note?: string }) {
   return k.note?.trim() || maskKey(k.key)
+}
+
+function TerminalOutput({
+  result,
+  isTesting,
+  protocolLabel,
+}: {
+  result?: ModelTestResult
+  isTesting: boolean
+  protocolLabel: string
+}) {
+  return (
+    <div className="rounded-lg border border-gray-700 bg-gray-900 dark:bg-black p-3 font-mono text-xs space-y-0.5 max-h-[200px] overflow-y-auto">
+      {isTesting && (
+        <>
+          <div className="text-yellow-400 animate-pulse">▸ 测试 {protocolLabel} 协议...</div>
+          <div className="text-yellow-400 animate-pulse">▌</div>
+        </>
+      )}
+      {!isTesting && result?.status === 'success' && (
+        <>
+          <div className="text-green-400">✓ 渠道连接成功</div>
+          <div className="text-cyan-400">→ 协议: {protocolLabel}</div>
+          <div className="text-cyan-400">
+            → 耗时: {result.latency_ms}ms
+            {result.time_to_first_token_ms != null && `  TTFT: ${result.time_to_first_token_ms}ms`}
+          </div>
+          {(result.prompt_tokens != null || result.completion_tokens != null) && (
+            <div className="text-cyan-400">
+              → Token: {result.prompt_tokens ?? '-'}/{result.completion_tokens ?? '-'}
+            </div>
+          )}
+          <div className="text-gray-500">── 输入 ──</div>
+          <div className="text-blue-300 whitespace-pre-wrap">{result.input_prompt || '(无)'}</div>
+          {result.output_content && (
+            <>
+              <div className="text-gray-500">── 输出 ──</div>
+              <div className="text-green-300 whitespace-pre-wrap">{result.output_content}</div>
+            </>
+          )}
+          <div className="text-green-400">✓ 测试成功</div>
+        </>
+      )}
+      {!isTesting && result?.status === 'error' && (
+        <div className="text-red-400 whitespace-pre-wrap">✗ 测试失败: {result.error || '未知错误'}</div>
+      )}
+    </div>
+  )
 }
 
 export function TestModelDialog({ channel, open, onOpenChange }: TestModelDialogProps) {
@@ -75,6 +124,8 @@ export function TestModelDialog({ channel, open, onOpenChange }: TestModelDialog
 
   const currentKey = selectedKey || enabledKeys[0]?.key || ''
   const currentProtocol = protocol || availableProtocols[0]?.value || ''
+  const protocolLabel =
+    availableProtocols.find((p) => p.value === currentProtocol)?.label || currentProtocol
 
   const filteredModels = useMemo(() => {
     if (!searchTerm) return models
@@ -110,6 +161,14 @@ export function TestModelDialog({ channel, open, onOpenChange }: TestModelDialog
     markTesting(model, true)
     updateResult(model, { status: 'testing' })
 
+    // 单测时自动展开终端
+    setExpandedModels((prev) => {
+      if (prev.has(model)) return prev
+      const next = new Set(prev)
+      next.add(model)
+      return next
+    })
+
     let finalResult: ModelTestResult | undefined
     try {
       const res: TestChannelResponse = await channelsApi.testChannel(channel.id, {
@@ -123,6 +182,7 @@ export function TestModelDialog({ channel, open, onOpenChange }: TestModelDialog
         latency_ms: res.latency_ms,
         time_to_first_token_ms: res.time_to_first_token_ms,
         error: res.success ? undefined : res.message,
+        input_prompt: res.input_prompt || undefined,
         output_content: res.output_content ?? undefined,
         prompt_tokens: res.prompt_tokens,
         completion_tokens: res.completion_tokens,
@@ -136,17 +196,6 @@ export function TestModelDialog({ channel, open, onOpenChange }: TestModelDialog
 
     updateResult(model, finalResult)
     markTesting(model, false)
-
-    // 自动展开有结果的模型
-    if (finalResult && finalResult.status !== 'testing') {
-      setExpandedModels((prev) => {
-        if (prev.has(model)) return prev
-        const next = new Set(prev)
-        next.add(model)
-        return next
-      })
-    }
-
     return finalResult
   }
 
@@ -181,9 +230,34 @@ export function TestModelDialog({ channel, open, onOpenChange }: TestModelDialog
         </DialogHeader>
 
         <div className="flex-1 overflow-y-auto space-y-4 pr-1">
+          {/* 渠道信息卡 */}
+          {channel && (
+            <div className="flex items-center justify-between rounded-xl bg-gradient-to-r from-primary/10 to-primary/5 border border-primary/10 px-4 py-3">
+              <div className="flex items-center gap-3">
+                <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-to-br from-primary to-primary/70 text-primary-foreground text-xs font-bold">
+                  {channel.name.charAt(0)}
+                </div>
+                <div>
+                  <span className="font-medium text-sm">{channel.name}</span>
+                  <span className="text-xs text-muted-foreground ml-2">
+                    {models.length} 模型 · {enabledKeys.length} Key · {availableProtocols.length} 协议
+                  </span>
+                </div>
+              </div>
+              <span
+                className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${
+                  channel.enabled
+                    ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400'
+                    : 'bg-gray-100 text-gray-500 dark:bg-gray-800 dark:text-gray-400'
+                }`}
+              >
+                {channel.enabled ? '启用' : '禁用'}
+              </span>
+            </div>
+          )}
+
           {/* 配置区 */}
           <div className="grid gap-4 sm:grid-cols-3">
-            {/* Key 选择 */}
             <div className="space-y-1.5">
               <label className="text-sm font-medium">API Key</label>
               <select
@@ -199,7 +273,6 @@ export function TestModelDialog({ channel, open, onOpenChange }: TestModelDialog
               </select>
             </div>
 
-            {/* 协议选择 */}
             <div className="space-y-1.5">
               <label className="text-sm font-medium">端点协议</label>
               <select
@@ -215,7 +288,6 @@ export function TestModelDialog({ channel, open, onOpenChange }: TestModelDialog
               </select>
             </div>
 
-            {/* 流式开关 */}
             <div className="space-y-1.5">
               <label className="text-sm font-medium">流式测试</label>
               <div className="flex items-center gap-2 h-[38px]">
@@ -234,17 +306,11 @@ export function TestModelDialog({ channel, open, onOpenChange }: TestModelDialog
 
           {/* 搜索 + 批量操作 */}
           <div className="flex items-center justify-between gap-3">
-            <div className="flex-1 flex items-center gap-2">
-              <span className="text-sm font-medium">
-                模型 ({models.length})
-                {successCount > 0 && (
-                  <span className="text-green-600 ml-2">✓ {successCount}</span>
-                )}
-                {failCount > 0 && (
-                  <span className="text-red-500 ml-1">✗ {failCount}</span>
-                )}
-              </span>
-            </div>
+            <span className="text-sm font-medium">
+              模型 ({models.length})
+              {successCount > 0 && <span className="text-green-600 ml-2">✓ {successCount}</span>}
+              {failCount > 0 && <span className="text-red-500 ml-1">✗ {failCount}</span>}
+            </span>
             <div className="flex items-center gap-2">
               <div className="relative">
                 <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
@@ -292,7 +358,7 @@ export function TestModelDialog({ channel, open, onOpenChange }: TestModelDialog
                     const r = results[model]
                     const isTesting = testingModels.has(model)
                     const isExpanded = expandedModels.has(model)
-                    const hasDetail = r && r.status !== 'idle' && r.status !== 'testing'
+                    const hasDetail = r && r.status !== 'idle'
 
                     return (
                       <Fragment key={model}>
@@ -309,7 +375,7 @@ export function TestModelDialog({ channel, open, onOpenChange }: TestModelDialog
                                   />
                                 </button>
                               ) : (
-                                <span className="w-4.5 inline-block" />
+                                <span className="w-[18px] inline-block" />
                               )}
                               <span className="font-mono text-xs">{model}</span>
                             </div>
@@ -333,7 +399,7 @@ export function TestModelDialog({ channel, open, onOpenChange }: TestModelDialog
                                 </span>
                                 {(r.prompt_tokens != null || r.completion_tokens != null) && (
                                   <span className="text-muted-foreground">
-                                    {r.prompt_tokens ?? '-'}/{r.completion_tokens ?? '-'} tokens
+                                    {r.prompt_tokens ?? '-'}/{r.completion_tokens ?? '-'}
                                   </span>
                                 )}
                               </div>
@@ -354,34 +420,19 @@ export function TestModelDialog({ channel, open, onOpenChange }: TestModelDialog
                               onClick={() => testSingle(model)}
                               disabled={isTesting || isBatchTesting || !currentKey || !currentProtocol}
                             >
-                              {isTesting ? (
-                                <Loader2 className="h-3 w-3 animate-spin" />
-                              ) : (
-                                '测试'
-                              )}
+                              {isTesting ? <Loader2 className="h-3 w-3 animate-spin" /> : '测试'}
                             </Button>
                           </td>
                         </tr>
                         {isExpanded && hasDetail && (
                           <tr className="border-b">
                             <td colSpan={3} className="p-0">
-                              <div className="px-4 py-2 bg-muted/20 border-t border-b">
-                                {r.status === 'success' && r.output_content && (
-                                  <div className="rounded bg-background p-2.5 text-xs whitespace-pre-wrap border">
-                                    {r.output_content}
-                                  </div>
-                                )}
-                                {r.status === 'error' && (
-                                  <div className="rounded bg-red-50 p-2.5 text-xs text-red-600 whitespace-pre-wrap border border-red-200">
-                                    {r.error}
-                                  </div>
-                                )}
-                                {(r.prompt_tokens != null || r.completion_tokens != null) && (
-                                  <div className="flex gap-4 mt-1.5 text-xs text-muted-foreground">
-                                    <span>输入: {r.prompt_tokens ?? '-'} tokens</span>
-                                    <span>输出: {r.completion_tokens ?? '-'} tokens</span>
-                                  </div>
-                                )}
+                              <div className="px-3 py-2">
+                                <TerminalOutput
+                                  result={r}
+                                  isTesting={isTesting}
+                                  protocolLabel={protocolLabel}
+                                />
                               </div>
                             </td>
                           </tr>

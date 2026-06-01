@@ -465,25 +465,8 @@ async fn get_channel_by_id(
     Ok(row_to_channel(row))
 }
 
-/// 兼容旧格式：api_keys 可能是 ["sk-xxx"] 或 [{"key":"sk-xxx","note":"","enabled":true}]
 pub fn parse_api_keys(json_str: &str) -> Vec<UpstreamApiKey> {
-    let value: serde_json::Value = serde_json::from_str(json_str).unwrap_or_default();
-    let Some(arr) = value.as_array() else {
-        return Vec::new();
-    };
-    arr.iter()
-        .filter_map(|v| {
-            if let Some(s) = v.as_str() {
-                Some(UpstreamApiKey {
-                    key: s.to_string(),
-                    note: String::new(),
-                    enabled: true,
-                })
-            } else {
-                serde_json::from_value(v.clone()).ok()
-            }
-        })
-        .collect()
+    serde_json::from_str(json_str).unwrap_or_default()
 }
 
 fn row_to_channel(row: ChannelRow) -> Channel {
@@ -672,13 +655,20 @@ fn extract_test_content(resp_body: &serde_json::Value, endpoint_type: &EndpointT
 }
 
 /// 从响应中提取 token 用量
-fn extract_usage(resp_body: &serde_json::Value, endpoint_type: &EndpointType) -> (Option<u64>, Option<u64>) {
+fn extract_usage(
+    resp_body: &serde_json::Value,
+    endpoint_type: &EndpointType,
+) -> (Option<u64>, Option<u64>) {
     let usage = &resp_body["usage"];
     match endpoint_type {
-        EndpointType::OpenAiChat => (usage["prompt_tokens"].as_u64(), usage["completion_tokens"].as_u64()),
-        EndpointType::OpenAiResponse | EndpointType::Anthropic => {
-            (usage["input_tokens"].as_u64(), usage["output_tokens"].as_u64())
-        }
+        EndpointType::OpenAiChat => (
+            usage["prompt_tokens"].as_u64(),
+            usage["completion_tokens"].as_u64(),
+        ),
+        EndpointType::OpenAiResponse | EndpointType::Anthropic => (
+            usage["input_tokens"].as_u64(),
+            usage["output_tokens"].as_u64(),
+        ),
         _ => (None, None),
     }
 }
@@ -712,7 +702,13 @@ async fn send_streaming_test(
     endpoint_type: &EndpointType,
     api_key: &str,
     custom_headers: &[CustomHeader],
-) -> (Result<String, String>, u64, Option<u64>, Option<u64>, Option<u64>) {
+) -> (
+    Result<String, String>,
+    u64,
+    Option<u64>,
+    Option<u64>,
+    Option<u64>,
+) {
     let mut req_builder = client
         .post(url)
         .header("Content-Type", "application/json")
@@ -816,9 +812,21 @@ async fn send_streaming_test(
 
     let total_ms = start.elapsed().as_millis() as u64;
     if full_content.is_empty() {
-        (Err("流式响应无内容".to_string()), total_ms, first_token_ms, prompt_tokens, completion_tokens)
+        (
+            Err("流式响应无内容".to_string()),
+            total_ms,
+            first_token_ms,
+            prompt_tokens,
+            completion_tokens,
+        )
     } else {
-        (Ok(full_content), total_ms, first_token_ms, prompt_tokens, completion_tokens)
+        (
+            Ok(full_content),
+            total_ms,
+            first_token_ms,
+            prompt_tokens,
+            completion_tokens,
+        )
     }
 }
 
