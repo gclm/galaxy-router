@@ -17,7 +17,7 @@ pub fn find_sse_boundary(buffer: &[u8]) -> Option<usize> {
 /// 提取 SSE 行字段值（兼容 `field: value` 和 `field:value` 两种格式）
 #[inline]
 pub fn sse_field<'a>(line: &'a str, field: &str) -> Option<&'a str> {
-    line.strip_prefix(field)?.strip_prefix(':').map(|rest| rest.strip_prefix(' ').unwrap_or(rest)).into()
+    line.strip_prefix(field)?.strip_prefix(':').map(|rest| rest.strip_prefix(' ').unwrap_or(rest))
 }
 
 /// SSE 中提取到的 usage 来源

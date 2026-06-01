@@ -431,10 +431,8 @@ impl Outbound for AnthropicOutbound {
                             input: item["input"].clone(),
                         });
                     }
-                    Some("thinking") => {
-                        if reasoning_content.is_none() {
-                            reasoning_content = item["thinking"].as_str().map(String::from);
-                        }
+                    Some("thinking") if reasoning_content.is_none() => {
+                        reasoning_content = item["thinking"].as_str().map(String::from);
                     }
                     _ => {}
                 }
