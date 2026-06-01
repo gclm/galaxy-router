@@ -5,26 +5,10 @@ use serde::{Deserialize, Serialize};
 use sqlx::{SqliteConnection, SqlitePool};
 
 type DbResult<T> = Result<T, (StatusCode, Json<ApiError>)>;
-type ChannelRow = (
-    String,
-    String,
-    String,
-    String,
-    String,
-    Option<i32>,
-    Option<i32>,
-    i32,
-    i32,
-    i32,
-    String,
-    bool,
-    String,
-    String,
-);
 type GroupRow = (String, String, Option<String>, bool, i32, i32, bool);
 
 use crate::api::handlers::admin::channels::Channel;
-use crate::api::handlers::admin::channels::CustomHeader;
+use crate::api::handlers::admin::channels::ChannelRow;
 use crate::api::{ApiError, ApiResponse};
 
 const BACKUP_FORMAT: &str = "galaxy-router-backup";
@@ -246,42 +230,22 @@ async fn fetch_channels(pool: &SqlitePool) -> DbResult<Vec<Channel>> {
 
     Ok(rows
         .into_iter()
-        .map(
-            |(
-                id,
-                name,
-                api_keys,
-                endpoints,
-                models,
-                rate_limit_rpm,
-                rate_limit_tpm,
-                failure_threshold,
-                blacklist_minutes,
-                concurrency,
-                custom_headers,
-                enabled,
-                created_at,
-                updated_at,
-            )| {
-                Channel {
-                    id,
-                    name,
-                    api_keys: serde_json::from_str(&api_keys).unwrap_or_default(),
-                    endpoints: serde_json::from_str(&endpoints).unwrap_or_default(),
-                    models: serde_json::from_str(&models).unwrap_or_default(),
-                    rate_limit_rpm,
-                    rate_limit_tpm,
-                    failure_threshold,
-                    blacklist_minutes,
-                    concurrency,
-                    custom_headers: serde_json::from_str::<Vec<CustomHeader>>(&custom_headers)
-                        .unwrap_or_default(),
-                    enabled,
-                    created_at,
-                    updated_at,
-                }
-            },
-        )
+        .map(|row| Channel {
+            id: row.id,
+            name: row.name,
+            api_keys: serde_json::from_str(&row.api_keys).unwrap_or_default(),
+            endpoints: serde_json::from_str(&row.endpoints).unwrap_or_default(),
+            models: serde_json::from_str(&row.models).unwrap_or_default(),
+            rate_limit_rpm: row.rate_limit_rpm,
+            rate_limit_tpm: row.rate_limit_tpm,
+            failure_threshold: row.failure_threshold,
+            blacklist_minutes: row.blacklist_minutes,
+            concurrency: row.concurrency,
+            custom_headers: serde_json::from_str(&row.custom_headers).unwrap_or_default(),
+            enabled: row.enabled,
+            created_at: row.created_at,
+            updated_at: row.updated_at,
+        })
         .collect())
 }
 

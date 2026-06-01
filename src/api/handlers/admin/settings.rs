@@ -82,11 +82,25 @@ pub async fn list(
     Ok(Json(ApiResponse::success(items)))
 }
 
+/// 允许通过 API 更新的设置项白名单
+const ALLOWED_SETTING_KEYS: &[&str] = &[
+    "scheduler.top_k",
+    "scheduler.score_weights",
+    "sticky_session.enabled",
+    "sticky_session.ttl_seconds",
+    "proxy.enabled",
+    "proxy.url",
+];
+
 pub async fn update(
     State(state): State<SettingsState>,
     Path(key): Path<String>,
     Json(body): Json<UpdateSettingRequest>,
 ) -> Result<Json<ApiResponse<()>>, (StatusCode, Json<ApiError>)> {
+    if !ALLOWED_SETTING_KEYS.contains(&key.as_str()) {
+        return Err(ApiError::bad_request(format!("不允许更新的设置项: {}", key)));
+    }
+
     let result =
         sqlx::query("UPDATE settings SET value = ?, updated_at = CURRENT_TIMESTAMP WHERE key = ?")
             .bind(&body.value)

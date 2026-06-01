@@ -1,4 +1,5 @@
 pub mod scheduler;
+pub mod sse;
 pub mod state;
 
 use self::state::LoadBalancerState;
@@ -7,6 +8,10 @@ use crate::api::handlers::admin::channels::{
 };
 use crate::protocol::inbound::Inbound;
 use crate::protocol::outbound::Outbound;
+use crate::proxy::sse::{
+    apply_sse_usage, collect_sse_content, extract_error_from_sse, extract_usage_from_sse,
+    find_sse_boundary, format_stream_error_event, sanitize_upstream_error,
+};
 use crate::stats::model::ModelRegistry;
 use crate::stats::recorder::StatsRecorder;
 use axum::body::Bytes;
@@ -26,6 +31,7 @@ pub struct ProxyCache {
     channels: Arc<RwLock<HashMap<String, ChannelInfo>>>,
     groups: Arc<RwLock<HashMap<String, GroupInfo>>>,
     model_index: Arc<RwLock<HashMap<String, Vec<String>>>>,
+    compiled_regex: Arc<RwLock<HashMap<String, regex::Regex>>>,
 }
 
 impl Default for ProxyCache {
@@ -40,6 +46,7 @@ impl ProxyCache {
             channels: Arc::new(RwLock::new(HashMap::new())),
             groups: Arc::new(RwLock::new(HashMap::new())),
             model_index: Arc::new(RwLock::new(HashMap::new())),
+            compiled_regex: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 
@@ -138,6 +145,20 @@ impl ProxyCache {
         let idx = self.model_index.read().await;
         idx.get(model).cloned().unwrap_or_default()
     }
+
+    /// 获取或编译正则（缓存编译结果）
+    async fn get_compiled_regex(&self, pattern: &str) -> Option<regex::Regex> {
+        {
+            let cache = self.compiled_regex.read().await;
+            if let Some(re) = cache.get(pattern) {
+                return Some(re.clone());
+            }
+        }
+        let re = regex::Regex::new(pattern).ok()?;
+        let mut cache = self.compiled_regex.write().await;
+        cache.insert(pattern.to_string(), re.clone());
+        Some(re)
+    }
 }
 
 /// 请求队列（流量控制）
@@ -158,10 +179,10 @@ impl RequestQueue {
     }
 
     /// 获取队列许可（超时返回 429）
-    pub async fn acquire(&self) -> Result<tokio::sync::SemaphorePermit<'_>, QueueError> {
+    pub async fn acquire(&self) -> Result<tokio::sync::OwnedSemaphorePermit, QueueError> {
         match tokio::time::timeout(
             std::time::Duration::from_secs(self.timeout_secs),
-            self.semaphore.acquire(),
+            self.semaphore.clone().acquire_owned(),
         )
         .await
         {
@@ -472,8 +493,8 @@ impl ProxyState {
         .map_err(|e| ProxyError::DatabaseError(e.to_string()))?;
 
         for (id, name, match_regex) in groups {
-            if let Some(regex) = match_regex
-                && let Ok(re) = regex::Regex::new(&regex)
+            if let Some(pattern) = match_regex
+                && let Some(re) = self.cache.get_compiled_regex(&pattern).await
                 && re.is_match(model)
             {
                 let items = self.get_group_items(&id).await?;
@@ -1392,6 +1413,7 @@ async fn execute_proxy_stream(
     client_endpoint: &EndpointType,
     selection: &SelectionResult,
     attempts: &mut Vec<AttemptStats>,
+    _permit: Option<tokio::sync::OwnedSemaphorePermit>,
 ) -> Result<
     (
         StatusCode,
@@ -1557,6 +1579,8 @@ async fn execute_proxy_stream(
         .collect();
 
     let response_stream = async_stream::stream! {
+        // _permit 随 stream 生命周期存在，stream drop 时释放 semaphore 许可
+        let _permit = _permit;
         let mut stream = std::pin::pin!(upstream_stream);
         let mut last_usage: Option<serde_json::Value> = None;
         let mut input_usage: Option<serde_json::Value> = None;
@@ -1926,7 +1950,7 @@ pub async fn proxy_stream(
     ),
     ProxyError,
 > {
-    let permit = if let Some(queue) = &state.queue {
+    let mut permit = if let Some(queue) = &state.queue {
         Some(
             queue
                 .acquire()
@@ -1968,11 +1992,11 @@ pub async fn proxy_stream(
                 client_endpoint,
                 &selection,
                 &mut attempts,
+                permit.take(),
             )
             .await
             {
                 Ok((status, stream, content_type, _ttft)) => {
-                    drop(permit);
                     return Ok((status, stream, content_type));
                 }
                 Err(ProxyError::UpstreamError { status, body }) => {
@@ -2182,30 +2206,6 @@ pub fn format_proxy_error(e: ProxyError, format: &ErrorFormat) -> axum::response
     }
 }
 
-/// 截断上游错误体，避免泄漏敏感信息
-fn sanitize_upstream_error(body: &str) -> String {
-    let truncated = if body.len() > 500 {
-        format!("{}...", &body[..500])
-    } else {
-        body.to_string()
-    };
-
-    // 尝试提取 message 字段，避免暴露原始 JSON 结构
-    if let Ok(v) = serde_json::from_str::<serde_json::Value>(body) {
-        if let Some(msg) = v["error"]["message"].as_str() {
-            return msg.to_string();
-        }
-        if let Some(msg) = v["error"].as_str() {
-            return msg.to_string();
-        }
-        if let Some(msg) = v["message"].as_str() {
-            return msg.to_string();
-        }
-    }
-
-    truncated
-}
-
 fn is_key_retryable_upstream_error(status: StatusCode, body: &str) -> bool {
     if matches!(
         status,
@@ -2231,281 +2231,6 @@ fn is_key_retryable_upstream_error(status: StatusCode, body: &str) -> bool {
     ]
     .iter()
     .any(|needle| lower.contains(needle))
-}
-
-/// 查找 SSE 事件边界（\n\n 或 \r\n\r\n）
-fn find_sse_boundary(buffer: &[u8]) -> Option<usize> {
-    for i in 0..buffer.len() {
-        if i + 1 < buffer.len() && buffer[i] == b'\n' && buffer[i + 1] == b'\n' {
-            return Some(i + 2);
-        }
-        if i + 3 < buffer.len()
-            && buffer[i] == b'\r'
-            && buffer[i + 1] == b'\n'
-            && buffer[i + 2] == b'\r'
-            && buffer[i + 3] == b'\n'
-        {
-            return Some(i + 4);
-        }
-    }
-    None
-}
-
-/// 将 SSE usage 提取结果分发到对应变量
-#[inline]
-fn apply_sse_usage(
-    source: SseUsageSource,
-    last_usage: &mut Option<serde_json::Value>,
-    input_usage: &mut Option<serde_json::Value>,
-) {
-    match source {
-        SseUsageSource::OpenAi(v) => *last_usage = Some(v),
-        SseUsageSource::AnthropicInput(v) => *input_usage = Some(v),
-        SseUsageSource::AnthropicOutput(v) => *last_usage = Some(v),
-    }
-}
-
-/// 提取 SSE 行字段值（兼容 `field: value` 和 `field:value` 两种格式）
-#[inline]
-fn sse_field<'a>(line: &'a str, field: &str) -> Option<&'a str> {
-    let colon = format!("{}:", field);
-    line.strip_prefix(&colon).map(|rest| rest.strip_prefix(' ').unwrap_or(rest))
-}
-
-/// SSE 中提取到的 usage 来源
-#[derive(Debug, Clone)]
-enum SseUsageSource {
-    /// OpenAI: data 行直接包含 usage
-    OpenAi(serde_json::Value),
-    /// Anthropic message_start: usage 在 message.usage 中（含 input_tokens）
-    AnthropicInput(serde_json::Value),
-    /// Anthropic message_delta: usage 在根级（含 output_tokens）
-    AnthropicOutput(serde_json::Value),
-}
-
-/// 从 SSE 事件中提取 usage 数据（需要完整事件，由 find_sse_boundary 分割）
-fn extract_usage_from_sse(text: &str, endpoint_type: &EndpointType) -> Option<SseUsageSource> {
-    match endpoint_type {
-        EndpointType::OpenAiChat | EndpointType::OpenAiResponse => {
-            for line in text.lines() {
-                if let Some(data) = sse_field(line, "data")
-                    && let Ok(parsed) = serde_json::from_str::<serde_json::Value>(data)
-                    && parsed.get("usage").is_some()
-                {
-                    return Some(SseUsageSource::OpenAi(parsed));
-                }
-            }
-            None
-        }
-        EndpointType::Anthropic => {
-            let mut event_type = "";
-            let mut data = "";
-            for line in text.lines() {
-                if let Some(stripped) = sse_field(line, "event") {
-                    event_type = stripped;
-                } else if let Some(stripped) = sse_field(line, "data") {
-                    data = stripped;
-                }
-            }
-            if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(data) {
-                if event_type == "message_start" {
-                    if let Some(usage) = parsed.get("message").and_then(|m| m.get("usage")) {
-                        return Some(SseUsageSource::AnthropicInput(usage.clone()));
-                    }
-                    if let Some(usage) = parsed.get("usage") {
-                        return Some(SseUsageSource::AnthropicInput(usage.clone()));
-                    }
-                    tracing::debug!("message_start 无 usage: {}", &data[..data.len().min(500)]);
-                } else if event_type == "message_delta"
-                    && parsed.get("usage").is_some() {
-                        return Some(SseUsageSource::AnthropicOutput(parsed));
-                    }
-            }
-            None
-        }
-        _ => None,
-    }
-}
-
-/// 从 SSE 事件中提取上游错误。很多供应商会先返回 HTTP 200，再通过 SSE error 事件返回业务错误。
-fn extract_error_from_sse(text: &str, _endpoint_type: &EndpointType) -> Option<String> {
-    let mut event_type = "";
-    let mut data_lines = Vec::new();
-
-    for line in text.lines() {
-        let line = line.trim_end_matches('\r');
-        if let Some(stripped) = sse_field(line, "event") {
-            event_type = stripped.trim();
-        } else if let Some(stripped) = sse_field(line, "data") {
-            data_lines.push(stripped.trim_start());
-        }
-    }
-
-    if data_lines.is_empty() {
-        return None;
-    }
-
-    let data = data_lines.join("\n");
-    if data.is_empty() || data == "[DONE]" {
-        return None;
-    }
-
-    let is_error_event = event_type.eq_ignore_ascii_case("error")
-        || event_type.to_ascii_lowercase().contains("error")
-        || event_type.eq_ignore_ascii_case("response.failed");
-
-    if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&data) {
-        if is_error_json(&parsed, is_error_event) {
-            return Some(data);
-        }
-        return None;
-    }
-
-    if is_error_event {
-        return Some(data);
-    }
-
-    None
-}
-
-fn is_error_json(value: &serde_json::Value, is_error_event: bool) -> bool {
-    if value.get("error").is_some() {
-        return true;
-    }
-
-    if let Some(t) = value["type"].as_str() {
-        let lower = t.to_ascii_lowercase();
-        if lower == "error" || lower.contains("error") || lower == "response.failed" {
-            return true;
-        }
-    }
-
-    is_error_event
-        && (value.get("message").is_some()
-            || value.get("code").is_some()
-            || value.get("type").is_some())
-}
-
-fn format_stream_error_event(error_body: &str, client_endpoint: &EndpointType) -> Vec<u8> {
-    let message = sanitize_upstream_error(error_body);
-
-    match client_endpoint {
-        EndpointType::Anthropic => format!(
-            "event: error\ndata: {}\n\n",
-            serde_json::json!({
-                "type": "error",
-                "error": {
-                    "type": "api_error",
-                    "message": message,
-                }
-            })
-        )
-        .into_bytes(),
-        EndpointType::OpenAiResponse => format!(
-            "event: response.failed\ndata: {}\n\n",
-            serde_json::json!({
-                "type": "response.failed",
-                "error": {
-                    "message": message,
-                    "type": "server_error",
-                }
-            })
-        )
-        .into_bytes(),
-        _ => format!(
-            "data: {}\n\n",
-            serde_json::json!({
-                "error": {
-                    "message": message,
-                    "type": "server_error",
-                }
-            })
-        )
-        .into_bytes(),
-    }
-}
-
-/// 从直通模式的 SSE 文本中提取内容
-fn collect_sse_content(
-    text: &str,
-    endpoint_type: &EndpointType,
-    output: &mut String,
-    reasoning: &mut String,
-    tool_calls: &mut Vec<serde_json::Value>,
-) {
-    match endpoint_type {
-        EndpointType::OpenAiChat | EndpointType::OpenAiResponse => {
-            for line in text.lines() {
-                if let Some(data) = sse_field(line, "data") {
-                    if data == "[DONE]" {
-                        continue;
-                    }
-                    if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(data) {
-                        if let Some(content) = parsed["choices"][0]["delta"]["content"].as_str()
-                            && !content.is_empty()
-                        {
-                            output.push_str(content);
-                        }
-                        if let Some(r) = parsed["choices"][0]["delta"]["reasoning_content"].as_str()
-                            && !r.is_empty()
-                        {
-                            reasoning.push_str(r);
-                        }
-                        if let Some(tcs) = parsed["choices"][0]["delta"]["tool_calls"].as_array() {
-                            for tc in tcs {
-                                tool_calls.push(serde_json::json!({
-                                    "id": tc["id"],
-                                    "name": tc["function"]["name"],
-                                    "arguments": tc["function"]["arguments"],
-                                }));
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        EndpointType::Anthropic => {
-            let mut event_type = "";
-            let mut data = "";
-            for line in text.lines() {
-                if let Some(stripped) = sse_field(line, "event") {
-                    event_type = stripped.trim();
-                } else if let Some(stripped) = sse_field(line, "data") {
-                    data = stripped.trim_start();
-                }
-            }
-            if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(data)
-                && event_type == "content_block_delta"
-            {
-                if parsed["delta"]["type"] == "text_delta"
-                    && let Some(t) = parsed["delta"]["text"].as_str()
-                {
-                    output.push_str(t);
-                }
-                if parsed["delta"]["type"] == "thinking_delta"
-                    && let Some(t) = parsed["delta"]["thinking"].as_str()
-                {
-                    reasoning.push_str(t);
-                }
-            }
-        }
-        _ => {}
-    }
-}
-
-/// 通配符匹配
-#[allow(dead_code)]
-fn wildcard_match(pattern: &str, text: &str) -> bool {
-    let regex_pattern = pattern
-        .replace('.', "\\.")
-        .replace('*', ".*")
-        .replace('?', ".");
-
-    if let Ok(re) = regex::Regex::new(&format!("^{}$", regex_pattern)) {
-        re.is_match(text)
-    } else {
-        false
-    }
 }
 
 /// 解析 models 字段，兼容旧格式 {"available_models":[...],"model_maps":{}} 和新格式 ["m1","m2"]
@@ -2536,50 +2261,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn extract_error_from_sse_detects_openai_error_payload() {
-        let event = r#"data: {"error":{"message":"[1113][余额不足或无可用资源包,请充值。]","type":"server_error"}}"#;
-
-        let error = extract_error_from_sse(event, &EndpointType::OpenAiChat).unwrap();
-
-        assert!(error.contains("1113"));
-        assert!(error.contains("余额不足"));
-    }
-
-    #[test]
-    fn extract_error_from_sse_detects_anthropic_error_event() {
-        let event = r#"event: error
-data: {"type":"error","error":{"type":"api_error","message":"resource exhausted"}}"#;
-
-        let error = extract_error_from_sse(event, &EndpointType::Anthropic).unwrap();
-
-        assert!(error.contains("resource exhausted"));
-    }
-
-    #[test]
-    fn extract_error_from_sse_detects_responses_failed_event() {
-        let event = r#"event: response.failed
-data: {"type":"response.failed","response":{"status":"failed"},"error":{"message":"quota exceeded"}}"#;
-
-        let error = extract_error_from_sse(event, &EndpointType::OpenAiResponse).unwrap();
-
-        assert!(error.contains("quota exceeded"));
-    }
-
-    #[test]
-    fn extract_error_from_sse_ignores_normal_delta() {
-        let event = r#"data: {"choices":[{"delta":{"content":"hello"}}]}"#;
-
-        let error = extract_error_from_sse(event, &EndpointType::OpenAiChat);
-
-        assert!(error.is_none());
-    }
-
-    #[test]
-    fn sanitize_upstream_error_extracts_string_error() {
-        let message = sanitize_upstream_error(r#"{"error":"plain upstream error"}"#);
-
-        assert_eq!(message, "plain upstream error");
-    }
 
     #[test]
     fn key_retryable_error_matches_status_and_quota_body() {

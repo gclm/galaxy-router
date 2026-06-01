@@ -44,8 +44,15 @@ impl ChannelStatus {
     pub fn record_success(&mut self, latency_ms: f64) {
         self.success_count += 1;
         self.last_success = Some(Utc::now());
-        self.is_blacklisted = false;
-        self.blacklist_until = None;
+
+        // 成功时将失败计数减半（衰减而非清零），避免单次成功洗白
+        self.failure_count = self.failure_count.saturating_div(2);
+
+        // 解除拉黑
+        if self.failure_count == 0 {
+            self.is_blacklisted = false;
+            self.blacklist_until = None;
+        }
 
         // 更新平均延迟（指数移动平均）
         if self.avg_latency_ms == 0.0 {
@@ -138,7 +145,6 @@ impl LoadBalancerState {
     pub async fn record_success(&self, channel_id: &str, latency_ms: f64) {
         let mut states = self.channel_states.write().await;
         if let Some(status) = states.get_mut(channel_id) {
-            status.failure_count = 0;
             status.record_success(latency_ms);
         }
     }

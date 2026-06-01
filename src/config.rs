@@ -1,5 +1,5 @@
 use anyhow::Result;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use std::path::Path;
 
 /// 应用配置（从 TOML 文件加载）
@@ -63,7 +63,7 @@ pub struct QueuingConfig {
 impl Default for QueuingConfig {
     fn default() -> Self {
         Self {
-            enabled: true,
+            enabled: false,
             max_queue_size: default_max_queue_size(),
             queue_timeout_secs: default_queue_timeout_secs(),
         }
@@ -110,50 +110,6 @@ fn default_pricing_refresh_hours() -> u64 {
     24
 }
 
-/// 运行时配置（从数据库加载）
-#[derive(Debug, Clone)]
-#[allow(dead_code)]
-pub struct RuntimeConfig {
-    pub scheduler: SchedulerConfig,
-    pub sticky_session: StickySessionConfig,
-}
-
-#[derive(Debug, Clone)]
-#[allow(dead_code)]
-pub struct SchedulerConfig {
-    pub top_k: usize,
-    pub score_weights: ScoreWeights,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[allow(dead_code)]
-pub struct ScoreWeights {
-    pub priority: f64,
-    pub load: f64,
-    pub queue: f64,
-    pub error_rate: f64,
-    pub ttft: f64,
-}
-
-impl Default for ScoreWeights {
-    fn default() -> Self {
-        Self {
-            priority: 1.0,
-            load: 1.0,
-            queue: 0.7,
-            error_rate: 0.8,
-            ttft: 0.5,
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-#[allow(dead_code)]
-pub struct StickySessionConfig {
-    pub enabled: bool,
-    pub ttl_seconds: u64,
-}
-
 impl AppConfig {
     /// 从配置文件加载配置
     pub fn load(path: &Path) -> Result<Self> {
@@ -174,26 +130,5 @@ impl AppConfig {
     /// 获取数据库 URL
     pub fn database_url(&self) -> String {
         format!("sqlite:{}?mode=rwc", self.database.path)
-    }
-}
-
-impl Default for RuntimeConfig {
-    fn default() -> Self {
-        Self {
-            scheduler: SchedulerConfig {
-                top_k: 7,
-                score_weights: ScoreWeights {
-                    priority: 1.0,
-                    load: 1.0,
-                    queue: 0.7,
-                    error_rate: 0.8,
-                    ttft: 0.5,
-                },
-            },
-            sticky_session: StickySessionConfig {
-                enabled: true,
-                ttl_seconds: 3600,
-            },
-        }
     }
 }

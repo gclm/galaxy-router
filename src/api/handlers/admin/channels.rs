@@ -4,24 +4,26 @@ use axum::{
     http::StatusCode,
 };
 
-type ChannelRow = (
-    String,
-    String,
-    String,
-    String,
-    String,
-    Option<i32>,
-    Option<i32>,
-    i32,
-    i32,
-    i32,
-    String,
-    bool,
-    String,
-    String,
-);
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
+
+#[derive(sqlx::FromRow)]
+pub(crate) struct ChannelRow {
+    pub(crate) id: String,
+    pub(crate) name: String,
+    pub(crate) api_keys: String,
+    pub(crate) endpoints: String,
+    pub(crate) models: String,
+    pub(crate) rate_limit_rpm: Option<i32>,
+    pub(crate) rate_limit_tpm: Option<i32>,
+    pub(crate) failure_threshold: i32,
+    pub(crate) blacklist_minutes: i32,
+    pub(crate) concurrency: i32,
+    pub(crate) custom_headers: String,
+    pub(crate) enabled: bool,
+    pub(crate) created_at: String,
+    pub(crate) updated_at: String,
+}
 
 use crate::api::{ApiError, ApiResponse, response::generate_id};
 
@@ -449,7 +451,7 @@ async fn get_channel_by_id(
     pool: &SqlitePool,
     id: &str,
 ) -> Result<Channel, (StatusCode, Json<ApiError>)> {
-    let result = sqlx::query_as::<_, (String, String, String, String, String, Option<i32>, Option<i32>, i32, i32, i32, String, bool, String, String)>(
+    let result = sqlx::query_as::<_, ChannelRow>(
         "SELECT id, name, api_keys, endpoints, models, rate_limit_rpm, rate_limit_tpm, failure_threshold, blacklist_minutes, concurrency, custom_headers, enabled, created_at, updated_at FROM channels WHERE id = ?"
     )
     .bind(id)
@@ -482,44 +484,22 @@ pub fn parse_api_keys(json_str: &str) -> Vec<UpstreamApiKey> {
         .collect()
 }
 
-fn row_to_channel(
-    (
-        id,
-        name,
-        api_keys_str,
-        endpoints_str,
-        models_str,
-        rate_limit_rpm,
-        rate_limit_tpm,
-        failure_threshold,
-        blacklist_minutes,
-        concurrency,
-        custom_headers_str,
-        enabled,
-        created_at,
-        updated_at,
-    ): ChannelRow,
-) -> Channel {
-    let api_keys = parse_api_keys(&api_keys_str);
-    let endpoints: Vec<EndpointConfig> = serde_json::from_str(&endpoints_str).unwrap_or_default();
-    let models: Vec<String> = serde_json::from_str(&models_str).unwrap_or_default();
-    let custom_headers: Vec<CustomHeader> =
-        serde_json::from_str(&custom_headers_str).unwrap_or_default();
+fn row_to_channel(row: ChannelRow) -> Channel {
     Channel {
-        id,
-        name,
-        api_keys,
-        endpoints,
-        models,
-        rate_limit_rpm,
-        rate_limit_tpm,
-        failure_threshold,
-        blacklist_minutes,
-        concurrency,
-        custom_headers,
-        enabled,
-        created_at,
-        updated_at,
+        id: row.id,
+        name: row.name,
+        api_keys: parse_api_keys(&row.api_keys),
+        endpoints: serde_json::from_str(&row.endpoints).unwrap_or_default(),
+        models: serde_json::from_str(&row.models).unwrap_or_default(),
+        rate_limit_rpm: row.rate_limit_rpm,
+        rate_limit_tpm: row.rate_limit_tpm,
+        failure_threshold: row.failure_threshold,
+        blacklist_minutes: row.blacklist_minutes,
+        concurrency: row.concurrency,
+        custom_headers: serde_json::from_str(&row.custom_headers).unwrap_or_default(),
+        enabled: row.enabled,
+        created_at: row.created_at,
+        updated_at: row.updated_at,
     }
 }
 

@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Instant;
 use tokio::sync::RwLock;
 
 use axum::{
@@ -20,6 +21,9 @@ use sqlx::SqlitePool;
 use crate::api::ApiError;
 use crate::auth::decode_jwt;
 
+/// 缓存条目 TTL（秒）
+const CACHE_TTL_SECS: u64 = 300;
+
 /// API Key 缓存
 #[derive(Clone)]
 pub struct ApiKeyCache {
@@ -31,6 +35,7 @@ struct ApiKeyEntry {
     id: String,
     name: String,
     enabled: bool,
+    cached_at: Instant,
 }
 
 impl Default for ApiKeyCache {
@@ -46,35 +51,33 @@ impl ApiKeyCache {
         }
     }
 
-    /// 获取缓存的 API Key
+    /// 获取缓存的 API Key（过期返回 None）
     async fn get(&self, key: &str) -> Option<(String, String, bool)> {
         let cache = self.keys.read().await;
         cache
             .get(key)
+            .filter(|e| e.cached_at.elapsed().as_secs() < CACHE_TTL_SECS)
             .map(|e| (e.id.clone(), e.name.clone(), e.enabled))
     }
 
     /// 设置 API Key 缓存
     async fn set(&self, key: String, id: String, name: String, enabled: bool) {
         let mut cache = self.keys.write().await;
-        // 限制缓存大小
-        if cache.len() >= 1000
-            && let Some(oldest_key) = cache.keys().next().cloned()
-        {
-            cache.remove(&oldest_key);
+        if cache.len() >= 1000 {
+            cache.retain(|_, e| e.cached_at.elapsed().as_secs() < CACHE_TTL_SECS);
         }
-        cache.insert(key, ApiKeyEntry { id, name, enabled });
+        cache.insert(key, ApiKeyEntry { id, name, enabled, cached_at: Instant::now() });
     }
 
-    /// 清除缓存
     #[allow(dead_code)]
+    /// 清除缓存
     pub async fn invalidate(&self, key: &str) {
         let mut cache = self.keys.write().await;
         cache.remove(key);
     }
 
-    /// 清除所有缓存
     #[allow(dead_code)]
+    /// 清除所有缓存
     pub async fn invalidate_all(&self) {
         let mut cache = self.keys.write().await;
         cache.clear();
