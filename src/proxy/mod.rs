@@ -1728,58 +1728,25 @@ async fn validate_model_access(
 pub fn format_proxy_error(e: ProxyError, format: &ErrorFormat) -> axum::response::Response {
     use axum::response::IntoResponse;
 
-    match (e, format) {
-        (ProxyError::NoAvailableChannel(msg), ErrorFormat::OpenAi) => (
-            StatusCode::SERVICE_UNAVAILABLE,
-            axum::Json(serde_json::json!({
-                "error": { "message": msg, "type": "server_error" }
-            })),
-        )
-            .into_response(),
-        (ProxyError::NoAvailableChannel(msg), ErrorFormat::Anthropic) => (
-            StatusCode::SERVICE_UNAVAILABLE,
-            axum::Json(serde_json::json!({
-                "type": "error",
-                "error": { "type": "api_error", "message": msg }
-            })),
-        )
-            .into_response(),
-        (ProxyError::UpstreamError { status, body }, ErrorFormat::OpenAi) => {
-            let msg = sanitize_upstream_error(&body);
-            (
-                status,
-                axum::Json(serde_json::json!({
-                    "error": { "message": msg, "type": "server_error" }
-                })),
-            )
-                .into_response()
-        }
-        (ProxyError::UpstreamError { status, body }, ErrorFormat::Anthropic) => {
-            let msg = sanitize_upstream_error(&body);
-            (
-                status,
-                axum::Json(serde_json::json!({
-                    "type": "error",
-                    "error": { "type": "api_error", "message": msg }
-                })),
-            )
-                .into_response()
-        }
-        (e, ErrorFormat::OpenAi) => (
-            StatusCode::BAD_GATEWAY,
-            axum::Json(serde_json::json!({
-                "error": { "message": e.to_string(), "type": "server_error" }
-            })),
-        )
-            .into_response(),
-        (e, ErrorFormat::Anthropic) => (
-            StatusCode::BAD_GATEWAY,
-            axum::Json(serde_json::json!({
-                "type": "error",
-                "error": { "type": "api_error", "message": e.to_string() }
-            })),
-        )
-            .into_response(),
+    let (status, message) = render_status_and_message(&e);
+    let body = match format {
+        ErrorFormat::OpenAi => serde_json::json!({
+            "error": { "message": message, "type": "server_error" }
+        }),
+        ErrorFormat::Anthropic => serde_json::json!({
+            "type": "error",
+            "error": { "type": "api_error", "message": message }
+        }),
+    };
+    (status, axum::Json(body)).into_response()
+}
+
+/// 提取 (HTTP 状态码, 客户端可见消息) — 与客户端格式无关
+fn render_status_and_message(e: &ProxyError) -> (StatusCode, String) {
+    match e {
+        ProxyError::NoAvailableChannel(msg) => (StatusCode::SERVICE_UNAVAILABLE, msg.clone()),
+        ProxyError::UpstreamError { status, body } => (*status, sanitize_upstream_error(body)),
+        _ => (StatusCode::BAD_GATEWAY, e.to_string()),
     }
 }
 
@@ -1876,6 +1843,28 @@ mod tests {
             classify_upstream(StatusCode::INTERNAL_SERVER_ERROR, "insufficient_quota"),
             ErrorClass::KeyRetryable
         );
+    }
+
+    #[test]
+    fn render_status_and_message_maps_error_kinds() {
+        use axum::http::StatusCode;
+        // NoAvailableChannel → 503 + 原 message
+        let (s, m) = render_status_and_message(&ProxyError::NoAvailableChannel("no ch".into()));
+        assert_eq!(s, StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(m, "no ch");
+
+        // UpstreamError → 上游 status + sanitized body
+        let (s, m) = render_status_and_message(&ProxyError::UpstreamError {
+            status: StatusCode::TOO_MANY_REQUESTS,
+            body: r#"{"error":{"message":"rate limit"}}"#.into(),
+        });
+        assert_eq!(s, StatusCode::TOO_MANY_REQUESTS);
+        assert!(m.contains("rate limit"));
+
+        // 其他 → 502 + thiserror 格式化
+        let (s, m) = render_status_and_message(&ProxyError::DatabaseError("db gone".into()));
+        assert_eq!(s, StatusCode::BAD_GATEWAY);
+        assert!(m.contains("db gone"));
     }
 }
 
