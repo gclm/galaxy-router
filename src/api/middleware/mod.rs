@@ -6,9 +6,10 @@ use axum::{
     RequestPartsExt,
     body::Body,
     extract::FromRequestParts,
-    http::{Request, StatusCode, request::Parts},
+    http::{Request, StatusCode, header::CONTENT_TYPE, Method, request::Parts},
     middleware::Next,
     response::IntoResponse,
+    Json,
 };
 use axum_extra::{
     TypedHeader,
@@ -16,6 +17,7 @@ use axum_extra::{
 };
 use sqlx::SqlitePool;
 
+use crate::api::ApiError;
 use crate::auth::decode_jwt;
 
 /// API Key 缓存
@@ -248,4 +250,29 @@ pub async fn require_admin_auth(
     })?;
 
     Ok(next.run(request).await)
+}
+
+/// Content-Type 校验中间件：POST/PUT/PATCH 必须是 application/json
+pub async fn require_json(
+    request: Request<Body>,
+    next: Next,
+) -> impl IntoResponse {
+    let method = request.method();
+    if matches!(*method, Method::GET | Method::DELETE | Method::OPTIONS | Method::HEAD) {
+        return next.run(request).await;
+    }
+    let ct = request
+        .headers()
+        .get(CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    if ct.contains("application/json") {
+        next.run(request).await
+    } else {
+        (
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            Json(ApiError::new(415, "Content-Type 必须是 application/json")),
+        )
+            .into_response()
+    }
 }

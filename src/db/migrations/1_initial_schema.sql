@@ -1,5 +1,5 @@
--- Galaxy Router 数据库 Schema
--- 版本: 0 (初始版本)
+-- Galaxy Router 初始 Schema（合并所有历史迁移）
+-- 用于 sqlx-cli 首次迁移 V0
 
 -- 管理员用户
 CREATE TABLE IF NOT EXISTS users (
@@ -34,6 +34,7 @@ CREATE TABLE IF NOT EXISTS api_keys (
     name TEXT NOT NULL,
     api_key TEXT NOT NULL UNIQUE,
     enabled BOOLEAN NOT NULL DEFAULT TRUE,
+    supported_models TEXT NOT NULL DEFAULT '',
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
@@ -101,6 +102,8 @@ CREATE TABLE IF NOT EXISTS usage_logs (
     cache_creation_tokens INTEGER NOT NULL DEFAULT 0,
     cost REAL,
     latency_ms INTEGER,
+    ttft_ms INTEGER,
+    attempts TEXT,
     status_code INTEGER,
     error_message TEXT,
     endpoint_type TEXT,
@@ -108,6 +111,8 @@ CREATE TABLE IF NOT EXISTS usage_logs (
     request_content TEXT,
     response_content TEXT,
     is_stream BOOLEAN NOT NULL DEFAULT FALSE,
+    upstream_key_hint TEXT,
+    user_agent TEXT,
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -140,15 +145,12 @@ CREATE TABLE IF NOT EXISTS settings (
     updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
--- 迁移记录
-CREATE TABLE IF NOT EXISTS _migrations (
-    version INTEGER PRIMARY KEY,
-    name TEXT NOT NULL,
-    applied_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
-
 -- 索引
+CREATE INDEX IF NOT EXISTS idx_usage_logs_channel_id ON usage_logs(channel_id);
+CREATE INDEX IF NOT EXISTS idx_usage_logs_api_key_id ON usage_logs(api_key_id);
+CREATE INDEX IF NOT EXISTS idx_usage_logs_requested_model ON usage_logs(requested_model);
 CREATE INDEX IF NOT EXISTS idx_usage_logs_created_at ON usage_logs(created_at);
+CREATE INDEX IF NOT EXISTS idx_usage_logs_status_code ON usage_logs(status_code);
 
 -- 默认设置
 INSERT OR IGNORE INTO settings (key, category, value, description) VALUES

@@ -241,6 +241,7 @@ pub async fn create_router(
         ))
         // 中间件
         .layer(CorsLayer::permissive())
+        .layer(middleware::from_fn(crate::api::middleware::require_json))
         .layer(TraceLayer::new_for_http())
 }
 

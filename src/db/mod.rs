@@ -2,7 +2,6 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use sqlx::sqlite::{SqlitePool, SqlitePoolOptions};
 use std::path::Path;
-use tracing::info;
 
 use crate::config::{RuntimeConfig, SchedulerConfig, ScoreWeights, StickySessionConfig};
 
@@ -56,44 +55,10 @@ impl Database {
 
     /// 运行数据库迁移
     async fn run_migrations(&self) -> Result<()> {
-        info!("Running database migrations");
-
-        sqlx::query(
-            r#"
-            CREATE TABLE IF NOT EXISTS _migrations (
-                version INTEGER PRIMARY KEY,
-                name TEXT NOT NULL,
-                applied_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
-            )
-            "#,
-        )
-        .execute(&self.pool)
-        .await?;
-
-        // 获取已应用的迁移
-        let applied: Vec<i32> =
-            sqlx::query_scalar("SELECT version FROM _migrations ORDER BY version")
-                .fetch_all(&self.pool)
-                .await?;
-
-        // 应用迁移
-        let migrations = get_migrations();
-        for migration in migrations {
-            if !applied.contains(&migration.version) {
-                info!(
-                    "Applying migration {}: {}",
-                    migration.version, migration.name
-                );
-                sqlx::query(migration.sql).execute(&self.pool).await?;
-                sqlx::query("INSERT INTO _migrations (version, name) VALUES (?, ?)")
-                    .bind(migration.version)
-                    .bind(migration.name)
-                    .execute(&self.pool)
-                    .await?;
-            }
-        }
-
-        info!("Database migrations completed");
+        sqlx::migrate!("src/db/migrations")
+            .run(&self.pool)
+            .await
+            .map_err(|e| anyhow::anyhow!("数据库迁移失败: {e}"))?;
         Ok(())
     }
 
@@ -203,66 +168,4 @@ impl Database {
             },
         }
     }
-}
-
-/// 迁移定义
-struct Migration {
-    version: i32,
-    name: &'static str,
-    sql: &'static str,
-}
-
-/// 获取所有迁移
-fn get_migrations() -> Vec<Migration> {
-    vec![
-        Migration {
-            version: 0,
-            name: "initial_schema",
-            sql: include_str!("schema.sql"),
-        },
-        Migration {
-            version: 1,
-            name: "remove_stats_and_pricing_settings",
-            sql: "DELETE FROM settings WHERE key IN ('stats.log_detail_mode', 'stats.cost.source', 'stats.cost.refresh_interval_hours');",
-        },
-        Migration {
-            version: 2,
-            name: "replace_model_pricing_with_model_info",
-            sql: "DROP TABLE IF EXISTS model_pricing;",
-        },
-        Migration {
-            version: 3,
-            name: "add_ttft_and_attempts_to_usage_logs",
-            sql: r#"
-                ALTER TABLE usage_logs ADD COLUMN ttft_ms INTEGER;
-                ALTER TABLE usage_logs ADD COLUMN attempts TEXT;
-            "#,
-        },
-        Migration {
-            version: 4,
-            name: "add_upstream_key_hint_to_usage_logs",
-            sql: "ALTER TABLE usage_logs ADD COLUMN upstream_key_hint TEXT;",
-        },
-        Migration {
-            version: 5,
-            name: "add_usage_logs_indexes",
-            sql: r#"
-                CREATE INDEX IF NOT EXISTS idx_usage_logs_channel_id ON usage_logs(channel_id);
-                CREATE INDEX IF NOT EXISTS idx_usage_logs_api_key_id ON usage_logs(api_key_id);
-                CREATE INDEX IF NOT EXISTS idx_usage_logs_requested_model ON usage_logs(requested_model);
-                CREATE INDEX IF NOT EXISTS idx_usage_logs_created_at ON usage_logs(created_at);
-                CREATE INDEX IF NOT EXISTS idx_usage_logs_status_code ON usage_logs(status_code);
-            "#,
-        },
-        Migration {
-            version: 6,
-            name: "add_supported_models_to_api_keys",
-            sql: "ALTER TABLE api_keys ADD COLUMN supported_models TEXT NOT NULL DEFAULT '';",
-        },
-        Migration {
-            version: 7,
-            name: "add_user_agent_to_usage_logs",
-            sql: "ALTER TABLE usage_logs ADD COLUMN user_agent TEXT;",
-        },
-    ]
 }
