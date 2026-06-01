@@ -228,11 +228,11 @@ async fn fetch_channels(pool: &SqlitePool) -> DbResult<Vec<Channel>> {
     .await
     .map_err(|e| ApiError::internal_error(e.to_string()))?;
 
-    Ok(rows
+    rows
         .into_iter()
         .map(crate::api::handlers::admin::channels::row_to_channel)
         .collect::<Result<Vec<_>, _>>()
-        .map_err(ApiError::internal_error)?)
+        .map_err(ApiError::internal_error)
 }
 
 async fn fetch_groups(pool: &SqlitePool) -> DbResult<Vec<GroupExport>> {

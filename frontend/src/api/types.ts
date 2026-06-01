@@ -115,6 +115,7 @@ export interface TestChannelRequest {
   test_protocol: string
   api_key: string
   stream?: boolean
+  user_agent?: string
 }
 
 export interface TestChannelResponse {

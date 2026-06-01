@@ -98,6 +98,10 @@ export function TestModelDialog({ channel, open, onOpenChange }: TestModelDialog
   const [testingModels, setTestingModels] = useState<Set<string>>(new Set())
   const [isBatchTesting, setIsBatchTesting] = useState(false)
   const [expandedModels, setExpandedModels] = useState<Set<string>>(new Set())
+  const [uaPreset, setUaPreset] = useState('')
+  const [customUa, setCustomUa] = useState('')
+
+  const effectiveUserAgent = uaPreset === 'custom' ? customUa.trim() : uaPreset
 
   const resetState = useCallback(() => {
     setSelectedKey('')
@@ -108,6 +112,8 @@ export function TestModelDialog({ channel, open, onOpenChange }: TestModelDialog
     setTestingModels(new Set())
     setIsBatchTesting(false)
     setExpandedModels(new Set())
+    setUaPreset('')
+    setCustomUa('')
   }, [])
 
   const models = useMemo(() => channel?.models || [], [channel?.models])
@@ -176,6 +182,7 @@ export function TestModelDialog({ channel, open, onOpenChange }: TestModelDialog
         test_protocol: currentProtocol,
         api_key: currentKey,
         stream: useStream || undefined,
+        user_agent: effectiveUserAgent || undefined,
       })
       finalResult = {
         status: res.success ? 'success' : 'error',
@@ -257,7 +264,7 @@ export function TestModelDialog({ channel, open, onOpenChange }: TestModelDialog
           )}
 
           {/* 配置区 */}
-          <div className="grid gap-4 sm:grid-cols-3">
+          <div className="grid gap-4 sm:grid-cols-4">
             <div className="space-y-1.5">
               <label className="text-sm font-medium">API Key</label>
               <select
@@ -301,6 +308,30 @@ export function TestModelDialog({ channel, open, onOpenChange }: TestModelDialog
                   {useStream ? '开启' : '关闭'}
                 </span>
               </div>
+            </div>
+
+            <div className="space-y-1.5">
+              <label className="text-sm font-medium">User-Agent</label>
+              <select
+                value={uaPreset}
+                onChange={(e) => setUaPreset(e.target.value)}
+                className="input"
+              >
+                <option value="">默认（不设置）</option>
+                <option value="custom">自定义...</option>
+                <option value="HermesAgent/0.14.0">HermesAgent/0.14.0</option>
+                <option value="claude-cli/2.1.140 (external, cli)">claude-code</option>
+              </select>
+              {uaPreset === 'custom' && (
+                <input
+                  type="text"
+                  value={customUa}
+                  onChange={(e) => setCustomUa(e.target.value)}
+                  placeholder="输入自定义 User-Agent..."
+                  className="input text-xs"
+                  autoFocus
+                />
+              )}
             </div>
           </div>
 

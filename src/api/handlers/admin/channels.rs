@@ -533,6 +533,7 @@ pub struct TestChannelRequest {
     pub test_protocol: String,
     pub api_key: String,
     pub stream: Option<bool>,
+    pub user_agent: Option<String>,
 }
 
 /// 测试渠道响应
@@ -715,6 +716,7 @@ async fn send_streaming_test(
     endpoint_type: &EndpointType,
     api_key: &str,
     custom_headers: &[CustomHeader],
+    user_agent: Option<&str>,
 ) -> (
     Result<String, String>,
     u64,
@@ -738,6 +740,12 @@ async fn send_streaming_test(
         }
     }
     req_builder = inject_custom_headers(req_builder, custom_headers);
+
+    if let Some(ua) = user_agent
+        && !ua.is_empty()
+    {
+        req_builder = req_builder.header("User-Agent", ua);
+    }
 
     let start = std::time::Instant::now();
     let resp = match req_builder.json(body).send().await {
@@ -899,6 +907,7 @@ pub async fn test_channel(
             &endpoint_type,
             &api_key.key,
             &channel.custom_headers,
+            req.user_agent.as_deref(),
         )
         .await;
 
@@ -946,6 +955,12 @@ pub async fn test_channel(
         }
 
         req_builder = inject_custom_headers(req_builder, &channel.custom_headers);
+
+        if let Some(ref ua) = req.user_agent
+            && !ua.is_empty()
+        {
+            req_builder = req_builder.header("User-Agent", ua);
+        }
 
         let resp = req_builder.json(&body).send().await;
         let latency_ms = start.elapsed().as_millis() as u64;
