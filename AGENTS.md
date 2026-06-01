@@ -100,3 +100,4 @@ Type: `feat` / `fix` / `refactor` / `test` / `docs` / `chore`
 
 - [Homebrew 部署与排查](.gclm-harness/sop/homebrew-deploy.md) — 服务路径、日志时间对齐、流式错误记录规则、部署流程
 - [Token 统计缺失排查](.gclm-harness/sop/token-stats-debug.md) — 诊断 SQL、上游 curl 验证、提取函数定位、修复策略
+- [CI 失败排查](.gclm-harness/sop/ci-failure.md) — gh run 日志获取、clippy/test 错误定位、本地复现与修复流程
