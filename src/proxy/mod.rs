@@ -1086,6 +1086,90 @@ struct AttemptStats {
     upstream_key_hint: String,
 }
 
+impl crate::stats::recorder::RequestRecord {
+    /// 从最后一次尝试构造完整记录
+    #[allow(clippy::too_many_arguments)]
+    fn from_last_attempt(
+        last: &AttemptStats,
+        api_key_id: Option<&str>,
+        group_id: Option<&str>,
+        model: &str,
+        request_content: Option<String>,
+        response_content: Option<String>,
+        channel_attempts: Vec<crate::stats::recorder::ChannelAttempt>,
+        ttft_ms: Option<i32>,
+        is_stream: bool,
+        user_agent: Option<String>,
+    ) -> Self {
+        Self {
+            api_key_id: api_key_id.map(str::to_string),
+            channel_id: Some(last.channel_id.clone()),
+            group_id: group_id.map(str::to_string),
+            requested_model: model.to_string(),
+            actual_model: Some(last.target_model.clone()),
+            input_tokens: last.input_tokens,
+            output_tokens: last.output_tokens,
+            cache_read_tokens: last.cache_read,
+            cache_creation_tokens: last.cache_creation,
+            cost: last.cost,
+            latency_ms: Some(last.latency_ms as i32),
+            ttft_ms,
+            status_code: Some(last.status_code as i32),
+            error_message: last.error_message.clone(),
+            endpoint_type: Some(last.upstream_endpoint.as_str().to_string()),
+            request_type: if last.needs_conversion {
+                "conversion".to_string()
+            } else {
+                "passthrough".to_string()
+            },
+            request_content,
+            response_content,
+            is_stream,
+            upstream_key_hint: Some(last.upstream_key_hint.clone()),
+            attempts: channel_attempts,
+            user_agent,
+        }
+    }
+
+    /// 构造选择阶段失败时的最小记录（503 + "请求未到达上游"）
+    #[allow(clippy::too_many_arguments)]
+    fn minimal_for_select_failure(
+        api_key_id: Option<&str>,
+        group_id: Option<&str>,
+        model: &str,
+        request_content: Option<String>,
+        response_content: Option<String>,
+        channel_attempts: Vec<crate::stats::recorder::ChannelAttempt>,
+        is_stream: bool,
+        user_agent: Option<String>,
+    ) -> Self {
+        Self {
+            api_key_id: api_key_id.map(str::to_string),
+            channel_id: None,
+            group_id: group_id.map(str::to_string),
+            requested_model: model.to_string(),
+            actual_model: None,
+            input_tokens: 0,
+            output_tokens: 0,
+            cache_read_tokens: 0,
+            cache_creation_tokens: 0,
+            cost: None,
+            latency_ms: None,
+            ttft_ms: None,
+            status_code: Some(503),
+            error_message: Some("请求未到达上游".to_string()),
+            endpoint_type: None,
+            request_type: "unknown".to_string(),
+            request_content,
+            response_content,
+            is_stream,
+            upstream_key_hint: None,
+            attempts: channel_attempts,
+            user_agent,
+        }
+    }
+}
+
 /// 保存单条请求日志（汇总所有尝试）
 #[allow(clippy::too_many_arguments)]
 async fn save_request_record(
@@ -1117,61 +1201,29 @@ async fn save_request_record(
         })
         .collect();
 
-    let record = if let Some(last) = attempts.last() {
-        crate::stats::recorder::RequestRecord {
-            api_key_id: api_key_id.map(|s| s.to_string()),
-            channel_id: Some(last.channel_id.clone()),
-            group_id: group_id.map(|s| s.to_string()),
-            requested_model: model.to_string(),
-            actual_model: Some(last.target_model.clone()),
-            input_tokens: last.input_tokens,
-            output_tokens: last.output_tokens,
-            cache_read_tokens: last.cache_read,
-            cache_creation_tokens: last.cache_creation,
-            cost: last.cost,
-            latency_ms: Some(last.latency_ms as i32),
+    let record = match attempts.last() {
+        Some(last) => crate::stats::recorder::RequestRecord::from_last_attempt(
+            last,
+            api_key_id,
+            group_id,
+            model,
+            request_content,
+            response_content,
+            channel_attempts,
             ttft_ms,
-            status_code: Some(last.status_code as i32),
-            error_message: last.error_message.clone(),
-            endpoint_type: Some(last.upstream_endpoint.as_str().to_string()),
-            request_type: if last.needs_conversion {
-                "conversion".to_string()
-            } else {
-                "passthrough".to_string()
-            },
+            is_stream,
+            user_agent,
+        ),
+        None => crate::stats::recorder::RequestRecord::minimal_for_select_failure(
+            api_key_id,
+            group_id,
+            model,
             request_content,
             response_content,
+            channel_attempts,
             is_stream,
-            upstream_key_hint: Some(last.upstream_key_hint.clone()),
-            attempts: channel_attempts,
             user_agent,
-        }
-    } else {
-        // attempts 为空时（如连接失败、渠道选择失败），构造最小记录
-        crate::stats::recorder::RequestRecord {
-            api_key_id: api_key_id.map(|s| s.to_string()),
-            channel_id: None,
-            group_id: group_id.map(|s| s.to_string()),
-            requested_model: model.to_string(),
-            actual_model: None,
-            input_tokens: 0,
-            output_tokens: 0,
-            cache_read_tokens: 0,
-            cache_creation_tokens: 0,
-            cost: None,
-            latency_ms: None,
-            ttft_ms: None,
-            status_code: Some(503),
-            error_message: Some("请求未到达上游".to_string()),
-            endpoint_type: None,
-            request_type: "unknown".to_string(),
-            request_content,
-            response_content,
-            is_stream,
-            upstream_key_hint: None,
-            attempts: channel_attempts,
-            user_agent,
-        }
+        ),
     };
 
     let _ = state.stats_recorder.record_request(record).await;
