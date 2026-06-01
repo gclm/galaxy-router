@@ -92,7 +92,10 @@ async fn main() -> Result<()> {
 
     // 启动后台调度器
     let lb_state = proxy::state::LoadBalancerState::new();
-    let scheduler = Arc::new(proxy::scheduler::Scheduler::new(lb_state, database.pool().clone()));
+    let scheduler = Arc::new(proxy::scheduler::Scheduler::new(
+        lb_state,
+        database.pool().clone(),
+    ));
     scheduler.start();
     info!("Scheduler started");
 

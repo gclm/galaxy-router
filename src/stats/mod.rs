@@ -15,7 +15,10 @@ pub struct StatsState {
 
 impl StatsState {
     pub fn new(pool: SqlitePool, timezone_offset: i32) -> Self {
-        Self { pool, timezone_offset }
+        Self {
+            pool,
+            timezone_offset,
+        }
     }
 
     fn tz_modifier(&self) -> String {
@@ -196,7 +199,8 @@ impl StatsState {
                 COALESCE(SUM(output_tokens), 0),
                 CAST(COALESCE(SUM(COALESCE(cost, 0)), 0.0) AS REAL)
             FROM usage_logs
-            WHERE date(datetime(created_at, '{}')) = ?", tz
+            WHERE date(datetime(created_at, '{}')) = ?",
+            tz
         );
         let today_stats: (i64, i64, i64, f64) = sqlx::query_as(AssertSqlSafe(today_sql))
             .bind(&today)
@@ -232,7 +236,8 @@ impl StatsState {
             FROM usage_logs
             WHERE date(datetime(created_at, '{}')) >= ?
             GROUP BY requested_model
-            ORDER BY COUNT(*) DESC", tz
+            ORDER BY COUNT(*) DESC",
+            tz
         );
         let stats = sqlx::query_as::<_, (String, i32, i32, i32, f64)>(AssertSqlSafe(sql))
             .bind(&start_date)
@@ -272,7 +277,8 @@ impl StatsState {
             LEFT JOIN channels c ON ul.channel_id = c.id
             WHERE date(datetime(ul.created_at, '{}')) >= ?
             GROUP BY ul.channel_id
-            ORDER BY COUNT(*) DESC", tz
+            ORDER BY COUNT(*) DESC",
+            tz
         );
         let rows: Vec<ChannelStatsRow> = sqlx::query_as(AssertSqlSafe(sql))
             .bind(&start_date)
@@ -281,16 +287,18 @@ impl StatsState {
 
         Ok(rows
             .into_iter()
-            .map(|(id, name, requests, success, failure, input, output, cost)| ChannelStats {
-                channel_id: id,
-                channel_name: name,
-                request_count: requests,
-                success_count: success,
-                failure_count: failure,
-                input_tokens: input,
-                output_tokens: output,
-                total_cost: cost,
-            })
+            .map(
+                |(id, name, requests, success, failure, input, output, cost)| ChannelStats {
+                    channel_id: id,
+                    channel_name: name,
+                    request_count: requests,
+                    success_count: success,
+                    failure_count: failure,
+                    input_tokens: input,
+                    output_tokens: output,
+                    total_cost: cost,
+                },
+            )
             .collect())
     }
 
@@ -314,7 +322,8 @@ impl StatsState {
                 FROM usage_logs
                 WHERE date(datetime(created_at, '{}')) = ?
                 GROUP BY strftime('%H', datetime(created_at, '{}'))
-                ORDER BY strftime('%H', datetime(created_at, '{}')) ASC", tz, tz, tz, tz
+                ORDER BY strftime('%H', datetime(created_at, '{}')) ASC",
+                tz, tz, tz, tz
             );
             let rows: Vec<DailyRow> = sqlx::query_as(AssertSqlSafe(sql))
                 .bind(&today)
@@ -342,7 +351,8 @@ impl StatsState {
             FROM usage_logs
             WHERE date(datetime(created_at, '{}')) >= ?
             GROUP BY date(datetime(created_at, '{}'))
-            ORDER BY date(datetime(created_at, '{}')) ASC", tz, tz, tz, tz
+            ORDER BY date(datetime(created_at, '{}')) ASC",
+            tz, tz, tz, tz
         );
         let rows: Vec<DailyRow> = sqlx::query_as(AssertSqlSafe(sql))
             .bind(&start_date)
@@ -373,7 +383,8 @@ impl StatsState {
             FROM usage_logs
             WHERE date(datetime(created_at, '{}')) >= ? AND date(datetime(created_at, '{}')) <= ?
             GROUP BY date(datetime(created_at, '{}'))
-            ORDER BY date(datetime(created_at, '{}')) ASC", tz, tz, tz, tz, tz
+            ORDER BY date(datetime(created_at, '{}')) ASC",
+            tz, tz, tz, tz, tz
         );
         let rows: Vec<DailyRow> = sqlx::query_as(AssertSqlSafe(sql))
             .bind(start)
@@ -401,7 +412,8 @@ impl StatsState {
             FROM usage_logs
             WHERE date(datetime(created_at, '{}')) >= ? AND date(datetime(created_at, '{}')) <= ?
             GROUP BY requested_model
-            ORDER BY COUNT(*) DESC", tz, tz
+            ORDER BY COUNT(*) DESC",
+            tz, tz
         );
         let stats = sqlx::query_as::<_, (String, i32, i32, i32, f64)>(AssertSqlSafe(sql))
             .bind(start)
@@ -452,16 +464,18 @@ impl StatsState {
 
         Ok(rows
             .into_iter()
-            .map(|(id, name, requests, success, failure, input, output, cost)| ChannelStats {
-                channel_id: id,
-                channel_name: name,
-                request_count: requests,
-                success_count: success,
-                failure_count: failure,
-                input_tokens: input,
-                output_tokens: output,
-                total_cost: cost,
-            })
+            .map(
+                |(id, name, requests, success, failure, input, output, cost)| ChannelStats {
+                    channel_id: id,
+                    channel_name: name,
+                    request_count: requests,
+                    success_count: success,
+                    failure_count: failure,
+                    input_tokens: input,
+                    output_tokens: output,
+                    total_cost: cost,
+                },
+            )
             .collect())
     }
 
@@ -536,10 +550,16 @@ impl StatsState {
         data_builder.push(" OFFSET ");
         data_builder.push(filter.offset);
 
-        let rows: Vec<UsageLogRow> = data_builder.build_query_as().fetch_all(&self.pool).await?
+        let rows: Vec<UsageLogRow> = data_builder
+            .build_query_as()
+            .fetch_all(&self.pool)
+            .await?
             .into_iter()
             .map(|mut row: UsageLogRow| {
-                row.attempts = row.raw_attempts.take().and_then(|s| serde_json::from_str(&s).ok());
+                row.attempts = row
+                    .raw_attempts
+                    .take()
+                    .and_then(|s| serde_json::from_str(&s).ok());
                 row
             })
             .collect();

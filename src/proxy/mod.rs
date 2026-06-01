@@ -752,7 +752,11 @@ impl ChannelInfo {
 
     /// 生成上游 Key 的显示 hint（优先 note，否则截断）
     pub fn key_hint(&self, key: &str) -> String {
-        if let Some(ak) = self.api_keys.iter().find(|ak| ak.key == key && !ak.note.is_empty()) {
+        if let Some(ak) = self
+            .api_keys
+            .iter()
+            .find(|ak| ak.key == key && !ak.note.is_empty())
+        {
             return ak.note.clone();
         }
         if key.len() > 12 {
@@ -951,7 +955,10 @@ async fn prepare_proxy_request(
 
     let is_stream = body["stream"].as_bool().unwrap_or(false);
     let needs_usage_injection = is_stream
-        && matches!(upstream_endpoint, EndpointType::OpenAiChat | EndpointType::OpenAiResponse);
+        && matches!(
+            upstream_endpoint,
+            EndpointType::OpenAiChat | EndpointType::OpenAiResponse
+        );
 
     let mut request_body = if needs_conversion {
         let inbound = get_inbound(client_endpoint);
@@ -1006,7 +1013,10 @@ async fn prepare_proxy_request(
     let mut reqwest_headers = reqwest::header::HeaderMap::new();
     // 黑名单过滤：透传所有不在 HOP_BY_HOP 中的客户端请求头
     for (key, value) in headers.iter() {
-        if HOP_BY_HOP.iter().any(|h| key.as_str().eq_ignore_ascii_case(h)) {
+        if HOP_BY_HOP
+            .iter()
+            .any(|h| key.as_str().eq_ignore_ascii_case(h))
+        {
             continue;
         }
         reqwest_headers.insert(key.clone(), value.clone());
@@ -1182,7 +1192,12 @@ async fn execute_proxy_request(
             if i == 0 && o == 0 {
                 let req_text = extract_request_text(body);
                 let resp_text = extract_response_text(&body_value);
-                (estimate_tokens(&req_text), estimate_tokens(&resp_text), cr, cc)
+                (
+                    estimate_tokens(&req_text),
+                    estimate_tokens(&resp_text),
+                    cr,
+                    cc,
+                )
             } else {
                 (i, o, cr, cc)
             }
@@ -1535,16 +1550,16 @@ async fn execute_proxy_stream(
     let req_text_for_estimation = extract_request_text(body);
 
     let (stats_tx, stats_rx) = tokio::sync::oneshot::channel::<(
-        i32,  // status_code
-        i32,  // input_tokens
-        i32,  // output_tokens
-        i32,  // cache_read
-        i32,  // cache_creation
-        Option<f64>,  // cost
-        i32,  // latency_ms
-        Option<String>,  // error_message
-        Option<String>,  // response_content
-        Option<i32>,  // ttft_ms
+        i32,            // status_code
+        i32,            // input_tokens
+        i32,            // output_tokens
+        i32,            // cache_read
+        i32,            // cache_creation
+        Option<f64>,    // cost
+        i32,            // latency_ms
+        Option<String>, // error_message
+        Option<String>, // response_content
+        Option<i32>,    // ttft_ms
     )>();
 
     // 提前 clone 给 spawn 任务使用（async_stream 会 move 原值）
@@ -2126,7 +2141,7 @@ async fn validate_model_access(
     model: &str,
 ) -> Result<(), ProxyError> {
     let supported = sqlx::query_scalar::<_, String>(
-        "SELECT supported_models FROM api_keys WHERE id = ? AND enabled = 1"
+        "SELECT supported_models FROM api_keys WHERE id = ? AND enabled = 1",
     )
     .bind(key_id)
     .fetch_optional(pool)
@@ -2138,9 +2153,10 @@ async fn validate_model_access(
     {
         let allowed = crate::api::handlers::admin::api_keys::parse_supported_models(&models_str);
         if !allowed.iter().any(|m| m == model) {
-            return Err(ProxyError::NoAvailableChannel(
-                format!("API Key 无权访问模型: {}", model)
-            ));
+            return Err(ProxyError::NoAvailableChannel(format!(
+                "API Key 无权访问模型: {}",
+                model
+            )));
         }
     }
 

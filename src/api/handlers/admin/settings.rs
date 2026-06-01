@@ -98,7 +98,10 @@ pub async fn update(
     Json(body): Json<UpdateSettingRequest>,
 ) -> Result<Json<ApiResponse<()>>, (StatusCode, Json<ApiError>)> {
     if !ALLOWED_SETTING_KEYS.contains(&key.as_str()) {
-        return Err(ApiError::bad_request(format!("不允许更新的设置项: {}", key)));
+        return Err(ApiError::bad_request(format!(
+            "不允许更新的设置项: {}",
+            key
+        )));
     }
 
     let result =

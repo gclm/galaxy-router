@@ -14,7 +14,10 @@ pub async fn list(auth: ApiKeyAuth, State(pool): State<SqlitePool>) -> impl Into
     let supported_models = get_supported_models(&pool, &auth.key_id).await;
 
     let models: Vec<String> = if let Some(supported) = supported_models {
-        groups.into_iter().filter(|g| supported.contains(g)).collect()
+        groups
+            .into_iter()
+            .filter(|g| supported.contains(g))
+            .collect()
     } else {
         groups
     };
@@ -40,13 +43,12 @@ pub async fn list(auth: ApiKeyAuth, State(pool): State<SqlitePool>) -> impl Into
 
 /// 获取 API Key 的支持模型列表
 async fn get_supported_models(pool: &SqlitePool, key_id: &str) -> Option<Vec<String>> {
-    let result = sqlx::query_scalar::<_, String>(
-        "SELECT supported_models FROM api_keys WHERE id = ?"
-    )
-    .bind(key_id)
-    .fetch_optional(pool)
-    .await
-    .ok()??;
+    let result =
+        sqlx::query_scalar::<_, String>("SELECT supported_models FROM api_keys WHERE id = ?")
+            .bind(key_id)
+            .fetch_optional(pool)
+            .await
+            .ok()??;
 
     if result.is_empty() {
         return None;

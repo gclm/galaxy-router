@@ -101,7 +101,9 @@ impl Inbound for OpenAiResponsesInbound {
         let tools = request.tools.map(|t| {
             t.into_iter()
                 .filter_map(|tool| {
-                    if tool["type"] != "function" { return None; }
+                    if tool["type"] != "function" {
+                        return None;
+                    }
                     let func = tool.get("function")?;
                     let name = func["name"].as_str()?.to_string();
                     Some(Tool {
@@ -118,7 +120,10 @@ impl Inbound for OpenAiResponsesInbound {
 
         let mut extra = std::collections::HashMap::new();
         if let Some(prev_id) = request.previous_response_id {
-            extra.insert("previous_response_id".to_string(), serde_json::json!(prev_id));
+            extra.insert(
+                "previous_response_id".to_string(),
+                serde_json::json!(prev_id),
+            );
         }
 
         Ok(LlmRequest {
@@ -215,16 +220,17 @@ impl Inbound for OpenAiResponsesInbound {
 
         if let Some(choice) = event.first_choice() {
             if let Some(reasoning) = &choice.delta.reasoning_content
-                && !reasoning.is_empty() {
-                    events.push(format!(
-                        "event: response.reasoning.delta\ndata: {}\n\n",
-                        serde_json::json!({
-                            "type": "response.reasoning.delta",
-                            "output_index": 0,
-                            "delta": reasoning
-                        })
-                    ));
-                }
+                && !reasoning.is_empty()
+            {
+                events.push(format!(
+                    "event: response.reasoning.delta\ndata: {}\n\n",
+                    serde_json::json!({
+                        "type": "response.reasoning.delta",
+                        "output_index": 0,
+                        "delta": reasoning
+                    })
+                ));
+            }
 
             if let Some(content) = &choice.delta.content
                 && let Content::Text(text) = content
@@ -336,18 +342,25 @@ impl Outbound for OpenAiResponsesOutbound {
         });
 
         if let Some(tools) = &request.tools {
-            let responses_tools: Vec<_> = tools.iter().map(|t| {
-                serde_json::json!({
-                    "type": "function",
-                    "name": t.function.name,
-                    "description": t.function.description,
-                    "parameters": t.function.parameters
+            let responses_tools: Vec<_> = tools
+                .iter()
+                .map(|t| {
+                    serde_json::json!({
+                        "type": "function",
+                        "name": t.function.name,
+                        "description": t.function.description,
+                        "parameters": t.function.parameters
+                    })
                 })
-            }).collect();
+                .collect();
             body["tools"] = serde_json::json!(responses_tools);
         }
 
-        if let Some(prev_id) = request.extra.get("previous_response_id").and_then(|v| v.as_str()) {
+        if let Some(prev_id) = request
+            .extra
+            .get("previous_response_id")
+            .and_then(|v| v.as_str())
+        {
             body["previous_response_id"] = serde_json::json!(prev_id);
         }
 
@@ -395,7 +408,7 @@ impl Outbound for OpenAiResponsesOutbound {
                                 tool_calls: None,
                                 tool_call_id: None,
                                 reasoning_content: None,
-                    cache_control: None,
+                                cache_control: None,
                             },
                             finish_reason: Some(FinishReason::Stop),
                         });
@@ -529,16 +542,18 @@ impl Outbound for OpenAiResponsesOutbound {
             "response.completed" => {
                 let mut usage = None;
                 if let Some(resp) = parsed.get("response")
-                    && let Some(u) = resp.get("usage") {
-                        usage = Some(Usage {
-                            prompt_tokens: u["input_tokens"].as_u64().unwrap_or(0) as u32,
-                            completion_tokens: u["output_tokens"].as_u64().unwrap_or(0) as u32,
-                            total_tokens: (u["input_tokens"].as_u64().unwrap_or(0)
-                                + u["output_tokens"].as_u64().unwrap_or(0)) as u32,
-                            prompt_tokens_details: None,
-                            completion_tokens_details: None,
-                        });
-                    }
+                    && let Some(u) = resp.get("usage")
+                {
+                    usage = Some(Usage {
+                        prompt_tokens: u["input_tokens"].as_u64().unwrap_or(0) as u32,
+                        completion_tokens: u["output_tokens"].as_u64().unwrap_or(0) as u32,
+                        total_tokens: (u["input_tokens"].as_u64().unwrap_or(0)
+                            + u["output_tokens"].as_u64().unwrap_or(0))
+                            as u32,
+                        prompt_tokens_details: None,
+                        completion_tokens_details: None,
+                    });
+                }
                 Ok(Some(LlmStreamResponse {
                     id: parsed["response"]["id"].as_str().unwrap_or("").to_string(),
                     object: "chat.completion.chunk".to_string(),
@@ -561,8 +576,11 @@ impl Outbound for OpenAiResponsesOutbound {
                     system_fingerprint: None,
                 }))
             }
-            "response.created" | "response.in_progress" | "response.output_item.added"
-            | "response.output_text.done" | "response.function_call_arguments.done" => Ok(None),
+            "response.created"
+            | "response.in_progress"
+            | "response.output_item.added"
+            | "response.output_text.done"
+            | "response.function_call_arguments.done" => Ok(None),
             _ => Ok(None),
         }
     }

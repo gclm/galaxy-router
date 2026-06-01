@@ -99,7 +99,9 @@ impl Inbound for AnthropicInbound {
                     .filter_map(|item| match item["type"].as_str()? {
                         "text" => Some(ContentPart::Text {
                             text: item["text"].as_str()?.to_string(),
-                            cache_control: item.get("cache_control").and_then(|cc| serde_json::from_value(cc.clone()).ok()),
+                            cache_control: item
+                                .get("cache_control")
+                                .and_then(|cc| serde_json::from_value(cc.clone()).ok()),
                         }),
                         "image" => Some(ContentPart::ImageUrl {
                             image_url: ImageUrl {
@@ -306,7 +308,9 @@ impl Outbound for AnthropicOutbound {
                                     .iter()
                                     .filter_map(|p| {
                                         if let ContentPart::Text { text, .. } = p {
-                                            Some(serde_json::json!({ "type": "text", "text": text }))
+                                            Some(
+                                                serde_json::json!({ "type": "text", "text": text }),
+                                            )
                                         } else {
                                             None
                                         }
@@ -324,13 +328,17 @@ impl Outbound for AnthropicOutbound {
                             let anthropic_parts: Vec<_> = parts
                                 .iter()
                                 .map(|p| match p {
-                                    ContentPart::Text { text, cache_control } => {
+                                    ContentPart::Text {
+                                        text,
+                                        cache_control,
+                                    } => {
                                         let mut block = serde_json::json!({
                                             "type": "text",
                                             "text": text
                                         });
                                         if let Some(cc) = cache_control {
-                                            block["cache_control"] = serde_json::to_value(cc).unwrap_or_default();
+                                            block["cache_control"] =
+                                                serde_json::to_value(cc).unwrap_or_default();
                                         }
                                         block
                                     }
@@ -386,13 +394,16 @@ impl Outbound for AnthropicOutbound {
             body["stream"] = serde_json::json!(stream);
         }
         if let Some(tools) = &request.tools {
-            let anthropic_tools: Vec<_> = tools.iter().map(|t| {
-                serde_json::json!({
-                    "name": t.function.name,
-                    "description": t.function.description,
-                    "input_schema": t.function.parameters
+            let anthropic_tools: Vec<_> = tools
+                .iter()
+                .map(|t| {
+                    serde_json::json!({
+                        "name": t.function.name,
+                        "description": t.function.description,
+                        "input_schema": t.function.parameters
+                    })
                 })
-            }).collect();
+                .collect();
             body["tools"] = serde_json::json!(anthropic_tools);
         }
 
@@ -513,7 +524,10 @@ impl Outbound for AnthropicOutbound {
         match sse.event_type.as_str() {
             "message_start" => {
                 let id = parsed["message"]["id"].as_str().unwrap_or("").to_string();
-                let model = parsed["message"]["model"].as_str().unwrap_or("").to_string();
+                let model = parsed["message"]["model"]
+                    .as_str()
+                    .unwrap_or("")
+                    .to_string();
                 Ok(Some(LlmStreamResponse {
                     id,
                     object: "chat.completion.chunk".to_string(),
@@ -528,7 +542,7 @@ impl Outbound for AnthropicOutbound {
                             tool_calls: None,
                             tool_call_id: None,
                             reasoning_content: None,
-                cache_control: None,
+                            cache_control: None,
                         },
                         finish_reason: None,
                     }],
@@ -579,7 +593,7 @@ impl Outbound for AnthropicOutbound {
                                     tool_calls: None,
                                     tool_call_id: None,
                                     reasoning_content: None,
-                cache_control: None,
+                                    cache_control: None,
                                 },
                                 finish_reason: None,
                             }],
@@ -610,7 +624,7 @@ impl Outbound for AnthropicOutbound {
                             tool_calls: None,
                             tool_call_id: None,
                             reasoning_content: None,
-                cache_control: None,
+                            cache_control: None,
                         },
                         finish_reason,
                     }],

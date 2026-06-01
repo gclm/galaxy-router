@@ -119,7 +119,11 @@ pub async fn create(
         name: req.name,
         api_key,
         enabled: true,
-        supported_models: if supported_models.is_empty() { None } else { Some(supported_models) },
+        supported_models: if supported_models.is_empty() {
+            None
+        } else {
+            Some(supported_models)
+        },
         created_at: chrono::Utc::now().to_rfc3339(),
         updated_at: chrono::Utc::now().to_rfc3339(),
     };
@@ -148,7 +152,11 @@ pub async fn get(
         name,
         api_key,
         enabled,
-        supported_models: if supported_models.is_empty() { None } else { Some(supported_models) },
+        supported_models: if supported_models.is_empty() {
+            None
+        } else {
+            Some(supported_models)
+        },
         created_at,
         updated_at,
     })))

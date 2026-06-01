@@ -4,13 +4,12 @@ use std::time::Instant;
 use tokio::sync::RwLock;
 
 use axum::{
-    RequestPartsExt,
+    Json, RequestPartsExt,
     body::Body,
     extract::FromRequestParts,
-    http::{Request, StatusCode, header::CONTENT_TYPE, Method, request::Parts},
+    http::{Method, Request, StatusCode, header::CONTENT_TYPE, request::Parts},
     middleware::Next,
     response::IntoResponse,
-    Json,
 };
 use axum_extra::{
     TypedHeader,
@@ -66,7 +65,15 @@ impl ApiKeyCache {
         if cache.len() >= 1000 {
             cache.retain(|_, e| e.cached_at.elapsed().as_secs() < CACHE_TTL_SECS);
         }
-        cache.insert(key, ApiKeyEntry { id, name, enabled, cached_at: Instant::now() });
+        cache.insert(
+            key,
+            ApiKeyEntry {
+                id,
+                name,
+                enabled,
+                cached_at: Instant::now(),
+            },
+        );
     }
 
     #[allow(dead_code)]
@@ -256,12 +263,12 @@ pub async fn require_admin_auth(
 }
 
 /// Content-Type 校验中间件：POST/PUT/PATCH 必须是 application/json
-pub async fn require_json(
-    request: Request<Body>,
-    next: Next,
-) -> impl IntoResponse {
+pub async fn require_json(request: Request<Body>, next: Next) -> impl IntoResponse {
     let method = request.method();
-    if matches!(*method, Method::GET | Method::DELETE | Method::OPTIONS | Method::HEAD) {
+    if matches!(
+        *method,
+        Method::GET | Method::DELETE | Method::OPTIONS | Method::HEAD
+    ) {
         return next.run(request).await;
     }
     let ct = request
