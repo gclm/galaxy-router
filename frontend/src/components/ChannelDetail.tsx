@@ -73,7 +73,7 @@ export function ChannelDetail({ channel, open, onOpenChange, onEdit, onTest }: C
                 >
                   <span className="text-muted-foreground w-4 text-center">{i + 1}</span>
                   <span className="font-medium flex-1 truncate">
-                    {k.note || '未命名'}
+                    {k.note?.trim() || maskKey(k.key)}
                   </span>
                   <span className="font-mono text-xs text-muted-foreground">
                     {maskKey(k.key)}

@@ -124,6 +124,8 @@ export interface TestChannelResponse {
   time_to_first_token_ms?: number
   input_prompt: string
   output_content: string | null
+  prompt_tokens?: number
+  completion_tokens?: number
 }
 
 // Group types

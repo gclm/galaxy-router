@@ -5,7 +5,7 @@ use axum::{
 };
 
 use reqwest::Client;
-use serde::{Deserialize, Deserializer, Serialize};
+use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
 
 #[derive(sqlx::FromRow)]
@@ -103,30 +103,12 @@ pub struct UpstreamApiKey {
     pub key: String,
     #[serde(default)]
     pub note: String,
-    #[serde(default = "default_true", deserialize_with = "deserialize_bool_like")]
+    #[serde(default = "default_true")]
     pub enabled: bool,
 }
 
 fn default_true() -> bool {
     true
-}
-
-fn deserialize_bool_like<'de, D>(deserializer: D) -> Result<bool, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    #[derive(Deserialize)]
-    #[serde(untagged)]
-    enum BoolLike {
-        Bool(bool),
-        Int(i64),
-    }
-
-    match Option::<BoolLike>::deserialize(deserializer)? {
-        Some(BoolLike::Bool(value)) => Ok(value),
-        Some(BoolLike::Int(value)) => Ok(value != 0),
-        None => Ok(default_true()),
-    }
 }
 
 /// 自定义请求头
@@ -566,7 +548,12 @@ pub struct TestChannelResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub time_to_first_token_ms: Option<u64>,
     pub input_prompt: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub output_content: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prompt_tokens: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub completion_tokens: Option<u64>,
 }
 
 /// 构建测试请求体和上游路径
@@ -684,6 +671,18 @@ fn extract_test_content(resp_body: &serde_json::Value, endpoint_type: &EndpointT
     }
 }
 
+/// 从响应中提取 token 用量
+fn extract_usage(resp_body: &serde_json::Value, endpoint_type: &EndpointType) -> (Option<u64>, Option<u64>) {
+    let usage = &resp_body["usage"];
+    match endpoint_type {
+        EndpointType::OpenAiChat => (usage["prompt_tokens"].as_u64(), usage["completion_tokens"].as_u64()),
+        EndpointType::OpenAiResponse | EndpointType::Anthropic => {
+            (usage["input_tokens"].as_u64(), usage["output_tokens"].as_u64())
+        }
+        _ => (None, None),
+    }
+}
+
 /// 解析协议字符串为 EndpointType
 fn parse_protocol(protocol: &str) -> Option<EndpointType> {
     serde_json::from_value::<EndpointType>(serde_json::Value::String(protocol.to_string())).ok()
@@ -713,7 +712,7 @@ async fn send_streaming_test(
     endpoint_type: &EndpointType,
     api_key: &str,
     custom_headers: &[CustomHeader],
-) -> (Result<String, String>, u64, Option<u64>) {
+) -> (Result<String, String>, u64, Option<u64>, Option<u64>, Option<u64>) {
     let mut req_builder = client
         .post(url)
         .header("Content-Type", "application/json")
@@ -739,6 +738,8 @@ async fn send_streaming_test(
                 Err(format!("请求上游失败: {}", e)),
                 start.elapsed().as_millis() as u64,
                 None,
+                None,
+                None,
             );
         }
     };
@@ -750,6 +751,8 @@ async fn send_streaming_test(
             Err(format!("上游返回 HTTP {}: {}", status, text)),
             start.elapsed().as_millis() as u64,
             None,
+            None,
+            None,
         );
     }
 
@@ -760,6 +763,8 @@ async fn send_streaming_test(
                 Err(format!("读取响应失败: {}", e)),
                 start.elapsed().as_millis() as u64,
                 None,
+                None,
+                None,
             );
         }
     };
@@ -767,6 +772,8 @@ async fn send_streaming_test(
     let text = String::from_utf8_lossy(&bytes);
     let mut first_token_ms: Option<u64> = None;
     let mut full_content = String::new();
+    let mut prompt_tokens: Option<u64> = None;
+    let mut completion_tokens: Option<u64> = None;
 
     for line in text.lines() {
         if let Some(data) = line.strip_prefix("data: ") {
@@ -778,6 +785,21 @@ async fn send_streaming_test(
                 first_token_ms = Some(start.elapsed().as_millis() as u64);
             }
             if let Ok(json) = serde_json::from_str::<serde_json::Value>(data) {
+                if let Some(v) = json["usage"]["prompt_tokens"].as_u64() {
+                    prompt_tokens = Some(v);
+                }
+                if let Some(v) = json["usage"]["completion_tokens"].as_u64() {
+                    completion_tokens = Some(v);
+                }
+                if let Some(v) = json["usage"]["input_tokens"].as_u64() {
+                    prompt_tokens = Some(v);
+                }
+                if let Some(v) = json["usage"]["output_tokens"].as_u64() {
+                    completion_tokens = Some(v);
+                }
+                if let Some(v) = json["message"]["usage"]["input_tokens"].as_u64() {
+                    prompt_tokens = Some(v);
+                }
                 let delta = match endpoint_type {
                     EndpointType::OpenAiChat => json["choices"][0]["delta"]["content"].as_str(),
                     EndpointType::Anthropic => json["delta"]["text"].as_str(),
@@ -794,9 +816,9 @@ async fn send_streaming_test(
 
     let total_ms = start.elapsed().as_millis() as u64;
     if full_content.is_empty() {
-        (Err("流式响应无内容".to_string()), total_ms, first_token_ms)
+        (Err("流式响应无内容".to_string()), total_ms, first_token_ms, prompt_tokens, completion_tokens)
     } else {
-        (Ok(full_content), total_ms, first_token_ms)
+        (Ok(full_content), total_ms, first_token_ms, prompt_tokens, completion_tokens)
     }
 }
 
@@ -849,7 +871,7 @@ pub async fn test_channel(
     );
 
     if use_stream {
-        let (result, latency_ms, ttft) = send_streaming_test(
+        let (result, latency_ms, ttft, pt, ct) = send_streaming_test(
             &state.http_client,
             &url,
             &body,
@@ -867,6 +889,8 @@ pub async fn test_channel(
                 time_to_first_token_ms: ttft,
                 input_prompt: TEST_PROMPT.to_string(),
                 output_content: Some(content),
+                prompt_tokens: pt,
+                completion_tokens: ct,
             }))),
             Err(msg) => Ok(Json(ApiResponse::success(TestChannelResponse {
                 success: false,
@@ -875,6 +899,8 @@ pub async fn test_channel(
                 time_to_first_token_ms: ttft,
                 input_prompt: TEST_PROMPT.to_string(),
                 output_content: None,
+                prompt_tokens: pt,
+                completion_tokens: ct,
             }))),
         }
     } else {
@@ -916,6 +942,8 @@ pub async fn test_channel(
                         time_to_first_token_ms: None,
                         input_prompt: TEST_PROMPT.to_string(),
                         output_content: None,
+                        prompt_tokens: None,
+                        completion_tokens: None,
                     })));
                 }
 
@@ -930,10 +958,13 @@ pub async fn test_channel(
                         time_to_first_token_ms: None,
                         input_prompt: TEST_PROMPT.to_string(),
                         output_content: None,
+                        prompt_tokens: None,
+                        completion_tokens: None,
                     })));
                 }
 
                 let content = extract_test_content(&resp_body, &endpoint_type);
+                let (pt, ct) = extract_usage(&resp_body, &endpoint_type);
                 Ok(Json(ApiResponse::success(TestChannelResponse {
                     success: true,
                     message: "模型测试成功".to_string(),
@@ -941,6 +972,8 @@ pub async fn test_channel(
                     time_to_first_token_ms: None,
                     input_prompt: TEST_PROMPT.to_string(),
                     output_content: Some(content),
+                    prompt_tokens: pt,
+                    completion_tokens: ct,
                 })))
             }
             Err(e) => Ok(Json(ApiResponse::success(TestChannelResponse {
@@ -950,6 +983,8 @@ pub async fn test_channel(
                 time_to_first_token_ms: None,
                 input_prompt: TEST_PROMPT.to_string(),
                 output_content: None,
+                prompt_tokens: None,
+                completion_tokens: None,
             }))),
         }
     }

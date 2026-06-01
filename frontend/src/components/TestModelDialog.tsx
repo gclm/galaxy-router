@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from 'react'
+import { Fragment, useCallback, useMemo, useState } from 'react'
 import type { Channel, EndpointType, TestChannelResponse } from '@/api/types'
 import { ENDPOINT_LABELS } from '@/api/types'
 import { channelsApi } from '@/api/channels'
@@ -11,7 +11,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { StatusBadge } from '@/components/StatusBadge'
-import { Play, Loader2, Search } from 'lucide-react'
+import { Play, Loader2, Search, ChevronRight } from 'lucide-react'
 
 interface TestModelDialogProps {
   channel: Channel | null
@@ -26,6 +26,9 @@ interface ModelTestResult {
   latency_ms?: number
   time_to_first_token_ms?: number
   error?: string
+  output_content?: string
+  prompt_tokens?: number
+  completion_tokens?: number
 }
 
 function maskKey(key: string) {
@@ -33,23 +36,29 @@ function maskKey(key: string) {
   return '...' + key.slice(-4)
 }
 
+function keyLabel(k: { key: string; note?: string }) {
+  return k.note?.trim() || maskKey(k.key)
+}
+
 export function TestModelDialog({ channel, open, onOpenChange }: TestModelDialogProps) {
   const [selectedKey, setSelectedKey] = useState('')
   const [protocol, setProtocol] = useState('')
-  const [useStream, setUseStream] = useState(false)
+  const [useStream, setUseStream] = useState(true)
   const [searchTerm, setSearchTerm] = useState('')
   const [results, setResults] = useState<Record<string, ModelTestResult>>({})
   const [testingModels, setTestingModels] = useState<Set<string>>(new Set())
   const [isBatchTesting, setIsBatchTesting] = useState(false)
+  const [expandedModels, setExpandedModels] = useState<Set<string>>(new Set())
 
   const resetState = useCallback(() => {
     setSelectedKey('')
     setProtocol('')
-    setUseStream(false)
+    setUseStream(true)
     setSearchTerm('')
     setResults({})
     setTestingModels(new Set())
     setIsBatchTesting(false)
+    setExpandedModels(new Set())
   }, [])
 
   const models = channel?.models || []
@@ -83,6 +92,15 @@ export function TestModelDialog({ channel, open, onOpenChange }: TestModelDialog
     })
   }
 
+  const toggleExpand = (model: string) => {
+    setExpandedModels((prev) => {
+      const next = new Set(prev)
+      if (next.has(model)) next.delete(model)
+      else next.add(model)
+      return next
+    })
+  }
+
   const testSingle = async (model: string): Promise<ModelTestResult | undefined> => {
     if (!channel || !currentKey || !currentProtocol) return undefined
 
@@ -102,6 +120,9 @@ export function TestModelDialog({ channel, open, onOpenChange }: TestModelDialog
         latency_ms: res.latency_ms,
         time_to_first_token_ms: res.time_to_first_token_ms,
         error: res.success ? undefined : res.message,
+        output_content: res.output_content ?? undefined,
+        prompt_tokens: res.prompt_tokens,
+        completion_tokens: res.completion_tokens,
       }
     } catch (e: unknown) {
       finalResult = {
@@ -112,6 +133,17 @@ export function TestModelDialog({ channel, open, onOpenChange }: TestModelDialog
 
     updateResult(model, finalResult)
     markTesting(model, false)
+
+    // 自动展开有结果的模型
+    if (finalResult && finalResult.status !== 'testing') {
+      setExpandedModels((prev) => {
+        if (prev.has(model)) return prev
+        const next = new Set(prev)
+        next.add(model)
+        return next
+      })
+    }
+
     return finalResult
   }
 
@@ -158,7 +190,7 @@ export function TestModelDialog({ channel, open, onOpenChange }: TestModelDialog
               >
                 {enabledKeys.map((k) => (
                   <option key={k.key} value={k.key}>
-                    {k.note || '未命名'} {maskKey(k.key)}
+                    {keyLabel(k)} {maskKey(k.key)}
                   </option>
                 ))}
               </select>
@@ -245,7 +277,7 @@ export function TestModelDialog({ channel, open, onOpenChange }: TestModelDialog
           <div className="rounded-xl border overflow-hidden">
             <div className="max-h-[400px] overflow-y-auto">
               <table className="w-full text-sm">
-                <thead className="sticky top-0 bg-muted/80 backdrop-blur-sm">
+                <thead className="sticky top-0 bg-muted/80 backdrop-blur-sm z-10">
                   <tr className="border-b">
                     <th className="text-left px-3 py-2 font-medium">模型</th>
                     <th className="text-left px-3 py-2 font-medium w-60">状态</th>
@@ -256,52 +288,102 @@ export function TestModelDialog({ channel, open, onOpenChange }: TestModelDialog
                   {filteredModels.map((model) => {
                     const r = results[model]
                     const isTesting = testingModels.has(model)
+                    const isExpanded = expandedModels.has(model)
+                    const hasDetail = r && r.status !== 'idle' && r.status !== 'testing'
+
                     return (
-                      <tr key={model} className="border-b last:border-0 hover:bg-muted/30">
-                        <td className="px-3 py-2 font-mono text-xs">{model}</td>
-                        <td className="px-3 py-2">
-                          {!r || r.status === 'idle' ? (
-                            <span className="text-muted-foreground text-xs">未测试</span>
-                          ) : r.status === 'testing' ? (
-                            <div className="flex items-center gap-1.5 text-muted-foreground text-xs">
-                              <Loader2 className="h-3 w-3 animate-spin" />
-                              测试中...
+                      <Fragment key={model}>
+                        <tr className="border-b last:border-0 hover:bg-muted/30">
+                          <td className="px-3 py-2">
+                            <div className="flex items-center gap-1.5">
+                              {hasDetail ? (
+                                <button
+                                  onClick={() => toggleExpand(model)}
+                                  className="p-0.5 hover:bg-muted rounded"
+                                >
+                                  <ChevronRight
+                                    className={`h-3.5 w-3.5 text-muted-foreground transition-transform ${isExpanded ? 'rotate-90' : ''}`}
+                                  />
+                                </button>
+                              ) : (
+                                <span className="w-4.5 inline-block" />
+                              )}
+                              <span className="font-mono text-xs">{model}</span>
                             </div>
-                          ) : r.status === 'success' ? (
-                            <div className="flex items-center gap-2 text-xs">
-                              <StatusBadge enabled onClick={() => {}} />
-                              <span className="text-muted-foreground">
-                                {r.latency_ms}ms
-                                {r.time_to_first_token_ms != null && (
-                                  <span className="ml-1">TTFT {r.time_to_first_token_ms}ms</span>
+                          </td>
+                          <td className="px-3 py-2">
+                            {!r || r.status === 'idle' ? (
+                              <span className="text-muted-foreground text-xs">未测试</span>
+                            ) : r.status === 'testing' ? (
+                              <div className="flex items-center gap-1.5 text-muted-foreground text-xs">
+                                <Loader2 className="h-3 w-3 animate-spin" />
+                                测试中...
+                              </div>
+                            ) : r.status === 'success' ? (
+                              <div className="flex items-center gap-2 text-xs">
+                                <StatusBadge enabled onClick={() => {}} />
+                                <span className="text-muted-foreground">
+                                  {r.latency_ms}ms
+                                  {r.time_to_first_token_ms != null && (
+                                    <span className="ml-1">TTFT {r.time_to_first_token_ms}ms</span>
+                                  )}
+                                </span>
+                                {(r.prompt_tokens != null || r.completion_tokens != null) && (
+                                  <span className="text-muted-foreground">
+                                    {r.prompt_tokens ?? '-'}/{r.completion_tokens ?? '-'} tokens
+                                  </span>
                                 )}
-                              </span>
-                            </div>
-                          ) : (
-                            <div className="flex items-center gap-1 text-xs">
-                              <StatusBadge enabled={false} onClick={() => {}} />
-                              <span className="text-red-500 truncate max-w-[180px]" title={r.error}>
-                                {r.error || '测试失败'}
-                              </span>
-                            </div>
-                          )}
-                        </td>
-                        <td className="px-3 py-2 text-right">
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            className="h-7 text-xs"
-                            onClick={() => testSingle(model)}
-                            disabled={isTesting || isBatchTesting || !currentKey || !currentProtocol}
-                          >
-                            {isTesting ? (
-                              <Loader2 className="h-3 w-3 animate-spin" />
+                              </div>
                             ) : (
-                              '测试'
+                              <div className="flex items-center gap-1 text-xs">
+                                <StatusBadge enabled={false} onClick={() => {}} />
+                                <span className="text-red-500 truncate max-w-[180px]" title={r.error}>
+                                  {r.error || '测试失败'}
+                                </span>
+                              </div>
                             )}
-                          </Button>
-                        </td>
-                      </tr>
+                          </td>
+                          <td className="px-3 py-2 text-right">
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="h-7 text-xs"
+                              onClick={() => testSingle(model)}
+                              disabled={isTesting || isBatchTesting || !currentKey || !currentProtocol}
+                            >
+                              {isTesting ? (
+                                <Loader2 className="h-3 w-3 animate-spin" />
+                              ) : (
+                                '测试'
+                              )}
+                            </Button>
+                          </td>
+                        </tr>
+                        {isExpanded && hasDetail && (
+                          <tr className="border-b">
+                            <td colSpan={3} className="p-0">
+                              <div className="px-4 py-2 bg-muted/20 border-t border-b">
+                                {r.status === 'success' && r.output_content && (
+                                  <div className="rounded bg-background p-2.5 text-xs whitespace-pre-wrap border">
+                                    {r.output_content}
+                                  </div>
+                                )}
+                                {r.status === 'error' && (
+                                  <div className="rounded bg-red-50 p-2.5 text-xs text-red-600 whitespace-pre-wrap border border-red-200">
+                                    {r.error}
+                                  </div>
+                                )}
+                                {(r.prompt_tokens != null || r.completion_tokens != null) && (
+                                  <div className="flex gap-4 mt-1.5 text-xs text-muted-foreground">
+                                    <span>输入: {r.prompt_tokens ?? '-'} tokens</span>
+                                    <span>输出: {r.completion_tokens ?? '-'} tokens</span>
+                                  </div>
+                                )}
+                              </div>
+                            </td>
+                          </tr>
+                        )}
+                      </Fragment>
                     )
                   })}
                   {filteredModels.length === 0 && (
