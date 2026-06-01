@@ -1100,11 +1100,7 @@ async fn save_request_record(
     is_stream: bool,
     user_agent: Option<String>,
 ) {
-    let last = match attempts.last() {
-        Some(a) => a,
-        None => return,
-    };
-
+    // 构造 attempts 快照（用于记录日志）
     let channel_attempts: Vec<crate::stats::recorder::ChannelAttempt> = attempts
         .iter()
         .map(|a| crate::stats::recorder::ChannelAttempt {
@@ -1121,33 +1117,61 @@ async fn save_request_record(
         })
         .collect();
 
-    let record = crate::stats::recorder::RequestRecord {
-        api_key_id: api_key_id.map(|s| s.to_string()),
-        channel_id: Some(last.channel_id.clone()),
-        group_id: group_id.map(|s| s.to_string()),
-        requested_model: model.to_string(),
-        actual_model: Some(last.target_model.clone()),
-        input_tokens: last.input_tokens,
-        output_tokens: last.output_tokens,
-        cache_read_tokens: last.cache_read,
-        cache_creation_tokens: last.cache_creation,
-        cost: last.cost,
-        latency_ms: Some(last.latency_ms as i32),
-        ttft_ms,
-        status_code: Some(last.status_code as i32),
-        error_message: last.error_message.clone(),
-        endpoint_type: Some(last.upstream_endpoint.as_str().to_string()),
-        request_type: if last.needs_conversion {
-            "conversion".to_string()
-        } else {
-            "passthrough".to_string()
-        },
-        request_content,
-        response_content,
-        is_stream,
-        upstream_key_hint: Some(last.upstream_key_hint.clone()),
-        attempts: channel_attempts,
-        user_agent,
+    let record = if let Some(last) = attempts.last() {
+        crate::stats::recorder::RequestRecord {
+            api_key_id: api_key_id.map(|s| s.to_string()),
+            channel_id: Some(last.channel_id.clone()),
+            group_id: group_id.map(|s| s.to_string()),
+            requested_model: model.to_string(),
+            actual_model: Some(last.target_model.clone()),
+            input_tokens: last.input_tokens,
+            output_tokens: last.output_tokens,
+            cache_read_tokens: last.cache_read,
+            cache_creation_tokens: last.cache_creation,
+            cost: last.cost,
+            latency_ms: Some(last.latency_ms as i32),
+            ttft_ms,
+            status_code: Some(last.status_code as i32),
+            error_message: last.error_message.clone(),
+            endpoint_type: Some(last.upstream_endpoint.as_str().to_string()),
+            request_type: if last.needs_conversion {
+                "conversion".to_string()
+            } else {
+                "passthrough".to_string()
+            },
+            request_content,
+            response_content,
+            is_stream,
+            upstream_key_hint: Some(last.upstream_key_hint.clone()),
+            attempts: channel_attempts,
+            user_agent,
+        }
+    } else {
+        // attempts 为空时（如连接失败、渠道选择失败），构造最小记录
+        crate::stats::recorder::RequestRecord {
+            api_key_id: api_key_id.map(|s| s.to_string()),
+            channel_id: None,
+            group_id: group_id.map(|s| s.to_string()),
+            requested_model: model.to_string(),
+            actual_model: None,
+            input_tokens: 0,
+            output_tokens: 0,
+            cache_read_tokens: 0,
+            cache_creation_tokens: 0,
+            cost: None,
+            latency_ms: None,
+            ttft_ms: None,
+            status_code: Some(503),
+            error_message: Some("请求未到达上游".to_string()),
+            endpoint_type: None,
+            request_type: "unknown".to_string(),
+            request_content,
+            response_content,
+            is_stream,
+            upstream_key_hint: None,
+            attempts: channel_attempts,
+            user_agent,
+        }
     };
 
     let _ = state.stats_recorder.record_request(record).await;
@@ -1311,8 +1335,34 @@ pub async fn proxy_request(
     let mut attempts = Vec::new();
 
     for attempt in 0..max_retries {
-        let selection =
-            select_channel_for_proxy(state, headers, body, client_endpoint, &exclude_ids).await?;
+        let selection = match select_channel_for_proxy(
+            state,
+            headers,
+            body,
+            client_endpoint,
+            &exclude_ids,
+        )
+        .await
+        {
+            Ok(s) => s,
+            Err(e) => {
+                // 渠道选择失败时也记录日志
+                save_request_record(
+                    state,
+                    api_key_id,
+                    None,
+                    &model,
+                    request_content.clone(),
+                    None,
+                    &attempts,
+                    None,
+                    false,
+                    user_agent.clone(),
+                )
+                .await;
+                return Err(e);
+            }
+        };
         let channel_id = selection.channel.id.clone();
         let group_id = selection.group_id.clone();
         let api_key_attempts = state.api_key_attempts(&selection.channel);
@@ -1988,8 +2038,34 @@ pub async fn proxy_stream(
     let mut attempts = Vec::new();
 
     for attempt in 0..max_retries {
-        let selection =
-            select_channel_for_proxy(state, headers, body, client_endpoint, &exclude_ids).await?;
+        let selection = match select_channel_for_proxy(
+            state,
+            headers,
+            body,
+            client_endpoint,
+            &exclude_ids,
+        )
+        .await
+        {
+            Ok(s) => s,
+            Err(e) => {
+                // 渠道选择失败时也记录日志
+                save_request_record(
+                    state,
+                    api_key_id,
+                    None,
+                    &model,
+                    request_content.clone(),
+                    None,
+                    &attempts,
+                    None,
+                    true,
+                    user_agent.clone(),
+                )
+                .await;
+                return Err(e);
+            }
+        };
         let channel_id = selection.channel.id.clone();
         let group_id = selection.group_id.clone();
         let api_key_attempts = state.api_key_attempts(&selection.channel);
