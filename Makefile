@@ -107,11 +107,15 @@ release-version: check
 	  echo "tag 已存在: $$tag" >&2; exit 1; \
 	fi; \
 	perl -0pi -e 's/^version = "[^"]+"/version = "$(VERSION)"/m' Cargo.toml; \
-	cargo metadata --format-version 1 --no-deps >/dev/null; \
+	cargo check; \
 	tmp=$$(mktemp); \
 	jq '.version = "$(VERSION)"' frontend/package.json > "$$tmp"; \
 	mv "$$tmp" frontend/package.json; \
 	git add Cargo.toml Cargo.lock frontend/package.json; \
+	if ! git diff --cached --name-only | grep -qx 'Cargo.lock'; then \
+	  echo "ERROR: Cargo.lock 未随版本号更新，请手动执行 cargo update -p $(APP) 或 cargo check" >&2; \
+	  exit 1; \
+	fi; \
 	git commit -m "chore: 发布 v$(VERSION)"; \
 	git tag -a "$$tag" -m "v$(VERSION)"; \
 	git push origin HEAD; \
