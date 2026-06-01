@@ -1,14 +1,17 @@
-import { useRef, useState } from 'react'
-import type { Channel, EndpointType, TestModelResponse } from '@/api/types'
+import { useCallback, useMemo, useState } from 'react'
+import type { Channel, EndpointType, TestChannelResponse } from '@/api/types'
+import { ENDPOINT_LABELS } from '@/api/types'
 import { channelsApi } from '@/api/channels'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
-import { Play, RotateCw } from 'lucide-react'
+import { StatusBadge } from '@/components/StatusBadge'
+import { Play, Loader2, Search } from 'lucide-react'
 
 interface TestModelDialogProps {
   channel: Channel | null
@@ -16,243 +19,301 @@ interface TestModelDialogProps {
   onOpenChange: (open: boolean) => void
 }
 
-type Status = 'idle' | 'testing' | 'success' | 'error'
+type ModelStatus = 'idle' | 'testing' | 'success' | 'error'
 
-interface LogLine {
-  text: string
-  type: 'info' | 'success' | 'error' | 'pending' | 'prompt' | 'output' | 'muted'
+interface ModelTestResult {
+  status: ModelStatus
+  latency_ms?: number
+  time_to_first_token_ms?: number
+  error?: string
 }
 
-const TEST_PROTOCOLS: { value: EndpointType; label: string }[] = [
-  { value: 'openai_chat', label: 'OpenAI Chat' },
-  { value: 'openai_response', label: 'OpenAI Responses' },
-  { value: 'anthropic', label: 'Anthropic' },
-  { value: 'openai_embedding', label: 'Embedding' },
-  { value: 'openai_images', label: 'Images' },
-]
-
-const USER_AGENTS = [
-  { value: '', label: '默认（不设置）' },
-  { value: 'HermesAgent/0.14.0', label: 'HermesAgent/0.14.0' },
-  { value: 'claude-cli/2.1.140 (external, cli)', label: 'claude-code' },
-]
+function maskKey(key: string) {
+  if (key.length <= 8) return '****'
+  return '...' + key.slice(-4)
+}
 
 export function TestModelDialog({ channel, open, onOpenChange }: TestModelDialogProps) {
-  const [testProtocol, setTestProtocol] = useState('')
-  const [userAgent, setUserAgent] = useState('')
-  const [selectedModel, setSelectedModel] = useState('')
-  const [status, setStatus] = useState<Status>('idle')
-  const [logs, setLogs] = useState<LogLine[]>([])
-  const [result, setResult] = useState<TestModelResponse | null>(null)
-  const terminalRef = useRef<HTMLDivElement>(null)
+  const [selectedKeyId, setSelectedKeyId] = useState('')
+  const [protocol, setProtocol] = useState('')
+  const [useStream, setUseStream] = useState(false)
+  const [searchTerm, setSearchTerm] = useState('')
+  const [results, setResults] = useState<Record<string, ModelTestResult>>({})
+  const [testingModels, setTestingModels] = useState<Set<string>>(new Set())
+  const [isBatchTesting, setIsBatchTesting] = useState(false)
+
+  const resetState = useCallback(() => {
+    setSelectedKeyId('')
+    setProtocol('')
+    setUseStream(false)
+    setSearchTerm('')
+    setResults({})
+    setTestingModels(new Set())
+    setIsBatchTesting(false)
+  }, [])
 
   if (!channel) return null
 
   const models = channel.models || []
-  const endpointTypes = new Set(channel.endpoints.map(e => e.type))
-  const availableProtocols = TEST_PROTOCOLS.filter(p => endpointTypes.has(p.value))
-  const currentProtocol = testProtocol || availableProtocols[0]?.value || ''
-  const currentModel = selectedModel || models[0] || ''
+  const enabledKeys = channel.api_keys.filter((k) => k.enabled !== false)
+  const endpointTypes = new Set(
+    channel.endpoints.filter((e) => e.enabled !== false).map((e) => e.type)
+  )
+  const availableProtocols = Object.entries(ENDPOINT_LABELS)
+    .filter(([key]) => endpointTypes.has(key as EndpointType))
+    .map(([key, label]) => ({ value: key as EndpointType, label }))
 
-  const scrollToBottom = () => {
-    requestAnimationFrame(() => {
-      if (terminalRef.current) {
-        terminalRef.current.scrollTop = terminalRef.current.scrollHeight
-      }
+  const currentKeyId = selectedKeyId || enabledKeys[0]?.id || ''
+  const currentProtocol = protocol || availableProtocols[0]?.value || ''
+
+  const filteredModels = useMemo(() => {
+    if (!searchTerm) return models
+    const kw = searchTerm.toLowerCase()
+    return models.filter((m) => m.toLowerCase().includes(kw))
+  }, [models, searchTerm])
+
+  const updateResult = (model: string, result: ModelTestResult) => {
+    setResults((prev) => ({ ...prev, [model]: result }))
+  }
+
+  const markTesting = (model: string, testing: boolean) => {
+    setTestingModels((prev) => {
+      const next = new Set(prev)
+      if (testing) next.add(model)
+      else next.delete(model)
+      return next
     })
   }
 
-  const addLogs = (lines: LogLine[]) => {
-    setLogs(prev => [...prev, ...lines])
-    scrollToBottom()
-  }
+  const testSingle = async (model: string): Promise<ModelTestResult | undefined> => {
+    if (!currentKeyId || !currentProtocol) return undefined
 
-  const protocolLabel = availableProtocols.find(p => p.value === currentProtocol)?.label || currentProtocol
+    markTesting(model, true)
+    updateResult(model, { status: 'testing' })
 
-  const runTest = async () => {
-    if (!currentModel || !currentProtocol) return
-
-    setStatus('testing')
-    setResult(null)
-    setLogs([])
-
-    addLogs([
-      { text: `▸ 测试 ${protocolLabel} 协议...`, type: 'pending' },
-    ])
-
-    await new Promise(r => setTimeout(r, 200))
-
-    addLogs([
-      { text: '✓ 渠道连接成功', type: 'success' },
-      { text: `→ 协议: ${protocolLabel}`, type: 'info' },
-      { text: `→ 模型: ${currentModel}`, type: 'info' },
-      { text: '', type: 'muted' },
-    ])
-
-    scrollToBottom()
-
+    let finalResult: ModelTestResult | undefined
     try {
-      const res = await channelsApi.testModel({
-        channel_id: channel.id,
-        model: currentModel,
+      const res: TestChannelResponse = await channelsApi.testChannel(channel.id, {
+        model,
         test_protocol: currentProtocol,
-        user_agent: userAgent || undefined,
+        api_key_id: currentKeyId,
+        stream: useStream || undefined,
       })
-      setResult(res)
-
-      if (res.success) {
-        addLogs([
-          { text: '── 输入 ──', type: 'muted' },
-          { text: res.input_prompt, type: 'prompt' },
-          { text: '', type: 'muted' },
-          { text: '── 输出 ──', type: 'muted' },
-          { text: res.output_content || '(无内容)', type: 'output' },
-          { text: '', type: 'muted' },
-          { text: `✓ 测试成功  耗时: ${res.latency_ms}ms`, type: 'success' },
-        ])
-        setStatus('success')
-      } else {
-        addLogs([
-          { text: `✗ 测试失败: ${res.message}`, type: 'error' },
-        ])
-        setStatus('error')
+      finalResult = {
+        status: res.success ? 'success' : 'error',
+        latency_ms: res.latency_ms,
+        time_to_first_token_ms: res.time_to_first_token_ms,
+        error: res.success ? undefined : res.message,
       }
-    } catch (error: unknown) {
-      const msg = error instanceof Error ? error.message : '未知错误'
-      setResult({ success: false, message: msg, latency_ms: 0, input_prompt: '', output_content: null })
-      addLogs([
-        { text: `✗ 请求失败: ${msg}`, type: 'error' },
-      ])
-      setStatus('error')
+    } catch (e: unknown) {
+      finalResult = {
+        status: 'error',
+        error: e instanceof Error ? e.message : '请求失败',
+      }
     }
+
+    updateResult(model, finalResult)
+    markTesting(model, false)
+    return finalResult
   }
 
-  const reset = () => {
-    setLogs([])
-    setResult(null)
-    setStatus('idle')
+  const handleBatchTest = async () => {
+    const targets = filteredModels.length > 0 ? filteredModels : models
+    if (targets.length === 0) return
+
+    setIsBatchTesting(true)
+    await Promise.allSettled(targets.map((m) => testSingle(m)))
+    setIsBatchTesting(false)
   }
+
+  const handleOpenChange = (v: boolean) => {
+    if (!v) resetState()
+    onOpenChange(v)
+  }
+
+  const isAnyTesting = testingModels.size > 0 || isBatchTesting
+  const successCount = Object.values(results).filter((r) => r.status === 'success').length
+  const failCount = Object.values(results).filter((r) => r.status === 'error').length
 
   return (
-    <Dialog open={open} onOpenChange={(v) => { if (!v) { reset(); onOpenChange(false) } }}>
-      <DialogContent className="sm:max-w-lg">
+    <Dialog open={open} onOpenChange={handleOpenChange}>
+      <DialogContent className="sm:max-w-3xl max-h-[90vh] overflow-hidden flex flex-col">
         <DialogHeader>
-          <DialogTitle>模型测试</DialogTitle>
+          <DialogTitle>渠道测试</DialogTitle>
+          <DialogDescription>
+            测试 <strong>{channel.name}</strong> 的模型连通性
+          </DialogDescription>
         </DialogHeader>
 
-        <div className="space-y-4">
-          {/* 渠道信息 */}
-          <div className="flex items-center justify-between rounded-xl bg-gradient-to-r from-primary/10 to-primary/5 border border-primary/10 px-4 py-3">
-            <div className="flex items-center gap-3">
-              <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-to-br from-primary to-primary/70 text-primary-foreground text-xs font-bold">
-                {channel.name.charAt(0)}
-              </div>
-              <span className="font-medium text-sm">{channel.name}</span>
+        <div className="flex-1 overflow-y-auto space-y-4 pr-1">
+          {/* 配置区 */}
+          <div className="grid gap-4 sm:grid-cols-3">
+            {/* Key 选择 */}
+            <div className="space-y-1.5">
+              <label className="text-sm font-medium">API Key</label>
+              <select
+                value={currentKeyId}
+                onChange={(e) => setSelectedKeyId(e.target.value)}
+                className="input"
+              >
+                {enabledKeys.map((k) => (
+                  <option key={k.id} value={k.id}>
+                    {k.note || '未命名'} {maskKey(k.key)}
+                  </option>
+                ))}
+              </select>
             </div>
-            <span className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${
-              channel.enabled
-                ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400'
-                : 'bg-gray-100 text-gray-500 dark:bg-gray-800 dark:text-gray-400'
-            }`}>
-              {channel.enabled ? '启用' : '禁用'}
-            </span>
-          </div>
 
-          {/* 测试协议选择 */}
-          <div>
-            <label className="block text-sm font-medium mb-1.5">测试协议</label>
-            <select
-              value={currentProtocol}
-              onChange={(e) => { setTestProtocol(e.target.value); reset() }}
-              className="input"
-            >
-              {availableProtocols.map((p) => (
-                <option key={p.value} value={p.value}>{p.label}</option>
-              ))}
-            </select>
-            <p className="text-xs text-muted-foreground mt-1">
-              直接向渠道上游发送请求，测试模型连通性
-            </p>
-          </div>
+            {/* 协议选择 */}
+            <div className="space-y-1.5">
+              <label className="text-sm font-medium">端点协议</label>
+              <select
+                value={currentProtocol}
+                onChange={(e) => setProtocol(e.target.value)}
+                className="input"
+              >
+                {availableProtocols.map((p) => (
+                  <option key={p.value} value={p.value}>
+                    {p.label}
+                  </option>
+                ))}
+              </select>
+            </div>
 
-          {/* 模型选择 */}
-          <div>
-            <label className="block text-sm font-medium mb-1.5">选择模型</label>
-            <select
-              value={currentModel}
-              onChange={(e) => { setSelectedModel(e.target.value); reset() }}
-              className="input"
-            >
-              <option value="">选择模型</option>
-              {models.map((model) => (
-                <option key={model} value={model}>{model}</option>
-              ))}
-            </select>
-          </div>
-
-          {/* User-Agent 选择 */}
-          <div>
-            <label className="block text-sm font-medium mb-1.5">User-Agent</label>
-            <select
-              value={userAgent}
-              onChange={(e) => setUserAgent(e.target.value)}
-              className="input"
-            >
-              {USER_AGENTS.map((ua) => (
-                <option key={ua.value} value={ua.value}>{ua.label}</option>
-              ))}
-            </select>
-          </div>
-
-          {/* 终端输出 */}
-          <div ref={terminalRef} className="rounded-xl border border-gray-700 bg-gray-900 dark:bg-black p-4 font-mono text-xs space-y-0.5 min-h-[180px] max-h-[300px] overflow-y-auto">
-            {status === 'idle' && logs.length === 0 && (
-              <div className="flex items-center gap-2 text-gray-500 h-full items-center justify-center">
-                <Play className="h-3.5 w-3.5" />
-                <span>选择协议和模型后，点击下方按钮开始测试</span>
+            {/* 流式开关 */}
+            <div className="space-y-1.5">
+              <label className="text-sm font-medium">流式测试</label>
+              <div className="flex items-center gap-2 h-[38px]">
+                <input
+                  type="checkbox"
+                  checked={useStream}
+                  onChange={(e) => setUseStream(e.target.checked)}
+                  className="rounded"
+                />
+                <span className="text-sm text-muted-foreground">
+                  {useStream ? '开启' : '关闭'}
+                </span>
               </div>
-            )}
-            {logs.map((log, i) => (
-              <div key={i} className={
-                log.type === 'success' ? 'text-green-400' :
-                log.type === 'error' ? 'text-red-400' :
-                log.type === 'pending' ? 'text-yellow-400 animate-pulse' :
-                log.type === 'prompt' ? 'text-blue-300 whitespace-pre-wrap' :
-                log.type === 'output' ? 'text-green-300 whitespace-pre-wrap' :
-                log.type === 'info' ? 'text-cyan-400' :
-                'text-gray-500'
-              }>
-                {log.text}
+            </div>
+          </div>
+
+          {/* 搜索 + 批量操作 */}
+          <div className="flex items-center justify-between gap-3">
+            <div className="flex-1 flex items-center gap-2">
+              <span className="text-sm font-medium">
+                模型 ({models.length})
+                {successCount > 0 && (
+                  <span className="text-green-600 ml-2">✓ {successCount}</span>
+                )}
+                {failCount > 0 && (
+                  <span className="text-red-500 ml-1">✗ {failCount}</span>
+                )}
+              </span>
+            </div>
+            <div className="flex items-center gap-2">
+              <div className="relative">
+                <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
+                <input
+                  type="text"
+                  value={searchTerm}
+                  onChange={(e) => setSearchTerm(e.target.value)}
+                  placeholder="过滤模型..."
+                  className="input pl-8 w-44 text-sm"
+                />
               </div>
-            ))}
-            {status === 'testing' && (
-              <div className="text-yellow-400 animate-pulse">▌</div>
-            )}
+              <Button
+                size="sm"
+                onClick={handleBatchTest}
+                disabled={isAnyTesting || !currentKeyId || !currentProtocol || filteredModels.length === 0}
+              >
+                {isBatchTesting ? (
+                  <>
+                    <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+                    测试中...
+                  </>
+                ) : (
+                  <>
+                    <Play className="mr-1.5 h-3.5 w-3.5" />
+                    测试全部 ({filteredModels.length})
+                  </>
+                )}
+              </Button>
+            </div>
           </div>
 
-          {/* 底部信息 */}
-          <div className="flex items-center justify-between text-xs text-muted-foreground px-1">
-            <span>请求直接发送到渠道上游</span>
-            {result && <span>耗时: {result.latency_ms}ms</span>}
-          </div>
-
-          {/* 操作按钮 */}
-          <div className="flex justify-end gap-2">
-            <Button variant="outline" onClick={() => { reset(); onOpenChange(false) }}>
-              关闭
-            </Button>
-            {result ? (
-              <Button onClick={runTest} disabled={status === 'testing' || !currentModel || !currentProtocol}
-                className={status === 'success' ? 'bg-green-600 hover:bg-green-700 text-white' : status === 'error' ? 'bg-orange-500 hover:bg-orange-600 text-white' : 'btn-primary'}>
-                <RotateCw className="mr-2 h-4 w-4" />
-                重新测试
-              </Button>
-            ) : (
-              <Button onClick={runTest} disabled={status === 'testing' || !currentModel || !currentProtocol} className="btn-primary">
-                <Play className="mr-2 h-4 w-4" />
-                {status === 'testing' ? '测试中...' : '开始测试'}
-              </Button>
-            )}
+          {/* 模型列表 */}
+          <div className="rounded-xl border overflow-hidden">
+            <div className="max-h-[400px] overflow-y-auto">
+              <table className="w-full text-sm">
+                <thead className="sticky top-0 bg-muted/80 backdrop-blur-sm">
+                  <tr className="border-b">
+                    <th className="text-left px-3 py-2 font-medium">模型</th>
+                    <th className="text-left px-3 py-2 font-medium w-60">状态</th>
+                    <th className="text-right px-3 py-2 font-medium w-20">操作</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {filteredModels.map((model) => {
+                    const r = results[model]
+                    const isTesting = testingModels.has(model)
+                    return (
+                      <tr key={model} className="border-b last:border-0 hover:bg-muted/30">
+                        <td className="px-3 py-2 font-mono text-xs">{model}</td>
+                        <td className="px-3 py-2">
+                          {!r || r.status === 'idle' ? (
+                            <span className="text-muted-foreground text-xs">未测试</span>
+                          ) : r.status === 'testing' ? (
+                            <div className="flex items-center gap-1.5 text-muted-foreground text-xs">
+                              <Loader2 className="h-3 w-3 animate-spin" />
+                              测试中...
+                            </div>
+                          ) : r.status === 'success' ? (
+                            <div className="flex items-center gap-2 text-xs">
+                              <StatusBadge enabled />
+                              <span className="text-muted-foreground">
+                                {r.latency_ms}ms
+                                {r.time_to_first_token_ms != null && (
+                                  <span className="ml-1">TTFT {r.time_to_first_token_ms}ms</span>
+                                )}
+                              </span>
+                            </div>
+                          ) : (
+                            <div className="flex items-center gap-1 text-xs">
+                              <StatusBadge enabled={false} />
+                              <span className="text-red-500 truncate max-w-[180px]" title={r.error}>
+                                {r.error || '测试失败'}
+                              </span>
+                            </div>
+                          )}
+                        </td>
+                        <td className="px-3 py-2 text-right">
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="h-7 text-xs"
+                            onClick={() => testSingle(model)}
+                            disabled={isTesting || isBatchTesting || !currentKeyId || !currentProtocol}
+                          >
+                            {isTesting ? (
+                              <Loader2 className="h-3 w-3 animate-spin" />
+                            ) : (
+                              '测试'
+                            )}
+                          </Button>
+                        </td>
+                      </tr>
+                    )
+                  })}
+                  {filteredModels.length === 0 && (
+                    <tr>
+                      <td colSpan={3} className="text-center py-8 text-muted-foreground text-xs">
+                        {models.length === 0 ? '该渠道没有配置模型' : '没有匹配的模型'}
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
           </div>
         </div>
       </DialogContent>

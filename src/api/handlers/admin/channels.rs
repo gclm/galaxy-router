@@ -4,6 +4,7 @@ use axum::{
     http::StatusCode,
 };
 
+use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
 
@@ -99,6 +100,8 @@ pub struct EndpointConfig {
 /// 上游 API Key
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct UpstreamApiKey {
+    #[serde(default)]
+    pub id: String,
     pub key: String,
     #[serde(default)]
     pub note: String,
@@ -173,6 +176,7 @@ pub struct UpdateChannelRequest {
 pub struct ChannelState {
     pub pool: SqlitePool,
     pub cache: crate::proxy::ProxyCache,
+    pub http_client: Client,
 }
 
 /// 获取渠道列表（支持搜索、筛选、排序、分页）
@@ -274,8 +278,12 @@ pub async fn create(
         return Err(ApiError::bad_request("至少需要一个端点"));
     }
 
+    // 为缺少 id 的 key 补 UUID
+    let mut api_keys = req.api_keys;
+    ensure_key_ids(&mut api_keys);
+
     let id = generate_id();
-    let api_keys_json = serde_json::to_string(&req.api_keys)
+    let api_keys_json = serde_json::to_string(&api_keys)
         .map_err(|e| ApiError::internal_error(e.to_string()))?;
     let endpoints_json = serde_json::to_string(&req.endpoints)
         .map_err(|e| ApiError::internal_error(e.to_string()))?;
@@ -332,7 +340,7 @@ pub async fn get(
 pub async fn update(
     State(state): State<ChannelState>,
     Path(id): Path<String>,
-    Json(req): Json<UpdateChannelRequest>,
+    Json(mut req): Json<UpdateChannelRequest>,
 ) -> Result<Json<ApiResponse<Channel>>, (StatusCode, Json<ApiError>)> {
     // 检查渠道是否存在
     let existing = sqlx::query_scalar::<_, String>("SELECT id FROM channels WHERE id = ?")
@@ -355,7 +363,8 @@ pub async fn update(
         separated.push_bind_unseparated(name);
         has_update = true;
     }
-    if let Some(ref api_keys) = req.api_keys {
+    if let Some(ref mut api_keys) = req.api_keys {
+        ensure_key_ids(api_keys);
         separated.push("api_keys = ");
         separated.push_bind_unseparated(serde_json::to_string(api_keys).unwrap_or_default());
         has_update = true;
@@ -446,7 +455,7 @@ pub async fn delete(
     Ok(Json(crate::api::response::success_empty()))
 }
 
-/// 根据 ID 获取渠道
+/// 根据 ID 获取渠道（自动迁移缺失的 key id）
 async fn get_channel_by_id(
     pool: &SqlitePool,
     id: &str,
@@ -460,10 +469,22 @@ async fn get_channel_by_id(
     .map_err(|e| ApiError::internal_error(e.to_string()))?;
 
     let row = result.ok_or_else(|| ApiError::not_found("渠道不存在"))?;
-    Ok(row_to_channel(row))
+    let mut channel = row_to_channel(row);
+
+    // 迁移：为缺少 id 的 key 补 UUID 并回写
+    if ensure_key_ids(&mut channel.api_keys) {
+        let _ = sqlx::query("UPDATE channels SET api_keys = ? WHERE id = ?")
+            .bind(serde_json::to_string(&channel.api_keys).unwrap_or_default())
+            .bind(&channel.id)
+            .execute(pool)
+            .await;
+    }
+
+    Ok(channel)
 }
 
 /// 兼容旧格式：api_keys 可能是 ["sk-xxx"] 或 [{"key":"sk-xxx","note":"","enabled":true}]
+/// 自动为缺少 id 的 key 补 UUID
 pub fn parse_api_keys(json_str: &str) -> Vec<UpstreamApiKey> {
     let value: serde_json::Value = serde_json::from_str(json_str).unwrap_or_default();
     let Some(arr) = value.as_array() else {
@@ -473,15 +494,32 @@ pub fn parse_api_keys(json_str: &str) -> Vec<UpstreamApiKey> {
         .filter_map(|v| {
             if let Some(s) = v.as_str() {
                 Some(UpstreamApiKey {
+                    id: generate_id(),
                     key: s.to_string(),
                     note: String::new(),
                     enabled: true,
                 })
             } else {
-                serde_json::from_value(v.clone()).ok()
+                let mut k: UpstreamApiKey = serde_json::from_value(v.clone()).ok()?;
+                if k.id.is_empty() {
+                    k.id = generate_id();
+                }
+                Some(k)
             }
         })
         .collect()
+}
+
+/// 为 api_keys 中缺少 id 的 key 补 UUID，返回是否需要回写
+pub fn ensure_key_ids(keys: &mut [UpstreamApiKey]) -> bool {
+    let mut changed = false;
+    for k in keys.iter_mut() {
+        if k.id.is_empty() {
+            k.id = generate_id();
+            changed = true;
+        }
+    }
+    changed
 }
 
 fn row_to_channel(row: ChannelRow) -> Channel {
@@ -521,5 +559,382 @@ fn row_to_channel_from_row(row: &sqlx::sqlite::SqliteRow) -> Channel {
         enabled: row.get("enabled"),
         created_at: row.get("created_at"),
         updated_at: row.get("updated_at"),
+    }
+}
+
+// ==================== 渠道测试 ====================
+
+const TEST_PROMPT: &str = "Hello! Please respond with a brief greeting in one sentence.";
+
+/// 测试渠道请求
+#[derive(Debug, Deserialize)]
+pub struct TestChannelRequest {
+    pub model: String,
+    pub test_protocol: String,
+    pub api_key_id: String,
+    pub stream: Option<bool>,
+}
+
+/// 测试渠道响应
+#[derive(Debug, Serialize)]
+pub struct TestChannelResponse {
+    pub success: bool,
+    pub message: String,
+    pub latency_ms: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub time_to_first_token_ms: Option<u64>,
+    pub input_prompt: String,
+    pub output_content: Option<String>,
+}
+
+/// 构建测试请求体和上游路径
+fn build_test_payload(protocol: &EndpointType, model: &str) -> Option<(serde_json::Value, &'static str)> {
+    match protocol {
+        EndpointType::OpenAiChat => Some((
+            serde_json::json!({
+                "model": model,
+                "messages": [{"role": "user", "content": TEST_PROMPT}],
+                "max_tokens": 100,
+                "stream": false
+            }),
+            "/chat/completions",
+        )),
+        EndpointType::OpenAiResponse => Some((
+            serde_json::json!({
+                "model": model,
+                "input": TEST_PROMPT,
+                "max_output_tokens": 100
+            }),
+            "/responses",
+        )),
+        EndpointType::Anthropic => Some((
+            serde_json::json!({
+                "model": model,
+                "messages": [{"role": "user", "content": TEST_PROMPT}],
+                "max_tokens": 100
+            }),
+            "/messages",
+        )),
+        EndpointType::OpenAiEmbedding => Some((
+            serde_json::json!({
+                "model": model,
+                "input": TEST_PROMPT
+            }),
+            "/embeddings",
+        )),
+        EndpointType::OpenAiImages => Some((
+            serde_json::json!({
+                "model": model,
+                "prompt": TEST_PROMPT,
+                "n": 1,
+                "size": "256x256"
+            }),
+            "/images/generations",
+        )),
+        _ => None,
+    }
+}
+
+/// 构建流式测试请求体
+fn build_streaming_test_payload(protocol: &EndpointType, model: &str) -> Option<(serde_json::Value, &'static str)> {
+    match protocol {
+        EndpointType::OpenAiChat => Some((
+            serde_json::json!({
+                "model": model,
+                "messages": [{"role": "user", "content": TEST_PROMPT}],
+                "max_tokens": 100,
+                "stream": true
+            }),
+            "/chat/completions",
+        )),
+        EndpointType::Anthropic => Some((
+            serde_json::json!({
+                "model": model,
+                "messages": [{"role": "user", "content": TEST_PROMPT}],
+                "max_tokens": 100,
+                "stream": true
+            }),
+            "/messages",
+        )),
+        EndpointType::OpenAiResponse => Some((
+            serde_json::json!({
+                "model": model,
+                "input": TEST_PROMPT,
+                "max_output_tokens": 100,
+                "stream": true
+            }),
+            "/responses",
+        )),
+        _ => None,
+    }
+}
+
+/// 从响应中提取内容文本
+fn extract_test_content(resp_body: &serde_json::Value, endpoint_type: &EndpointType) -> String {
+    match endpoint_type {
+        EndpointType::OpenAiChat => resp_body["choices"][0]["message"]["content"]
+            .as_str()
+            .unwrap_or("(无内容)")
+            .to_string(),
+        EndpointType::OpenAiResponse => resp_body["output"][0]["content"][0]["text"]
+            .as_str()
+            .unwrap_or("(无内容)")
+            .to_string(),
+        EndpointType::Anthropic => resp_body["content"][0]["text"]
+            .as_str()
+            .unwrap_or("(无内容)")
+            .to_string(),
+        EndpointType::OpenAiEmbedding => {
+            let len = resp_body["data"].as_array().map(|a| a.len()).unwrap_or(0);
+            format!("Embedding 返回 {} 条向量数据", len)
+        }
+        EndpointType::OpenAiImages => {
+            let count = resp_body["data"].as_array().map(|a| a.len()).unwrap_or(0);
+            format!("图片生成成功，共 {} 张", count)
+        }
+        _ => "(未知协议)".to_string(),
+    }
+}
+
+/// 解析协议字符串为 EndpointType
+fn parse_protocol(protocol: &str) -> Option<EndpointType> {
+    serde_json::from_value::<EndpointType>(serde_json::Value::String(protocol.to_string())).ok()
+}
+
+/// 注入自定义请求头
+fn inject_custom_headers(
+    req_builder: reqwest::RequestBuilder,
+    headers: &[CustomHeader],
+) -> reqwest::RequestBuilder {
+    let mut builder = req_builder;
+    for header in headers {
+        if let Ok(name) = reqwest::header::HeaderName::from_bytes(header.key.as_bytes())
+            && let Ok(value) = header.value.parse::<reqwest::header::HeaderValue>()
+        {
+            builder = builder.header(name, value);
+        }
+    }
+    builder
+}
+
+/// 流式测试：发 SSE 请求，消费完整流，返回首 token 时间和完整内容
+async fn send_streaming_test(
+    client: &Client,
+    url: &str,
+    body: &serde_json::Value,
+    endpoint_type: &EndpointType,
+    api_key: &str,
+    custom_headers: &[CustomHeader],
+) -> (Result<String, String>, u64, Option<u64>) {
+    let mut req_builder = client
+        .post(url)
+        .header("Content-Type", "application/json")
+        .timeout(std::time::Duration::from_secs(60));
+
+    match endpoint_type {
+        EndpointType::Anthropic => {
+            req_builder = req_builder
+                .header("x-api-key", api_key)
+                .header("anthropic-version", "2023-06-01");
+        }
+        _ => {
+            req_builder = req_builder.header("Authorization", format!("Bearer {}", api_key));
+        }
+    }
+    req_builder = inject_custom_headers(req_builder, custom_headers);
+
+    let start = std::time::Instant::now();
+    let resp = match req_builder.json(body).send().await {
+        Ok(r) => r,
+        Err(e) => return (Err(format!("请求上游失败: {}", e)), start.elapsed().as_millis() as u64, None),
+    };
+
+    let status = resp.status();
+    if !status.is_success() {
+        let text = resp.text().await.unwrap_or_default();
+        return (Err(format!("上游返回 HTTP {}: {}", status, text)), start.elapsed().as_millis() as u64, None);
+    }
+
+    let bytes = match resp.bytes().await {
+        Ok(b) => b,
+        Err(e) => return (Err(format!("读取响应失败: {}", e)), start.elapsed().as_millis() as u64, None),
+    };
+
+    let text = String::from_utf8_lossy(&bytes);
+    let mut first_token_ms: Option<u64> = None;
+    let mut full_content = String::new();
+
+    for line in text.lines() {
+        if let Some(data) = line.strip_prefix("data: ") {
+            let data = data.trim();
+            if data == "[DONE]" {
+                continue;
+            }
+            if first_token_ms.is_none() {
+                first_token_ms = Some(start.elapsed().as_millis() as u64);
+            }
+            if let Ok(json) = serde_json::from_str::<serde_json::Value>(data) {
+                let delta = match endpoint_type {
+                    EndpointType::OpenAiChat => json["choices"][0]["delta"]["content"].as_str(),
+                    EndpointType::Anthropic => json["delta"]["text"].as_str(),
+                    _ => json["delta"].as_str().or_else(|| json["choices"][0]["delta"]["content"].as_str()),
+                };
+                if let Some(d) = delta {
+                    full_content.push_str(d);
+                }
+            }
+        }
+    }
+
+    let total_ms = start.elapsed().as_millis() as u64;
+    if full_content.is_empty() {
+        (Err("流式响应无内容".to_string()), total_ms, first_token_ms)
+    } else {
+        (Ok(full_content), total_ms, first_token_ms)
+    }
+}
+
+/// 测试渠道 — 直接发送到渠道上游，验证指定 key 能否访问指定模型
+pub async fn test_channel(
+    State(state): State<ChannelState>,
+    Path(id): Path<String>,
+    Json(req): Json<TestChannelRequest>,
+) -> Result<Json<ApiResponse<TestChannelResponse>>, (StatusCode, Json<ApiError>)> {
+    let endpoint_type = parse_protocol(&req.test_protocol)
+        .ok_or_else(|| ApiError::bad_request(format!("不支持的测试协议: {}", req.test_protocol)))?;
+
+    let use_stream = req.stream.unwrap_or(false);
+
+    // 流式模式下选择流式请求体
+    let (body, upstream_path) = if use_stream {
+        build_streaming_test_payload(&endpoint_type, &req.model)
+    } else {
+        build_test_payload(&endpoint_type, &req.model)
+    }
+    .ok_or_else(|| ApiError::bad_request(format!("协议 {} 不支持{}测试", req.test_protocol, if use_stream { "流式" } else { "" })))?;
+
+    // 查渠道
+    let channel = get_channel_by_id(&state.pool, &id).await?;
+
+    // 按 api_key_id 查找 key
+    let api_key = channel
+        .api_keys
+        .iter()
+        .find(|k| k.id == req.api_key_id && k.enabled)
+        .ok_or_else(|| ApiError::bad_request("指定的 API Key 不存在或已禁用"))?;
+
+    // 按 test_protocol 查找 endpoint
+    let endpoint = channel
+        .endpoints
+        .iter()
+        .find(|e| e.endpoint_type == endpoint_type && e.enabled)
+        .ok_or_else(|| ApiError::bad_request(format!("渠道没有启用 {} 端点", req.test_protocol)))?;
+
+    let url = format!(
+        "{}{}",
+        endpoint.base_url.trim_end_matches('/'),
+        upstream_path
+    );
+
+    if use_stream {
+        let (result, latency_ms, ttft) = send_streaming_test(
+            &state.http_client, &url, &body, &endpoint_type, &api_key.key, &channel.custom_headers,
+        ).await;
+
+        match result {
+            Ok(content) => Ok(Json(ApiResponse::success(TestChannelResponse {
+                success: true,
+                message: "模型测试成功（流式）".to_string(),
+                latency_ms,
+                time_to_first_token_ms: ttft,
+                input_prompt: TEST_PROMPT.to_string(),
+                output_content: Some(content),
+            }))),
+            Err(msg) => Ok(Json(ApiResponse::success(TestChannelResponse {
+                success: false,
+                message: msg,
+                latency_ms,
+                time_to_first_token_ms: ttft,
+                input_prompt: TEST_PROMPT.to_string(),
+                output_content: None,
+            }))),
+        }
+    } else {
+        let start = std::time::Instant::now();
+
+        let mut req_builder = state
+            .http_client
+            .post(&url)
+            .header("Content-Type", "application/json")
+            .timeout(std::time::Duration::from_secs(30));
+
+        match endpoint_type {
+            EndpointType::Anthropic => {
+                req_builder = req_builder
+                    .header("x-api-key", api_key.key.as_str())
+                    .header("anthropic-version", "2023-06-01");
+            }
+            _ => {
+                req_builder =
+                    req_builder.header("Authorization", format!("Bearer {}", api_key.key));
+            }
+        }
+
+        req_builder = inject_custom_headers(req_builder, &channel.custom_headers);
+
+        let resp = req_builder.json(&body).send().await;
+        let latency_ms = start.elapsed().as_millis() as u64;
+
+        match resp {
+            Ok(resp) => {
+                let status = resp.status();
+                let resp_text = resp.text().await.unwrap_or_default();
+
+                if !status.is_success() {
+                    return Ok(Json(ApiResponse::success(TestChannelResponse {
+                        success: false,
+                        message: format!("上游返回 HTTP {}: {}", status, resp_text),
+                        latency_ms,
+                        time_to_first_token_ms: None,
+                        input_prompt: TEST_PROMPT.to_string(),
+                        output_content: None,
+                    })));
+                }
+
+                let resp_body: serde_json::Value =
+                    serde_json::from_str(&resp_text).unwrap_or_default();
+                if resp_body.get("error").is_some() {
+                    let error_msg = resp_body["error"]["message"]
+                        .as_str()
+                        .unwrap_or("未知错误");
+                    return Ok(Json(ApiResponse::success(TestChannelResponse {
+                        success: false,
+                        message: format!("模型返回错误: {}", error_msg),
+                        latency_ms,
+                        time_to_first_token_ms: None,
+                        input_prompt: TEST_PROMPT.to_string(),
+                        output_content: None,
+                    })));
+                }
+
+                let content = extract_test_content(&resp_body, &endpoint_type);
+                Ok(Json(ApiResponse::success(TestChannelResponse {
+                    success: true,
+                    message: "模型测试成功".to_string(),
+                    latency_ms,
+                    time_to_first_token_ms: None,
+                    input_prompt: TEST_PROMPT.to_string(),
+                    output_content: Some(content),
+                })))
+            }
+            Err(e) => Ok(Json(ApiResponse::success(TestChannelResponse {
+                success: false,
+                message: format!("请求上游失败: {}", e),
+                latency_ms,
+                time_to_first_token_ms: None,
+                input_prompt: TEST_PROMPT.to_string(),
+                output_content: None,
+            }))),
+        }
     }
 }

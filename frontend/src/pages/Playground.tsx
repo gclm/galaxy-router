@@ -24,6 +24,32 @@ const PROXY_PATHS: Record<string, string> = {
 }
 
 const STREAMABLE_PROTOCOLS = new Set(['openai_chat', 'openai_response', 'anthropic'])
+const PARAMS_SUPPORTED = new Set(['openai_chat', 'openai_response', 'anthropic'])
+
+const STORAGE_KEY = 'playground-config'
+
+interface PlaygroundConfig {
+  selectedApiKeyId: string
+  protocol: EndpointType
+  selectedModel: string
+  temperature: string
+  maxTokens: string
+  stream: boolean
+}
+
+function loadConfig(): Partial<PlaygroundConfig> {
+  try {
+    return JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}')
+  } catch {
+    return {}
+  }
+}
+
+function saveConfig(config: PlaygroundConfig) {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(config))
+  } catch { /* ignore */ }
+}
 
 function buildRequestConfig(
   protocol: string,
@@ -31,6 +57,8 @@ function buildRequestConfig(
   model: string,
   prompt: string,
   stream: boolean,
+  temperature?: number,
+  maxTokens?: number,
 ): { path: string; headers: Record<string, string>; body: Record<string, unknown> } {
   const defaultPrompt = prompt || 'Hello! Please introduce yourself briefly.'
 
@@ -42,7 +70,13 @@ function buildRequestConfig(
           'Content-Type': 'application/json',
           Authorization: `Bearer ${apiKey}`,
         },
-        body: { model, stream, messages: [{ role: 'user', content: defaultPrompt }] },
+        body: {
+          model,
+          stream,
+          messages: [{ role: 'user', content: defaultPrompt }],
+          ...(temperature != null && { temperature }),
+          ...(maxTokens != null && { max_tokens: maxTokens }),
+        },
       }
     case 'openai_response':
       return {
@@ -51,7 +85,12 @@ function buildRequestConfig(
           'Content-Type': 'application/json',
           Authorization: `Bearer ${apiKey}`,
         },
-        body: { model, stream, input: defaultPrompt },
+        body: {
+          model,
+          stream,
+          input: defaultPrompt,
+          ...(maxTokens != null && { max_output_tokens: maxTokens }),
+        },
       }
     case 'anthropic':
       return {
@@ -64,8 +103,9 @@ function buildRequestConfig(
         body: {
           model,
           stream,
-          max_tokens: 1024,
+          max_tokens: maxTokens ?? 1024,
           messages: [{ role: 'user', content: defaultPrompt }],
+          ...(temperature != null && { temperature }),
         },
       }
     case 'openai_embedding':
@@ -100,16 +140,20 @@ function extractErrorMessage(body: Record<string, unknown>, protocol: string): s
   return (error?.message as string) ?? 'Unknown error'
 }
 
-type TabType = 'rendered' | 'raw'
+type TabType = 'rendered' | 'request' | 'raw'
 
 export function Playground() {
+  const saved = useRef(loadConfig())
+
   const [apiKeys, setApiKeys] = useState<ApiKey[]>([])
-  const [selectedApiKeyId, setSelectedApiKeyId] = useState<string>('')
+  const [selectedApiKeyId, setSelectedApiKeyId] = useState(saved.current.selectedApiKeyId || '')
   const [models, setModels] = useState<string[]>([])
-  const [selectedModel, setSelectedModel] = useState<string>('')
-  const [protocol, setProtocol] = useState<EndpointType>('openai_chat')
+  const [selectedModel, setSelectedModel] = useState(saved.current.selectedModel || '')
+  const [protocol, setProtocol] = useState<EndpointType>(saved.current.protocol || 'openai_chat')
   const [prompt, setPrompt] = useState('')
-  const [stream, setStream] = useState(true)
+  const [stream, setStream] = useState(saved.current.stream ?? true)
+  const [temperature, setTemperature] = useState(saved.current.temperature || '')
+  const [maxTokens, setMaxTokens] = useState(saved.current.maxTokens || '')
   const [tab, setTab] = useState<TabType>('rendered')
 
   const [loading, setLoading] = useState(false)
@@ -122,10 +166,29 @@ export function Playground() {
 
   const abortRef = useRef<AbortController | null>(null)
   const startTimeRef = useRef(0)
+  const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const selectedApiKey = apiKeys.find((k) => k.id === selectedApiKeyId)
+  const canStream = STREAMABLE_PROTOCOLS.has(protocol)
+  const showParams = PARAMS_SUPPORTED.has(protocol)
 
-  // 获取 API Key 列表（仅初始化）
+  // 持久化配置（debounced）
+  useEffect(() => {
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
+    saveTimerRef.current = setTimeout(() => {
+      saveConfig({
+        selectedApiKeyId,
+        protocol,
+        selectedModel,
+        temperature,
+        maxTokens,
+        stream,
+      })
+    }, 300)
+    return () => { if (saveTimerRef.current) clearTimeout(saveTimerRef.current) }
+  }, [selectedApiKeyId, protocol, selectedModel, temperature, maxTokens, stream])
+
+  // 获取 API Key 列表
   useEffect(() => {
     apiKeysApi.list().then((keys) => {
       setApiKeys(keys.filter((k) => k.enabled))
@@ -159,6 +222,23 @@ export function Playground() {
     run()
     return () => { controller.abort() }
   }, [selectedApiKeyId])
+
+  // 请求体预览
+  const requestPreview = selectedApiKey && selectedModel
+    ? JSON.stringify(
+        buildRequestConfig(
+          protocol,
+          '***',
+          selectedModel,
+          prompt || 'Hello! Please introduce yourself briefly.',
+          stream && canStream,
+          temperature ? parseFloat(temperature) : undefined,
+          maxTokens ? parseInt(maxTokens) : undefined,
+        ),
+        null,
+        2,
+      )
+    : null
 
   // 流式 SSE 解析
   const parseStreamResponse = async (
@@ -248,7 +328,6 @@ export function Playground() {
     }
   }
 
-  // 获取路由信息
   const fetchRouteInfo = async (apiKeyId: string, requestedModel: string) => {
     try {
       const logs = await statsApi.logs({ page: 1, page_size: 5 })
@@ -277,7 +356,9 @@ export function Playground() {
       selectedApiKey.api_key,
       selectedModel,
       prompt,
-      stream && STREAMABLE_PROTOCOLS.has(protocol),
+      stream && canStream,
+      temperature ? parseFloat(temperature) : undefined,
+      maxTokens ? parseInt(maxTokens) : undefined,
     )
 
     const controller = new AbortController()
@@ -306,7 +387,7 @@ export function Playground() {
         return
       }
 
-      if (stream && STREAMABLE_PROTOCOLS.has(protocol) && res.body) {
+      if (stream && canStream && res.body) {
         const reader = res.body.getReader()
         await parseStreamResponse(reader, protocol)
         setLoading(false)
@@ -318,7 +399,6 @@ export function Playground() {
           const json = JSON.parse(text)
           const content = parseJsonResponse(json, protocol)
           setRenderedContent(content)
-          // Images 特殊处理：base64 直接展示
           if (protocol === 'openai_images') {
             const data = json.data as Array<{ url?: string; b64_json?: string }> | undefined
             const img = data?.[0]
@@ -349,8 +429,6 @@ export function Playground() {
   const handleStop = () => {
     abortRef.current?.abort()
   }
-
-  const canStream = STREAMABLE_PROTOCOLS.has(protocol)
 
   return (
     <div className="space-y-6">
@@ -426,6 +504,36 @@ export function Playground() {
               />
             </div>
 
+            {showParams && (
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-1.5">
+                  <label className="text-sm font-medium">Temperature</label>
+                  <input
+                    type="number"
+                    value={temperature}
+                    onChange={(e) => setTemperature(e.target.value)}
+                    placeholder="0.7"
+                    min={0}
+                    max={2}
+                    step={0.1}
+                    className="input"
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <label className="text-sm font-medium">Max Tokens</label>
+                  <input
+                    type="number"
+                    value={maxTokens}
+                    onChange={(e) => setMaxTokens(e.target.value)}
+                    placeholder="1024"
+                    min={1}
+                    max={65536}
+                    className="input"
+                  />
+                </div>
+              </div>
+            )}
+
             <label className="flex items-center gap-2 text-sm">
               <input
                 type="checkbox"
@@ -497,7 +605,7 @@ export function Playground() {
           )}
 
           {/* 响应内容 */}
-          {(renderedContent || rawContent || loading) && (
+          {(renderedContent || rawContent || requestPreview || loading) && (
             <Card>
               <CardContent className="p-4">
                 {/* Tab 切换 */}
@@ -511,6 +619,16 @@ export function Playground() {
                     }`}
                   >
                     渲染
+                  </button>
+                  <button
+                    onClick={() => setTab('request')}
+                    className={`px-3 py-1 text-sm rounded-md transition-colors ${
+                      tab === 'request'
+                        ? 'bg-primary text-primary-foreground'
+                        : 'text-muted-foreground hover:bg-accent'
+                    }`}
+                  >
+                    请求体
                   </button>
                   <button
                     onClick={() => setTab('raw')}
@@ -543,6 +661,14 @@ export function Playground() {
                     {loading && renderedContent && (
                       <span className="inline-block w-2 h-4 bg-primary animate-pulse ml-0.5" />
                     )}
+                  </div>
+                )}
+
+                {tab === 'request' && (
+                  <div className="min-h-[200px] max-h-[500px] overflow-y-auto">
+                    <pre className="whitespace-pre-wrap text-xs font-mono text-muted-foreground leading-relaxed">
+                      {requestPreview || '选择 API Key 和模型后预览请求体'}
+                    </pre>
                   </div>
                 )}
 

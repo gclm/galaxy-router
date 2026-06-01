@@ -55,6 +55,7 @@ export interface CustomHeader {
 }
 
 export interface UpstreamApiKey {
+  id?: string
   key: string
   note?: string
   enabled?: boolean
@@ -110,17 +111,18 @@ export interface FetchModelsRequest {
   api_key: string
 }
 
-export interface TestModelRequest {
-  channel_id: string
+export interface TestChannelRequest {
   model: string
   test_protocol: string
-  user_agent?: string
+  api_key_id: string
+  stream?: boolean
 }
 
-export interface TestModelResponse {
+export interface TestChannelResponse {
   success: boolean
   message: string
   latency_ms: number
+  time_to_first_token_ms?: number
   input_prompt: string
   output_content: string | null
 }

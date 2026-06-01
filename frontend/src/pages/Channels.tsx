@@ -8,6 +8,7 @@ import { StatusBadge } from '@/components/StatusBadge'
 import { ConfirmDeleteDialog } from '@/components/ConfirmDeleteDialog'
 import { useDebouncedValue } from '@/lib/hooks'
 import { ChannelForm } from '@/components/ChannelForm'
+import { ChannelDetail } from '@/components/ChannelDetail'
 import { TestModelDialog } from '@/components/TestModelDialog'
 import {
   Dialog,
@@ -43,6 +44,7 @@ export function Channels() {
   // Dialog 状态
   const [formOpen, setFormOpen] = useState(false)
   const [editingChannel, setEditingChannel] = useState<Channel | null>(null)
+  const [detailChannel, setDetailChannel] = useState<Channel | null>(null)
   const [testChannel, setTestChannel] = useState<Channel | null>(null)
 
   const fetchRef = useRef<() => void>(() => {})
@@ -219,7 +221,14 @@ export function Channels() {
                   const models = channel.models || []
                   return (
                     <tr key={channel.id} className="border-b last:border-0 hover:bg-muted/30 transition-colors">
-                      <td className="px-4 py-3 font-medium">{channel.name}</td>
+                      <td className="px-4 py-3 font-medium">
+                        <button
+                          className="hover:text-primary hover:underline cursor-pointer text-left"
+                          onClick={() => setDetailChannel(channel)}
+                        >
+                          {channel.name}
+                        </button>
+                      </td>
                       <td className="px-4 py-3">
                         <div className="flex flex-wrap gap-1">
                           {channel.endpoints.map((ep, i) => (
@@ -280,6 +289,25 @@ export function Channels() {
         channel={testChannel}
         open={!!testChannel}
         onOpenChange={(open) => { if (!open) setTestChannel(null) }}
+      />
+
+      {/* 详情 Dialog */}
+      <ChannelDetail
+        channel={detailChannel}
+        open={!!detailChannel}
+        onOpenChange={(open) => { if (!open) setDetailChannel(null) }}
+        onEdit={() => {
+          if (detailChannel) {
+            openEdit(detailChannel)
+            setDetailChannel(null)
+          }
+        }}
+        onTest={() => {
+          if (detailChannel) {
+            setTestChannel(detailChannel)
+            setDetailChannel(null)
+          }
+        }}
       />
 
       {/* 删除确认 Dialog */}

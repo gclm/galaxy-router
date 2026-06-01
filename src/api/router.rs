@@ -21,7 +21,6 @@ use crate::api::handlers::admin::model_info::{self, ModelInfoState};
 use crate::api::handlers::admin::settings::{self, SettingsState};
 use crate::api::handlers::admin::stats::{self, StatsApiState};
 use crate::api::handlers::admin::system_info::{self, SystemInfoState};
-use crate::api::handlers::admin::test_model::{self, TestModelState};
 use crate::api::handlers::proxy::{chat, embeddings, images, messages, models, responses};
 use crate::api::middleware::require_admin_auth;
 use crate::config::{AppConfig, QueuingConfig};
@@ -50,6 +49,10 @@ pub async fn create_router(
     let channel_state = ChannelState {
         pool: pool.clone(),
         cache: shared_cache.clone(),
+        http_client: reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(30))
+            .build()
+            .expect("Failed to create HTTP client"),
     };
 
     let group_state = GroupState {
@@ -72,14 +75,6 @@ pub async fn create_router(
             .timeout(std::time::Duration::from_secs(10))
             .build()
             .expect("Failed to create HTTP client"),
-    };
-
-    let test_model_state = TestModelState {
-        http_client: reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(30))
-            .build()
-            .expect("Failed to create HTTP client"),
-        pool: pool.clone(),
     };
 
     let system_info_state = SystemInfoState {
@@ -121,6 +116,7 @@ pub async fn create_router(
                         .put(channels::update)
                         .delete(channels::delete),
                 )
+                .route("/{id}/test", post(channels::test_channel))
                 .with_state(channel_state),
         )
         .nest(
@@ -193,12 +189,6 @@ pub async fn create_router(
             Router::new()
                 .route("/", post(fetch_models::fetch_models))
                 .with_state(fetch_models_state),
-        )
-        .nest(
-            "/test-model",
-            Router::new()
-                .route("/", post(test_model::test_model))
-                .with_state(test_model_state),
         )
         .layer(middleware::from_fn(require_admin_auth));
 
