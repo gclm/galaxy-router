@@ -44,3 +44,34 @@ pub enum QueueError {
     #[error("队列已关闭")]
     QueueClosed,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn acquire_returns_permit_within_capacity() {
+        let q = RequestQueue::new(2, 5);
+        let p1 = q.acquire().await.unwrap();
+        let p2 = q.acquire().await.unwrap();
+        // 容量已满，第三次应当超时
+        assert!(matches!(q.acquire().await, Err(QueueError::QueueFull { .. })));
+        drop(p1);
+        drop(p2);
+    }
+
+    #[tokio::test]
+    async fn permit_release_allows_new_acquire() {
+        let q = RequestQueue::new(1, 5);
+        let p = q.acquire().await.unwrap();
+        let q2 = q.clone();
+        let handle = tokio::spawn(async move {
+            // 阻塞直到 permit 被释放
+            let _permit = q2.acquire().await.unwrap();
+        });
+        drop(p);
+        // 给 worker 一点时间
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        handle.await.unwrap();
+    }
+}

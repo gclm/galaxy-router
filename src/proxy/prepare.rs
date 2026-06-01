@@ -281,3 +281,95 @@ pub(super) async fn prepare_proxy_request(
         target_model: selection.target_model.clone(),
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn estimate_tokens_handles_empty() {
+        assert_eq!(estimate_tokens(""), 0);
+    }
+
+    #[test]
+    fn estimate_tokens_approximates_3_bytes_per_token() {
+        // 30 字节 → 10 token
+        assert_eq!(estimate_tokens(&"a".repeat(30)), 10);
+        // 1 字节 → 1 token (向上取整)
+        assert_eq!(estimate_tokens("a"), 1);
+    }
+
+    #[test]
+    fn extract_usage_for_openai_chat() {
+        let body = json!({
+            "usage": {
+                "prompt_tokens": 10,
+                "completion_tokens": 20,
+                "prompt_tokens_details": { "cached_tokens": 5 }
+            }
+        });
+        let (i, o, cr, cc) = extract_usage(&body, &EndpointType::OpenAiChat);
+        assert_eq!((i, o, cr, cc), (10, 20, 5, 0));
+    }
+
+    #[test]
+    fn extract_usage_for_anthropic_includes_cache_creation() {
+        let body = json!({
+            "usage": {
+                "input_tokens": 8,
+                "output_tokens": 12,
+                "cache_read_input_tokens": 3,
+                "cache_creation_input_tokens": 4
+            }
+        });
+        let (i, o, cr, cc) = extract_usage(&body, &EndpointType::Anthropic);
+        assert_eq!((i, o, cr, cc), (8, 12, 3, 4));
+    }
+
+    #[test]
+    fn extract_usage_falls_back_to_zero_on_missing_fields() {
+        let body = json!({});
+        let (i, o, cr, cc) = extract_usage(&body, &EndpointType::OpenAiChat);
+        assert_eq!((i, o, cr, cc), (0, 0, 0, 0));
+    }
+
+    #[test]
+    fn extract_request_text_collects_system_and_messages() {
+        let body = json!({
+            "system": "you are helpful",
+            "messages": [
+                { "content": "hi" },
+                { "content": [{ "text": "there" }] }
+            ]
+        });
+        let text = extract_request_text(&body);
+        assert!(text.contains("you are helpful"));
+        assert!(text.contains("hi"));
+        assert!(text.contains("there"));
+    }
+
+    #[test]
+    fn extract_response_text_reads_openai_choices() {
+        let body = json!({
+            "choices": [
+                { "message": { "content": "hello" } },
+                { "message": { "content": "world" } }
+            ]
+        });
+        let text = extract_response_text(&body);
+        assert_eq!(text, "helloworld");
+    }
+
+    #[test]
+    fn extract_response_text_reads_anthropic_content_blocks() {
+        let body = json!({
+            "content": [
+                { "type": "text", "text": "alpha" },
+                { "type": "text", "text": "beta" }
+            ]
+        });
+        let text = extract_response_text(&body);
+        assert_eq!(text, "alphabeta");
+    }
+}

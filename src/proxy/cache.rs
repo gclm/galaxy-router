@@ -132,3 +132,110 @@ impl ProxyCache {
         Some(re)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::api::handlers::admin::channels::EndpointType;
+
+    fn sample_channel(id: &str, models: Vec<&str>) -> ChannelInfo {
+        ChannelInfo {
+            id: id.into(),
+            name: id.into(),
+            api_keys: vec![],
+            endpoints: vec![crate::api::handlers::admin::channels::EndpointConfig {
+                base_url: "https://example.com".into(),
+                endpoint_type: EndpointType::OpenAiChat,
+                enabled: true,
+            }],
+            models: models.into_iter().map(String::from).collect(),
+            custom_headers: vec![],
+        }
+    }
+
+    fn sample_group(name: &str) -> GroupInfo {
+        GroupInfo {
+            id: "g-1".into(),
+            name: name.into(),
+            items: vec![],
+        }
+    }
+
+    #[tokio::test]
+    async fn set_channel_updates_model_index() {
+        let cache = ProxyCache::new();
+        cache.set_channel(sample_channel("ch-a", vec!["gpt-4", "gpt-3.5"])).await;
+        assert_eq!(cache.find_channels_by_model("gpt-4").await, vec!["ch-a"]);
+        assert_eq!(
+            cache.find_channels_by_model("gpt-3.5").await,
+            vec!["ch-a"]
+        );
+        assert!(cache.find_channels_by_model("claude").await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn invalidate_channel_removes_from_index() {
+        let cache = ProxyCache::new();
+        cache.set_channel(sample_channel("ch-a", vec!["gpt-4"])).await;
+        cache.invalidate_channel("ch-a").await;
+        assert!(cache.find_channels_by_model("gpt-4").await.is_empty());
+        assert!(cache.get_channel("ch-a").await.is_none());
+    }
+
+    #[tokio::test]
+    async fn invalidate_all_channels_clears_index() {
+        let cache = ProxyCache::new();
+        cache.set_channel(sample_channel("ch-a", vec!["gpt-4"])).await;
+        cache.set_channel(sample_channel("ch-b", vec!["claude"])).await;
+        cache.invalidate_all_channels().await;
+        assert!(cache.find_channels_by_model("gpt-4").await.is_empty());
+        assert!(cache.find_channels_by_model("claude").await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn set_channel_replaces_existing_entry() {
+        let cache = ProxyCache::new();
+        cache.set_channel(sample_channel("ch-a", vec!["gpt-4"])).await;
+        cache.set_channel(sample_channel("ch-a", vec!["gpt-3.5"])).await;
+        // 覆盖时新 model 仍写入 index，旧 model 引用依赖显式 invalidate
+        assert_eq!(
+            cache.find_channels_by_model("gpt-3.5").await,
+            vec!["ch-a"]
+        );
+        let stored = cache.get_channel("ch-a").await.unwrap();
+        assert_eq!(stored.models, vec!["gpt-3.5".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn group_cache_roundtrip() {
+        let cache = ProxyCache::new();
+        cache.set_group(sample_group("grp-1")).await;
+        let got = cache.get_group("grp-1").await;
+        assert!(got.is_some());
+        assert_eq!(got.unwrap().name, "grp-1");
+        assert!(cache.get_group("missing").await.is_none());
+    }
+
+    #[tokio::test]
+    async fn invalidate_all_groups_clears() {
+        let cache = ProxyCache::new();
+        cache.set_group(sample_group("g-1")).await;
+        cache.invalidate_all_groups().await;
+        assert!(cache.get_group("g-1").await.is_none());
+    }
+
+    #[tokio::test]
+    async fn compiled_regex_caches() {
+        let cache = ProxyCache::new();
+        let re1 = cache.get_compiled_regex(r"^gpt-").await.unwrap();
+        let re2 = cache.get_compiled_regex(r"^gpt-").await.unwrap();
+        assert!(re1.is_match("gpt-4"));
+        assert!(re2.is_match("gpt-3.5"));
+    }
+
+    #[tokio::test]
+    async fn compiled_regex_invalid_returns_none() {
+        let cache = ProxyCache::new();
+        assert!(cache.get_compiled_regex(r"(unclosed").await.is_none());
+    }
+}

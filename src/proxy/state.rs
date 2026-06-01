@@ -210,3 +210,68 @@ impl LoadBalancerState {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sample_status() -> ChannelStatus {
+        ChannelStatus {
+            channel_id: "ch-1".into(),
+            success_count: 0,
+            failure_count: 0,
+            last_success: None,
+            last_failure: None,
+            avg_latency_ms: 0.0,
+            is_blacklisted: false,
+            blacklist_until: None,
+        }
+    }
+
+    #[test]
+    fn error_rate_with_no_traffic_is_zero() {
+        let s = sample_status();
+        assert_eq!(s.error_rate(), 0.0);
+    }
+
+    #[test]
+    fn error_rate_reflects_failure_ratio() {
+        let mut s = sample_status();
+        s.success_count = 3;
+        s.failure_count = 1;
+        assert!((s.error_rate() - 0.25).abs() < 1e-9);
+    }
+
+    #[test]
+    fn record_success_halves_failure_count() {
+        let mut s = sample_status();
+        s.failure_count = 4;
+        s.record_success(100.0);
+        assert_eq!(s.failure_count, 2);
+        s.record_success(100.0);
+        assert_eq!(s.failure_count, 1);
+        s.record_success(100.0);
+        assert_eq!(s.failure_count, 0);
+    }
+
+    #[test]
+    fn blacklist_unblocks_when_failures_decay_to_zero() {
+        let mut s = sample_status();
+        s.failure_count = 2;
+        s.blacklist(10);
+        assert!(s.is_blacklisted);
+        // 多次成功将失败计数衰减到 0 → 自动解封
+        for _ in 0..5 {
+            s.record_success(50.0);
+        }
+        assert!(!s.is_blacklisted);
+        assert!(s.blacklist_until.is_none());
+    }
+
+    #[test]
+    fn is_available_expires_blacklist_by_time() {
+        let mut s = sample_status();
+        s.blacklist(-1); // 立即过期
+        assert!(s.is_available());
+    }
+}

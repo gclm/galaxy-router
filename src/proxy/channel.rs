@@ -45,3 +45,78 @@ impl ChannelInfo {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::api::handlers::admin::channels::{EndpointType, UpstreamApiKey};
+
+    fn sample_channel() -> ChannelInfo {
+        ChannelInfo {
+            id: "ch-1".into(),
+            name: "test".into(),
+            api_keys: vec![
+                UpstreamApiKey {
+                    key: "sk-abc".into(),
+                    note: "primary".into(),
+                    enabled: true,
+                },
+                UpstreamApiKey {
+                    key: "sk-xyz".into(),
+                    note: "".into(),
+                    enabled: false,
+                },
+            ],
+            endpoints: vec![
+                EndpointConfig {
+                    base_url: "https://api.openai.com".into(),
+                    endpoint_type: EndpointType::OpenAiChat,
+                    enabled: true,
+                },
+                EndpointConfig {
+                    base_url: "https://api.openai.com".into(),
+                    endpoint_type: EndpointType::Anthropic,
+                    enabled: false,
+                },
+            ],
+            models: vec!["gpt-4".into()],
+            custom_headers: vec![],
+        }
+    }
+
+    #[test]
+    fn enabled_api_keys_filters_disabled() {
+        let ch = sample_channel();
+        let keys = ch.enabled_api_keys();
+        assert_eq!(keys.len(), 1);
+        assert_eq!(keys[0].key, "sk-abc");
+    }
+
+    #[test]
+    fn find_endpoint_skips_disabled() {
+        let ch = sample_channel();
+        assert!(ch.find_endpoint(&EndpointType::OpenAiChat).is_some());
+        assert!(ch.find_endpoint(&EndpointType::Anthropic).is_none());
+        assert!(ch.find_endpoint(&EndpointType::OpenAiResponse).is_none());
+    }
+
+    #[test]
+    fn key_hint_prefers_note() {
+        let ch = sample_channel();
+        assert_eq!(ch.key_hint("sk-abc"), "primary");
+    }
+
+    #[test]
+    fn key_hint_truncates_long_key_without_note() {
+        let ch = sample_channel();
+        let key = "sk-abcdefghijklmnop";
+        let hint = ch.key_hint(key);
+        assert_eq!(hint, "sk-abcde...mnop");
+    }
+
+    #[test]
+    fn key_hint_returns_short_key_unchanged() {
+        let ch = sample_channel();
+        assert_eq!(ch.key_hint("sk"), "sk");
+    }
+}
