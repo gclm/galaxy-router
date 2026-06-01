@@ -1792,31 +1792,15 @@ pub(crate) fn validate_header_value(s: &str) -> Result<(), String> {
         .map_err(|e| format!("含非法 header 字符 ({e})"))
 }
 
+/// 兼容封装：仅根据 status + body 判断上游错误是否需要换 Key
+///
+/// 内部委托给 `ProxyError::is_key_retryable`，避免散落的多处独立判断。
 fn is_key_retryable_upstream_error(status: StatusCode, body: &str) -> bool {
-    if matches!(
+    ProxyError::UpstreamError {
         status,
-        StatusCode::UNAUTHORIZED | StatusCode::PAYMENT_REQUIRED | StatusCode::TOO_MANY_REQUESTS
-    ) {
-        return true;
+        body: body.to_string(),
     }
-
-    let lower = sanitize_upstream_error(body).to_ascii_lowercase();
-    [
-        "余额不足",
-        "无可用资源包",
-        "insufficient_quota",
-        "quota exceeded",
-        "resource exhausted",
-        "credit balance",
-        "billing",
-        "rate limit",
-        "invalid api key",
-        "incorrect api key",
-        "unauthorized",
-        "authentication",
-    ]
-    .iter()
-    .any(|needle| lower.contains(needle))
+    .is_key_retryable()
 }
 
 /// 解析 models 字段
@@ -1865,6 +1849,34 @@ mod tests {
         assert!(validate_header_value("sk-abc\0").is_err());
         assert!(validate_header_value("sk-abc\x7f").is_err());
     }
+
+    #[test]
+    fn classify_upstream_distinguishes_key_retryable() {
+        // Key 相关：401 / 402 / 429
+        assert_eq!(
+            classify_upstream(StatusCode::UNAUTHORIZED, ""),
+            ErrorClass::KeyRetryable
+        );
+        assert_eq!(
+            classify_upstream(StatusCode::TOO_MANY_REQUESTS, ""),
+            ErrorClass::KeyRetryable
+        );
+        // 5xx 非 Key 字样：可换渠道重试
+        assert_eq!(
+            classify_upstream(StatusCode::INTERNAL_SERVER_ERROR, "upstream overloaded"),
+            ErrorClass::UpstreamRetryable
+        );
+        // 4xx 非 Key 字样：客户端错误
+        assert_eq!(
+            classify_upstream(StatusCode::BAD_REQUEST, "model does not exist"),
+            ErrorClass::Client
+        );
+        // 5xx 含余额字样：Key 重试优先
+        assert_eq!(
+            classify_upstream(StatusCode::INTERNAL_SERVER_ERROR, "insufficient_quota"),
+            ErrorClass::KeyRetryable
+        );
+    }
 }
 
 /// 代理错误
@@ -1887,4 +1899,70 @@ pub enum ProxyError {
 
     #[error("上游错误: {status}")]
     UpstreamError { status: StatusCode, body: String },
+}
+
+/// 错误分类（用于重试与降级策略）
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ErrorClass {
+    /// 上游 Key 相关问题（401、402、429、余额不足、无效 key 等）— 换 Key
+    KeyRetryable,
+    /// 上游临时错误（5xx、超时）— 可换渠道
+    UpstreamRetryable,
+    /// 客户端错误（4xx、非 Key 鉴权）— 不重试
+    Client,
+    /// 系统/内部错误 — 不重试
+    Internal,
+}
+
+impl ProxyError {
+    /// 错误分类
+    pub fn classify(&self) -> ErrorClass {
+        match self {
+            ProxyError::DatabaseError(_) | ProxyError::ChannelNotFound(_) => ErrorClass::Internal,
+            ProxyError::NoAvailableChannel(_) | ProxyError::RequestError(_) => {
+                ErrorClass::UpstreamRetryable
+            }
+            ProxyError::TransformError(_) => ErrorClass::Internal,
+            ProxyError::UpstreamError { status, body } => classify_upstream(*status, body),
+        }
+    }
+
+    /// 上游错误是否应当换 Key 重试
+    pub fn is_key_retryable(&self) -> bool {
+        matches!(self.classify(), ErrorClass::KeyRetryable)
+    }
+}
+
+fn classify_upstream(status: StatusCode, body: &str) -> ErrorClass {
+    if matches!(
+        status,
+        StatusCode::UNAUTHORIZED | StatusCode::PAYMENT_REQUIRED | StatusCode::TOO_MANY_REQUESTS
+    ) {
+        return ErrorClass::KeyRetryable;
+    }
+
+    let lower = sanitize_upstream_error(body).to_ascii_lowercase();
+    const KEY_NEEDLES: &[&str] = &[
+        "余额不足",
+        "无可用资源包",
+        "insufficient_quota",
+        "quota exceeded",
+        "resource exhausted",
+        "credit balance",
+        "billing",
+        "rate limit",
+        "invalid api key",
+        "incorrect api key",
+        "unauthorized",
+        "authentication",
+    ];
+    if KEY_NEEDLES.iter().any(|n| lower.contains(n)) {
+        return ErrorClass::KeyRetryable;
+    }
+
+    if status.is_server_error() {
+        ErrorClass::UpstreamRetryable
+    } else {
+        ErrorClass::Client
+    }
 }
