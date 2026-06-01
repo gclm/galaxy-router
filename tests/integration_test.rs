@@ -83,7 +83,7 @@ fn test_password_hash() {
 fn test_jwt_token() {
     let jwt_service = galaxy_router::auth::JwtService::new("test_secret", 24);
     let token = jwt_service.generate_token("1", "admin").unwrap();
-    let claims = jwt_service.verify_token(&token).unwrap();
+    let claims = galaxy_router::auth::decode_jwt(&token, "test_secret").unwrap();
 
     assert_eq!(claims.sub, "1");
     assert_eq!(claims.username, "admin");

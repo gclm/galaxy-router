@@ -14,7 +14,6 @@ pub struct OpenAiResponsesOutbound;
 
 /// OpenAI Responses 请求
 #[derive(Debug, Deserialize)]
-#[allow(dead_code)]
 struct OpenAiResponsesRequest {
     model: String,
     input: serde_json::Value,
@@ -285,10 +284,6 @@ impl Inbound for OpenAiResponsesInbound {
         }
 
         Ok(events.join("").into_bytes())
-    }
-
-    fn protocol_name(&self) -> &'static str {
-        "openai_responses"
     }
 }
 
@@ -583,14 +578,6 @@ impl Outbound for OpenAiResponsesOutbound {
             | "response.function_call_arguments.done" => Ok(None),
             _ => Ok(None),
         }
-    }
-
-    fn api_format(&self) -> &'static str {
-        "openai_responses"
-    }
-
-    fn request_path(&self) -> &'static str {
-        "/v1/responses"
     }
 
     fn set_auth_header(&self, headers: &mut reqwest::header::HeaderMap, api_key: &str) {

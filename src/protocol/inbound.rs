@@ -20,10 +20,6 @@ pub trait Inbound: Send + Sync {
 
     /// 将统一流式响应转换为客户端流式事件
     fn transform_stream_event(&self, event: &LlmStreamResponse) -> Result<Vec<u8>, InboundError>;
-
-    /// 获取协议名称
-    #[allow(dead_code)]
-    fn protocol_name(&self) -> &'static str;
 }
 
 /// 入站错误

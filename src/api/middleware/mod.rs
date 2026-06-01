@@ -75,20 +75,6 @@ impl ApiKeyCache {
             },
         );
     }
-
-    #[allow(dead_code)]
-    /// 清除缓存
-    pub async fn invalidate(&self, key: &str) {
-        let mut cache = self.keys.write().await;
-        cache.remove(key);
-    }
-
-    #[allow(dead_code)]
-    /// 清除所有缓存
-    pub async fn invalidate_all(&self) {
-        let mut cache = self.keys.write().await;
-        cache.clear();
-    }
 }
 
 /// 从请求中提取 Claims（管理 API 认证）
@@ -120,10 +106,8 @@ impl<S: Send + Sync> FromRequestParts<S> for AuthClaims {
 }
 
 /// API Key 认证结果（代理 API 认证）
-#[allow(dead_code)]
 pub struct ApiKeyAuth {
     pub key_id: String,
-    pub key_name: String,
 }
 
 impl<S: Send + Sync> FromRequestParts<S> for ApiKeyAuth {
@@ -152,7 +136,7 @@ impl<S: Send + Sync> FromRequestParts<S> for ApiKeyAuth {
 
         // 1. 检查缓存
         if let Some(cache) = parts.extensions.get::<ApiKeyCache>()
-            && let Some((id, name, enabled)) = cache.get(&api_key).await
+            && let Some((id, _name, enabled)) = cache.get(&api_key).await
         {
             if !enabled {
                 return Err((
@@ -164,7 +148,6 @@ impl<S: Send + Sync> FromRequestParts<S> for ApiKeyAuth {
             }
             return Ok(ApiKeyAuth {
                 key_id: id,
-                key_name: name,
             });
         }
 
@@ -208,7 +191,6 @@ impl<S: Send + Sync> FromRequestParts<S> for ApiKeyAuth {
                 }
                 Ok(ApiKeyAuth {
                     key_id: id,
-                    key_name: name,
                 })
             }
             None => Err((

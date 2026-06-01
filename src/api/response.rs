@@ -54,12 +54,6 @@ impl ApiError {
         (StatusCode::UNAUTHORIZED, Json(Self::new(401, message)))
     }
 
-    /// 禁止访问
-    #[allow(dead_code)]
-    pub fn forbidden(message: impl Into<String>) -> (StatusCode, Json<Self>) {
-        (StatusCode::FORBIDDEN, Json(Self::new(403, message)))
-    }
-
     /// 资源不存在
     pub fn not_found(message: impl Into<String>) -> (StatusCode, Json<Self>) {
         (StatusCode::NOT_FOUND, Json(Self::new(404, message)))

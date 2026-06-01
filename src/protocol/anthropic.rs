@@ -285,10 +285,6 @@ impl Inbound for AnthropicInbound {
 
         Ok(events.join("").into_bytes())
     }
-
-    fn protocol_name(&self) -> &'static str {
-        "anthropic"
-    }
 }
 
 #[async_trait]
@@ -635,14 +631,6 @@ impl Outbound for AnthropicOutbound {
             "message_stop" => Ok(None),
             _ => Ok(None),
         }
-    }
-
-    fn api_format(&self) -> &'static str {
-        "anthropic"
-    }
-
-    fn request_path(&self) -> &'static str {
-        "/v1/messages"
     }
 
     fn set_auth_header(&self, headers: &mut reqwest::header::HeaderMap, api_key: &str) {

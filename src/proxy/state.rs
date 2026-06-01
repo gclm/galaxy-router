@@ -17,20 +17,6 @@ pub struct ChannelStatus {
 }
 
 impl ChannelStatus {
-    #[allow(dead_code)]
-    pub fn new(channel_id: String) -> Self {
-        Self {
-            channel_id,
-            success_count: 0,
-            failure_count: 0,
-            last_success: None,
-            last_failure: None,
-            avg_latency_ms: 0.0,
-            is_blacklisted: false,
-            blacklist_until: None,
-        }
-    }
-
     /// 计算错误率
     pub fn error_rate(&self) -> f64 {
         let total = self.success_count + self.failure_count;
@@ -91,11 +77,8 @@ impl ChannelStatus {
 
 /// 粘性会话
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub struct StickySession {
-    pub session_hash: String,
     pub channel_id: String,
-    pub created_at: DateTime<Utc>,
     pub expires_at: DateTime<Utc>,
 }
 
@@ -129,16 +112,6 @@ impl LoadBalancerState {
             blacklist_threshold: 3,
             blacklist_minutes: 10,
         }
-    }
-
-    /// 获取或创建渠道状态
-    #[allow(dead_code)]
-    pub async fn get_or_create_channel_status(&self, channel_id: &str) -> ChannelStatus {
-        let mut states = self.channel_states.write().await;
-        states
-            .entry(channel_id.to_string())
-            .or_insert_with(|| ChannelStatus::new(channel_id.to_string()))
-            .clone()
     }
 
     /// 记录请求成功
@@ -208,9 +181,7 @@ impl LoadBalancerState {
         sessions.insert(
             session_hash.to_string(),
             StickySession {
-                session_hash: session_hash.to_string(),
                 channel_id: channel_id.to_string(),
-                created_at: now,
                 expires_at: now + chrono::Duration::seconds(self.sticky_ttl_secs),
             },
         );

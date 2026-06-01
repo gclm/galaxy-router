@@ -88,7 +88,6 @@ impl ProxyCache {
     }
 
     /// 清除渠道缓存
-    #[allow(dead_code)]
     pub async fn invalidate_channel(&self, id: &str) {
         let mut cache = self.channels.write().await;
         if let Some(ch) = cache.remove(id) {
@@ -102,7 +101,6 @@ impl ProxyCache {
     }
 
     /// 清除所有渠道缓存
-    #[allow(dead_code)]
     pub async fn invalidate_all_channels(&self) {
         let mut cache = self.channels.write().await;
         cache.clear();
@@ -126,15 +124,7 @@ impl ProxyCache {
         cache.insert(group.name.clone(), group);
     }
 
-    /// 清除分组缓存
-    #[allow(dead_code)]
-    pub async fn invalidate_group(&self, name: &str) {
-        let mut cache = self.groups.write().await;
-        cache.remove(name);
-    }
-
     /// 清除所有分组缓存
-    #[allow(dead_code)]
     pub async fn invalidate_all_groups(&self) {
         let mut cache = self.groups.write().await;
         cache.clear();
@@ -221,7 +211,6 @@ pub struct ProxyState {
 
 /// 渠道信息
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub struct ChannelInfo {
     pub id: String,
     pub name: String,
@@ -233,7 +222,6 @@ pub struct ChannelInfo {
 
 /// 分组信息
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub struct GroupInfo {
     pub id: String,
     pub name: String,
@@ -242,11 +230,9 @@ pub struct GroupInfo {
 
 /// 分组项信息
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub struct GroupItemInfo {
     pub channel_id: String,
     pub model_name: String,
-    pub priority: i32,
     pub weight: i32,
 }
 
@@ -328,20 +314,6 @@ impl ProxyState {
         self
     }
 
-    /// 选择渠道和端点（精确匹配端点类型）
-    #[allow(dead_code)]
-    pub async fn select_channel(
-        &self,
-        model: &str,
-        endpoint_type: EndpointType,
-        session_hash: Option<&str>,
-    ) -> Result<SelectionResult, ProxyError> {
-        self.select_channel_inner(model, session_hash, &[], |ch| {
-            ch.find_endpoint(&endpoint_type)
-        })
-        .await
-    }
-
     /// 选择渠道和端点（支持排除已失败渠道，精确匹配端点类型）
     pub async fn select_channel_with_exclude(
         &self,
@@ -357,18 +329,6 @@ impl ProxyState {
     }
 
     /// 按模型选择渠道（不限端点类型，用于跨协议转换）
-    #[allow(dead_code)]
-    pub async fn select_channel_for_model(
-        &self,
-        model: &str,
-        session_hash: Option<&str>,
-    ) -> Result<SelectionResult, ProxyError> {
-        self.select_channel_inner(model, session_hash, &[], |ch| ch.endpoints.first().cloned())
-            .await
-    }
-
-    /// 按模型选择渠道（支持排除已失败渠道，不限端点类型）
-    #[allow(dead_code)]
     pub async fn select_channel_for_model_with_exclude(
         &self,
         model: &str,
@@ -517,10 +477,9 @@ impl ProxyState {
 
         Ok(items
             .into_iter()
-            .map(|(channel_id, model_name, priority, weight)| GroupItemInfo {
+            .map(|(channel_id, model_name, _priority, weight)| GroupItemInfo {
                 channel_id,
                 model_name,
-                priority,
                 weight,
             })
             .collect())
@@ -703,18 +662,6 @@ impl ProxyState {
     /// 应用模型映射（模型映射已移至分组层，此处直接返回原始模型名）
     fn apply_model_mapping(&self, _channel: &ChannelInfo, model: &str) -> String {
         model.to_string()
-    }
-
-    /// 选择 API Key（原子计数器轮询，跳过禁用 Key）
-    #[allow(dead_code)]
-    pub fn select_api_key(&self, channel: &ChannelInfo) -> String {
-        let enabled_keys = channel.enabled_api_keys();
-        if enabled_keys.is_empty() {
-            return String::new();
-        }
-
-        let idx = self.key_counter.fetch_add(1, Ordering::Relaxed) as usize % enabled_keys.len();
-        enabled_keys[idx].key.clone()
     }
 
     /// 生成一次请求内的同渠道 Key 尝试序列（跳过禁用 Key）。
@@ -1070,8 +1017,6 @@ async fn prepare_proxy_request(
 /// 单次尝试的统计信息
 struct AttemptStats {
     channel_id: String,
-    #[allow(dead_code)]
-    model: String,
     target_model: String,
     upstream_endpoint: EndpointType,
     needs_conversion: bool,
@@ -1299,7 +1244,6 @@ async fn execute_proxy_request(
 
     attempts.push(AttemptStats {
         channel_id: prepared.channel_id.clone(),
-        model: prepared.model.clone(),
         target_model: prepared.target_model.clone(),
         upstream_endpoint: prepared.upstream_endpoint.clone(),
         needs_conversion: prepared.needs_conversion,
@@ -1566,7 +1510,6 @@ async fn execute_proxy_stream(
 
         attempts.push(AttemptStats {
             channel_id: prepared.channel_id.clone(),
-            model: prepared.model.clone(),
             target_model: prepared.target_model.clone(),
             upstream_endpoint: prepared.upstream_endpoint.clone(),
             needs_conversion: prepared.needs_conversion,
@@ -1613,7 +1556,6 @@ async fn execute_proxy_stream(
 
         attempts.push(AttemptStats {
             channel_id: prepared.channel_id.clone(),
-            model: prepared.model.clone(),
             target_model: prepared.target_model.clone(),
             upstream_endpoint: prepared.upstream_endpoint.clone(),
             needs_conversion: prepared.needs_conversion,

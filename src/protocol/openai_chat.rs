@@ -200,10 +200,6 @@ impl Inbound for OpenAiChatInbound {
             .map_err(|e| InboundError::TransformError(format!("序列化流式事件失败: {}", e)))?;
         Ok(format!("data: {}\n\n", data).into_bytes())
     }
-
-    fn protocol_name(&self) -> &'static str {
-        "openai_chat"
-    }
 }
 
 #[async_trait]
@@ -315,14 +311,6 @@ impl Outbound for OpenAiChatOutbound {
         serde_json::from_str(data)
             .map(Some)
             .map_err(|e| OutboundError::ParseError(format!("解析 OpenAI Chat 流式事件失败: {}", e)))
-    }
-
-    fn api_format(&self) -> &'static str {
-        "openai_chat"
-    }
-
-    fn request_path(&self) -> &'static str {
-        "/v1/chat/completions"
     }
 
     fn set_auth_header(&self, headers: &mut reqwest::header::HeaderMap, api_key: &str) {
