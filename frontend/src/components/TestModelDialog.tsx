@@ -61,8 +61,11 @@ export function TestModelDialog({ channel, open, onOpenChange }: TestModelDialog
     setExpandedModels(new Set())
   }, [])
 
-  const models = channel?.models || []
-  const enabledKeys = channel?.api_keys.filter((k) => k.enabled !== false) || []
+  const models = useMemo(() => channel?.models || [], [channel?.models])
+  const enabledKeys = useMemo(
+    () => channel?.api_keys.filter((k) => k.enabled !== false) || [],
+    [channel?.api_keys]
+  )
   const endpointTypes = new Set(
     (channel?.endpoints || []).filter((e) => e.enabled !== false).map((e) => e.type)
   )
