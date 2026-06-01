@@ -431,7 +431,7 @@ export function Playground() {
   }
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-4">
       <div>
         <p className="text-sm text-muted-foreground">
           用真实客户端请求测试代理管线：认证 → 路由 → 转换 → 上游

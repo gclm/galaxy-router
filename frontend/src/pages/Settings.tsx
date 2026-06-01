@@ -94,7 +94,7 @@ export function Settings() {
   }
 
   return (
-    <div className="max-w-4xl space-y-6">
+    <div className="max-w-4xl space-y-4">
       <div className="border-b">
         <nav className="-mb-px flex gap-6 overflow-x-auto">
           {tabs.map((tab) => (

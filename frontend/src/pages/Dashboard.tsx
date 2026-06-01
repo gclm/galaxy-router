@@ -142,7 +142,7 @@ export function Dashboard() {
   const rangeLabel = customMode ? `${customStart} ~ ${customEnd}` : RANGE_TABS.find(t => t.days === activeRange)?.label ?? ''
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-4">
       {/* 系统信息卡片 */}
       {systemInfo && (
         <div className="grid grid-cols-3 sm:grid-cols-6 gap-3">
