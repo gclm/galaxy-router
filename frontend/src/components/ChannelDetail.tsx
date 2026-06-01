@@ -47,7 +47,7 @@ export function ChannelDetail({ channel, open, onOpenChange, onEdit, onTest }: C
               </div>
               <div>
                 <span className="text-muted-foreground">状态</span>
-                <p><StatusBadge enabled={channel.enabled} /></p>
+                <p><StatusBadge enabled={channel.enabled} onClick={() => {}} /></p>
               </div>
               <div>
                 <span className="text-muted-foreground">创建时间</span>
@@ -78,7 +78,7 @@ export function ChannelDetail({ channel, open, onOpenChange, onEdit, onTest }: C
                   <span className="font-mono text-xs text-muted-foreground">
                     {maskKey(k.key)}
                   </span>
-                  <StatusBadge enabled={k.enabled !== false} />
+                  <StatusBadge enabled={k.enabled !== false} onClick={() => {}} />
                 </div>
               ))}
             </div>

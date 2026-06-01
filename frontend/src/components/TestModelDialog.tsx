@@ -269,7 +269,7 @@ export function TestModelDialog({ channel, open, onOpenChange }: TestModelDialog
                             </div>
                           ) : r.status === 'success' ? (
                             <div className="flex items-center gap-2 text-xs">
-                              <StatusBadge enabled />
+                              <StatusBadge enabled onClick={() => {}} />
                               <span className="text-muted-foreground">
                                 {r.latency_ms}ms
                                 {r.time_to_first_token_ms != null && (
@@ -279,7 +279,7 @@ export function TestModelDialog({ channel, open, onOpenChange }: TestModelDialog
                             </div>
                           ) : (
                             <div className="flex items-center gap-1 text-xs">
-                              <StatusBadge enabled={false} />
+                              <StatusBadge enabled={false} onClick={() => {}} />
                               <span className="text-red-500 truncate max-w-[180px]" title={r.error}>
                                 {r.error || '测试失败'}
                               </span>
