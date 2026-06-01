@@ -2261,8 +2261,6 @@ mod tests {
     use super::*;
 
     #[test]
-
-    #[test]
     fn key_retryable_error_matches_status_and_quota_body() {
         assert!(is_key_retryable_upstream_error(
             StatusCode::UNAUTHORIZED,
