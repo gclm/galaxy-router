@@ -202,11 +202,12 @@ export function Playground() {
   // 切换 API Key 时刷新模型列表
   useEffect(() => {
     if (!selectedApiKey) return
+    const apiKey = selectedApiKey.api_key
     const controller = new AbortController()
     const run = async () => {
       try {
         const res = await fetch('/v1/models', {
-          headers: { Authorization: `Bearer ${selectedApiKey.api_key}` },
+          headers: { Authorization: `Bearer ${apiKey}` },
           signal: controller.signal,
         })
         const data = await res.json()
@@ -221,7 +222,7 @@ export function Playground() {
     }
     run()
     return () => { controller.abort() }
-  }, [selectedApiKeyId])
+  }, [selectedApiKey])
 
   // 请求体预览
   const requestPreview = selectedApiKey && selectedModel
