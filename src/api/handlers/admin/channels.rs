@@ -223,7 +223,11 @@ pub async fn list(
         .await
         .map_err(|e| ApiError::internal_error(e.to_string()))?;
 
-    let items: Vec<Channel> = rows.iter().map(row_to_channel_from_row).collect();
+    let items: Vec<Channel> = rows
+        .iter()
+        .map(row_to_channel_from_row)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(ApiError::internal_error)?;
 
     Ok(Json(ApiResponse::success(PaginatedResponse {
         items,
@@ -462,51 +466,60 @@ async fn get_channel_by_id(
     .map_err(|e| ApiError::internal_error(e.to_string()))?;
 
     let row = result.ok_or_else(|| ApiError::not_found("渠道不存在"))?;
-    Ok(row_to_channel(row))
+    row_to_channel(row).map_err(ApiError::internal_error)
 }
 
 pub fn parse_api_keys(json_str: &str) -> Vec<UpstreamApiKey> {
     serde_json::from_str(json_str).unwrap_or_default()
 }
 
-fn row_to_channel(row: ChannelRow) -> Channel {
-    Channel {
+fn decode_json_field<T>(field_name: &str, value: &str) -> Result<T, String>
+where
+    T: serde::de::DeserializeOwned,
+{
+    serde_json::from_str(value).map_err(|e| format!("解析 {} 失败: {}", field_name, e))
+}
+
+pub(crate) fn row_to_channel(row: ChannelRow) -> Result<Channel, String> {
+    Ok(Channel {
         id: row.id,
         name: row.name,
-        api_keys: parse_api_keys(&row.api_keys),
-        endpoints: serde_json::from_str(&row.endpoints).unwrap_or_default(),
-        models: serde_json::from_str(&row.models).unwrap_or_default(),
+        api_keys: decode_json_field("channels.api_keys", &row.api_keys)?,
+        endpoints: decode_json_field("channels.endpoints", &row.endpoints)?,
+        models: decode_json_field("channels.models", &row.models)?,
         rate_limit_rpm: row.rate_limit_rpm,
         rate_limit_tpm: row.rate_limit_tpm,
         failure_threshold: row.failure_threshold,
         blacklist_minutes: row.blacklist_minutes,
         concurrency: row.concurrency,
-        custom_headers: serde_json::from_str(&row.custom_headers).unwrap_or_default(),
+        custom_headers: decode_json_field("channels.custom_headers", &row.custom_headers)?,
         enabled: row.enabled,
         created_at: row.created_at,
         updated_at: row.updated_at,
-    }
+    })
 }
 
-fn row_to_channel_from_row(row: &sqlx::sqlite::SqliteRow) -> Channel {
+fn row_to_channel_from_row(row: &sqlx::sqlite::SqliteRow) -> Result<Channel, String> {
     use sqlx::Row;
-    Channel {
+    Ok(Channel {
         id: row.get("id"),
         name: row.get("name"),
-        api_keys: parse_api_keys(&row.get::<String, _>("api_keys")),
-        endpoints: serde_json::from_str(&row.get::<String, _>("endpoints")).unwrap_or_default(),
-        models: serde_json::from_str(&row.get::<String, _>("models")).unwrap_or_default(),
+        api_keys: decode_json_field("channels.api_keys", &row.get::<String, _>("api_keys"))?,
+        endpoints: decode_json_field("channels.endpoints", &row.get::<String, _>("endpoints"))?,
+        models: decode_json_field("channels.models", &row.get::<String, _>("models"))?,
         rate_limit_rpm: row.get("rate_limit_rpm"),
         rate_limit_tpm: row.get("rate_limit_tpm"),
         failure_threshold: row.get("failure_threshold"),
         blacklist_minutes: row.get("blacklist_minutes"),
         concurrency: row.get("concurrency"),
-        custom_headers: serde_json::from_str(&row.get::<String, _>("custom_headers"))
-            .unwrap_or_default(),
+        custom_headers: decode_json_field(
+            "channels.custom_headers",
+            &row.get::<String, _>("custom_headers"),
+        )?,
         enabled: row.get("enabled"),
         created_at: row.get("created_at"),
         updated_at: row.get("updated_at"),
-    }
+    })
 }
 
 // ==================== 渠道测试 ====================

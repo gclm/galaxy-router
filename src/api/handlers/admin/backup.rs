@@ -230,23 +230,9 @@ async fn fetch_channels(pool: &SqlitePool) -> DbResult<Vec<Channel>> {
 
     Ok(rows
         .into_iter()
-        .map(|row| Channel {
-            id: row.id,
-            name: row.name,
-            api_keys: serde_json::from_str(&row.api_keys).unwrap_or_default(),
-            endpoints: serde_json::from_str(&row.endpoints).unwrap_or_default(),
-            models: serde_json::from_str(&row.models).unwrap_or_default(),
-            rate_limit_rpm: row.rate_limit_rpm,
-            rate_limit_tpm: row.rate_limit_tpm,
-            failure_threshold: row.failure_threshold,
-            blacklist_minutes: row.blacklist_minutes,
-            concurrency: row.concurrency,
-            custom_headers: serde_json::from_str(&row.custom_headers).unwrap_or_default(),
-            enabled: row.enabled,
-            created_at: row.created_at,
-            updated_at: row.updated_at,
-        })
-        .collect())
+        .map(crate::api::handlers::admin::channels::row_to_channel)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(ApiError::internal_error)?)
 }
 
 async fn fetch_groups(pool: &SqlitePool) -> DbResult<Vec<GroupExport>> {
