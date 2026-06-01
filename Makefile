@@ -89,7 +89,7 @@ release:
 
 # 发布新版本：同步 Cargo.toml / Cargo.lock / frontend/package.json，提交并推送 tag
 # 用法: make release-version VERSION=0.0.3
-release-version:
+release-version: check
 	@set -e; \
 	if [ "$(VERSION)" = "$(CARGO_VERSION)" ]; then \
 	  echo "请传入新版本号，例如: make release-version VERSION=0.0.3" >&2; exit 1; \
