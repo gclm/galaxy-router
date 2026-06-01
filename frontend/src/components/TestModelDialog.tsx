@@ -52,12 +52,10 @@ export function TestModelDialog({ channel, open, onOpenChange }: TestModelDialog
     setIsBatchTesting(false)
   }, [])
 
-  if (!channel) return null
-
-  const models = channel.models || []
-  const enabledKeys = channel.api_keys.filter((k) => k.enabled !== false)
+  const models = channel?.models || []
+  const enabledKeys = channel?.api_keys.filter((k) => k.enabled !== false) || []
   const endpointTypes = new Set(
-    channel.endpoints.filter((e) => e.enabled !== false).map((e) => e.type)
+    (channel?.endpoints || []).filter((e) => e.enabled !== false).map((e) => e.type)
   )
   const availableProtocols = Object.entries(ENDPOINT_LABELS)
     .filter(([key]) => endpointTypes.has(key as EndpointType))
@@ -86,7 +84,7 @@ export function TestModelDialog({ channel, open, onOpenChange }: TestModelDialog
   }
 
   const testSingle = async (model: string): Promise<ModelTestResult | undefined> => {
-    if (!currentKeyId || !currentProtocol) return undefined
+    if (!channel || !currentKeyId || !currentProtocol) return undefined
 
     markTesting(model, true)
     updateResult(model, { status: 'testing' })
@@ -140,9 +138,11 @@ export function TestModelDialog({ channel, open, onOpenChange }: TestModelDialog
       <DialogContent className="sm:max-w-3xl max-h-[90vh] overflow-hidden flex flex-col">
         <DialogHeader>
           <DialogTitle>渠道测试</DialogTitle>
-          <DialogDescription>
-            测试 <strong>{channel.name}</strong> 的模型连通性
-          </DialogDescription>
+          {channel && (
+            <DialogDescription>
+              测试 <strong>{channel.name}</strong> 的模型连通性
+            </DialogDescription>
+          )}
         </DialogHeader>
 
         <div className="flex-1 overflow-y-auto space-y-4 pr-1">
