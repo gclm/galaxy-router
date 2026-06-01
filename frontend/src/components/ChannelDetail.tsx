@@ -68,7 +68,7 @@ export function ChannelDetail({ channel, open, onOpenChange, onEdit, onTest }: C
             <div className="space-y-1.5">
               {channel.api_keys.map((k, i) => (
                 <div
-                  key={k.id || i}
+                  key={`${k.key}-${i}`}
                   className="flex items-center gap-3 rounded-lg border px-3 py-2 text-sm"
                 >
                   <span className="text-muted-foreground w-4 text-center">{i + 1}</span>

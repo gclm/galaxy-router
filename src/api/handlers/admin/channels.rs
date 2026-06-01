@@ -5,7 +5,7 @@ use axum::{
 };
 
 use reqwest::Client;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use sqlx::SqlitePool;
 
 #[derive(sqlx::FromRow)]
@@ -100,17 +100,33 @@ pub struct EndpointConfig {
 /// 上游 API Key
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct UpstreamApiKey {
-    #[serde(default)]
-    pub id: String,
     pub key: String,
     #[serde(default)]
     pub note: String,
-    #[serde(default = "default_true")]
+    #[serde(default = "default_true", deserialize_with = "deserialize_bool_like")]
     pub enabled: bool,
 }
 
 fn default_true() -> bool {
     true
+}
+
+fn deserialize_bool_like<'de, D>(deserializer: D) -> Result<bool, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum BoolLike {
+        Bool(bool),
+        Int(i64),
+    }
+
+    match Option::<BoolLike>::deserialize(deserializer)? {
+        Some(BoolLike::Bool(value)) => Ok(value),
+        Some(BoolLike::Int(value)) => Ok(value != 0),
+        None => Ok(default_true()),
+    }
 }
 
 /// 自定义请求头
@@ -278,12 +294,8 @@ pub async fn create(
         return Err(ApiError::bad_request("至少需要一个端点"));
     }
 
-    // 为缺少 id 的 key 补 UUID
-    let mut api_keys = req.api_keys;
-    ensure_key_ids(&mut api_keys);
-
     let id = generate_id();
-    let api_keys_json = serde_json::to_string(&api_keys)
+    let api_keys_json = serde_json::to_string(&req.api_keys)
         .map_err(|e| ApiError::internal_error(e.to_string()))?;
     let endpoints_json = serde_json::to_string(&req.endpoints)
         .map_err(|e| ApiError::internal_error(e.to_string()))?;
@@ -364,7 +376,6 @@ pub async fn update(
         has_update = true;
     }
     if let Some(ref mut api_keys) = req.api_keys {
-        ensure_key_ids(api_keys);
         separated.push("api_keys = ");
         separated.push_bind_unseparated(serde_json::to_string(api_keys).unwrap_or_default());
         has_update = true;
@@ -455,7 +466,7 @@ pub async fn delete(
     Ok(Json(crate::api::response::success_empty()))
 }
 
-/// 根据 ID 获取渠道（自动迁移缺失的 key id）
+/// 根据 ID 获取渠道
 async fn get_channel_by_id(
     pool: &SqlitePool,
     id: &str,
@@ -469,22 +480,10 @@ async fn get_channel_by_id(
     .map_err(|e| ApiError::internal_error(e.to_string()))?;
 
     let row = result.ok_or_else(|| ApiError::not_found("渠道不存在"))?;
-    let mut channel = row_to_channel(row);
-
-    // 迁移：为缺少 id 的 key 补 UUID 并回写
-    if ensure_key_ids(&mut channel.api_keys) {
-        let _ = sqlx::query("UPDATE channels SET api_keys = ? WHERE id = ?")
-            .bind(serde_json::to_string(&channel.api_keys).unwrap_or_default())
-            .bind(&channel.id)
-            .execute(pool)
-            .await;
-    }
-
-    Ok(channel)
+    Ok(row_to_channel(row))
 }
 
 /// 兼容旧格式：api_keys 可能是 ["sk-xxx"] 或 [{"key":"sk-xxx","note":"","enabled":true}]
-/// 自动为缺少 id 的 key 补 UUID
 pub fn parse_api_keys(json_str: &str) -> Vec<UpstreamApiKey> {
     let value: serde_json::Value = serde_json::from_str(json_str).unwrap_or_default();
     let Some(arr) = value.as_array() else {
@@ -494,32 +493,15 @@ pub fn parse_api_keys(json_str: &str) -> Vec<UpstreamApiKey> {
         .filter_map(|v| {
             if let Some(s) = v.as_str() {
                 Some(UpstreamApiKey {
-                    id: generate_id(),
                     key: s.to_string(),
                     note: String::new(),
                     enabled: true,
                 })
             } else {
-                let mut k: UpstreamApiKey = serde_json::from_value(v.clone()).ok()?;
-                if k.id.is_empty() {
-                    k.id = generate_id();
-                }
-                Some(k)
+                serde_json::from_value(v.clone()).ok()
             }
         })
         .collect()
-}
-
-/// 为 api_keys 中缺少 id 的 key 补 UUID，返回是否需要回写
-pub fn ensure_key_ids(keys: &mut [UpstreamApiKey]) -> bool {
-    let mut changed = false;
-    for k in keys.iter_mut() {
-        if k.id.is_empty() {
-            k.id = generate_id();
-            changed = true;
-        }
-    }
-    changed
 }
 
 fn row_to_channel(row: ChannelRow) -> Channel {
@@ -571,7 +553,7 @@ const TEST_PROMPT: &str = "Hello! Please respond with a brief greeting in one se
 pub struct TestChannelRequest {
     pub model: String,
     pub test_protocol: String,
-    pub api_key_id: String,
+    pub api_key: String,
     pub stream: Option<bool>,
 }
 
@@ -588,7 +570,10 @@ pub struct TestChannelResponse {
 }
 
 /// 构建测试请求体和上游路径
-fn build_test_payload(protocol: &EndpointType, model: &str) -> Option<(serde_json::Value, &'static str)> {
+fn build_test_payload(
+    protocol: &EndpointType,
+    model: &str,
+) -> Option<(serde_json::Value, &'static str)> {
     match protocol {
         EndpointType::OpenAiChat => Some((
             serde_json::json!({
@@ -636,7 +621,10 @@ fn build_test_payload(protocol: &EndpointType, model: &str) -> Option<(serde_jso
 }
 
 /// 构建流式测试请求体
-fn build_streaming_test_payload(protocol: &EndpointType, model: &str) -> Option<(serde_json::Value, &'static str)> {
+fn build_streaming_test_payload(
+    protocol: &EndpointType,
+    model: &str,
+) -> Option<(serde_json::Value, &'static str)> {
     match protocol {
         EndpointType::OpenAiChat => Some((
             serde_json::json!({
@@ -746,18 +734,34 @@ async fn send_streaming_test(
     let start = std::time::Instant::now();
     let resp = match req_builder.json(body).send().await {
         Ok(r) => r,
-        Err(e) => return (Err(format!("请求上游失败: {}", e)), start.elapsed().as_millis() as u64, None),
+        Err(e) => {
+            return (
+                Err(format!("请求上游失败: {}", e)),
+                start.elapsed().as_millis() as u64,
+                None,
+            );
+        }
     };
 
     let status = resp.status();
     if !status.is_success() {
         let text = resp.text().await.unwrap_or_default();
-        return (Err(format!("上游返回 HTTP {}: {}", status, text)), start.elapsed().as_millis() as u64, None);
+        return (
+            Err(format!("上游返回 HTTP {}: {}", status, text)),
+            start.elapsed().as_millis() as u64,
+            None,
+        );
     }
 
     let bytes = match resp.bytes().await {
         Ok(b) => b,
-        Err(e) => return (Err(format!("读取响应失败: {}", e)), start.elapsed().as_millis() as u64, None),
+        Err(e) => {
+            return (
+                Err(format!("读取响应失败: {}", e)),
+                start.elapsed().as_millis() as u64,
+                None,
+            );
+        }
     };
 
     let text = String::from_utf8_lossy(&bytes);
@@ -777,7 +781,9 @@ async fn send_streaming_test(
                 let delta = match endpoint_type {
                     EndpointType::OpenAiChat => json["choices"][0]["delta"]["content"].as_str(),
                     EndpointType::Anthropic => json["delta"]["text"].as_str(),
-                    _ => json["delta"].as_str().or_else(|| json["choices"][0]["delta"]["content"].as_str()),
+                    _ => json["delta"]
+                        .as_str()
+                        .or_else(|| json["choices"][0]["delta"]["content"].as_str()),
                 };
                 if let Some(d) = delta {
                     full_content.push_str(d);
@@ -811,16 +817,22 @@ pub async fn test_channel(
     } else {
         build_test_payload(&endpoint_type, &req.model)
     }
-    .ok_or_else(|| ApiError::bad_request(format!("协议 {} 不支持{}测试", req.test_protocol, if use_stream { "流式" } else { "" })))?;
+    .ok_or_else(|| {
+        ApiError::bad_request(format!(
+            "协议 {} 不支持{}测试",
+            req.test_protocol,
+            if use_stream { "流式" } else { "" }
+        ))
+    })?;
 
     // 查渠道
     let channel = get_channel_by_id(&state.pool, &id).await?;
 
-    // 按 api_key_id 查找 key
+    // 按真实 key 查找，渠道测试用于验证指定 key 能否请求指定端点。
     let api_key = channel
         .api_keys
         .iter()
-        .find(|k| k.id == req.api_key_id && k.enabled)
+        .find(|k| k.key == req.api_key && k.enabled)
         .ok_or_else(|| ApiError::bad_request("指定的 API Key 不存在或已禁用"))?;
 
     // 按 test_protocol 查找 endpoint
@@ -838,8 +850,14 @@ pub async fn test_channel(
 
     if use_stream {
         let (result, latency_ms, ttft) = send_streaming_test(
-            &state.http_client, &url, &body, &endpoint_type, &api_key.key, &channel.custom_headers,
-        ).await;
+            &state.http_client,
+            &url,
+            &body,
+            &endpoint_type,
+            &api_key.key,
+            &channel.custom_headers,
+        )
+        .await;
 
         match result {
             Ok(content) => Ok(Json(ApiResponse::success(TestChannelResponse {
@@ -904,9 +922,7 @@ pub async fn test_channel(
                 let resp_body: serde_json::Value =
                     serde_json::from_str(&resp_text).unwrap_or_default();
                 if resp_body.get("error").is_some() {
-                    let error_msg = resp_body["error"]["message"]
-                        .as_str()
-                        .unwrap_or("未知错误");
+                    let error_msg = resp_body["error"]["message"].as_str().unwrap_or("未知错误");
                     return Ok(Json(ApiResponse::success(TestChannelResponse {
                         success: false,
                         message: format!("模型返回错误: {}", error_msg),

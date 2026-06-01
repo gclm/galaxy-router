@@ -50,9 +50,15 @@ class ApiClient {
       throw new Error('未授权')
     }
 
-    const data: ApiResponse<T> = await response.json()
+    const text = await response.text()
+    let data: ApiResponse<T>
+    try {
+      data = JSON.parse(text) as ApiResponse<T>
+    } catch {
+      throw new Error(text || `HTTP ${response.status}`)
+    }
 
-    if (data.code !== 0) {
+    if (!response.ok || data.code !== 0) {
       throw new Error(data.message || 'Request failed')
     }
 

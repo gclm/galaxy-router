@@ -43,7 +43,7 @@
 | 决策点 | 选择 | 原因 |
 |--------|------|------|
 | 架构模式 | 后端薄 + 前端管批量 | 与 new-api 一致，后端简单可测，前端控制灵活 |
-| Key 选择 | 用户选 `api_key_id`（稳定 ID） | 下标漂移不可靠，ID 引用增删重排不影响 |
+| Key 选择 | 用户选真实 `api_key` | 测试目的就是验证某条真实 key 能否请求端点；不再为上游 key 引入只服务测试的持久 ID |
 | 端点选择 | 用户显式选 `test_protocol` | 渠道可能有多种端点，自动匹配不可靠 |
 | 渠道测试流式 | 后端内部流式，返回单 JSON | 验证流式通路 + 记录首 token 耗时，前端无需处理 SSE |
 | 旧端点 | 删除 `/test-model` | 合并到渠道管理，避免两套逻辑 |
@@ -51,9 +51,9 @@
 
 ---
 
-## 前置变更：UpstreamApiKey 加 id 字段
+## 前置变更：保持 UpstreamApiKey 轻量
 
-### 当前结构
+### 数据结构
 
 ```rust
 pub struct UpstreamApiKey {
@@ -63,58 +63,27 @@ pub struct UpstreamApiKey {
 }
 ```
 
-### 新结构
-
-```rust
-pub struct UpstreamApiKey {
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub id: String,       // 系统生成 UUID，只读，不可由前端编辑
-    pub key: String,
-    pub note: String,
-    pub enabled: bool,
-}
-```
-
-### id 的生命周期
-
-| 阶段 | 行为 |
-|------|------|
-| 创建渠道 | 后端自动为每个 key 生成 UUID，写入 `api_keys` JSON |
-| 更新渠道 | 前端传回的 `id` 被忽略；新增的 key 自动生成 `id`；已有的 key 保留原 `id` |
-| 查询渠道 | 返回带 `id` 的完整 `api_keys`，前端用于展示和引用 |
-| 旧数据兼容 | `parse_api_keys` 反序列化时，`id` 为空字符串的 key 自动补生成 UUID 并**回写数据库**（一次性迁移） |
+不为渠道内的上游 API Key 单独生成持久 ID。真实代理请求按渠道内 enabled keys 轮询/重试；渠道测试为了定位具体 key 的连通性，直接传该真实 key，并由后端校验它属于当前渠道且启用。
 
 ### 前端展示规则
 
 - **渠道列表**：不显示 key id（太长，无意义）
-- **渠道详情/编辑**：显示 key 列表，每行显示 `note` + 脱敏 key（`...k8j6`），`id` 作为隐藏引用
-- **渠道测试弹窗**：下拉选项显示 `note + 脱敏key`，选中后传 `api_key_id`
-- **不可编辑**：`id` 字段对前端是只读的，表单中不展示输入框
+- **渠道详情/编辑**：显示 key 列表，每行显示 `note` + 脱敏 key（`...k8j6`）
+- **渠道测试弹窗**：下拉选项显示 `note + 脱敏key`，选中后传真实 `api_key`
+- **不可新增概念**：不引入 upstream key ID，避免迁移、隐藏字段回传、编辑保留 ID 等额外复杂度
 
 ### 数据迁移策略
 
-`parse_api_keys` 函数改造：
+`parse_api_keys` 函数只做旧格式兼容：
 
 ```rust
 pub fn parse_api_keys(json_str: &str) -> Vec<UpstreamApiKey> {
-    // 反序列化...
-    // 对 id 为空的 key 自动生成 UUID
-    let needs_migration = keys.iter().any(|k| k.id.is_empty());
-    if needs_migration {
-        for k in &mut keys {
-            if k.id.is_empty() {
-                k.id = generate_id();
-            }
-        }
-        // TODO: 回写数据库（在调用处处理，parse_api_keys 本身不应持有 pool）
-    }
-    keys
+    // 兼容 ["sk-xxx"] 和 [{"key":"sk-xxx","note":"","enabled":true}]
+    // 不生成、不回写 upstream key id
 }
 ```
 
-在 `create` 和 `update` handler 中：
-- `create`：序列化前为每个无 `id` 的 key 补 UUID
-- `update`：比对现有 keys 和新 keys，保留已有 `id`，新增的补 UUID
+运行库如已存在历史 `id` 字段，可通过一次性 SQL 清理 `channels.api_keys` JSON 中的 `id` 属性。
 
 ---
 
@@ -130,7 +99,7 @@ pub fn parse_api_keys(json_str: &str) -> Vec<UpstreamApiKey> {
 {
   "model": "mimo-v2.5",
   "test_protocol": "openai_chat",
-  "api_key_id": "019f1a2b-...",
+  "api_key": "sk-...",
   "stream": true
 }
 ```
@@ -139,7 +108,7 @@ pub fn parse_api_keys(json_str: &str) -> Vec<UpstreamApiKey> {
 |------|------|------|------|
 | `model` | string | 是 | 要测试的模型名 |
 | `test_protocol` | string | 是 | 端点协议类型，对应渠道 endpoints 的 type |
-| `api_key_id` | string | 是 | 渠道 `api_keys` 中的 key ID（由 `UpstreamApiKey.id` 引用） |
+| `api_key` | string | 是 | 渠道 `api_keys` 中的真实 key；后端校验它属于该渠道且启用 |
 | `stream` | boolean | 否 | 默认 false；true 时后端发流式请求测上游，记录首 token 耗时 |
 
 ### 响应
@@ -211,20 +180,18 @@ pub fn parse_api_keys(json_str: &str) -> Vec<UpstreamApiKey> {
 
 ### 后端实现步骤
 
-**步骤 1：`UpstreamApiKey` 加 `id` 字段**
+**步骤 1：保持 `UpstreamApiKey` 无 id**
 
-- 修改 `channels.rs` 中的 `UpstreamApiKey` 结构体
-- 修改 `create` handler：序列化前为每个 key 补 UUID
-- 修改 `update` handler：保留已有 `id`，新增的补 UUID
-- 修改 `parse_api_keys`：反序列化后为空 `id` 补 UUID
-- 添加迁移辅助函数：检测到旧格式数据时回写数据库
+- `channels.rs` 中的 `UpstreamApiKey` 只保留 `key` / `note` / `enabled`
+- `create` / `update` 原样序列化前端提交的 key 列表
+- `parse_api_keys` 只兼容旧字符串数组，不再生成或回写 id
 
 **步骤 2：在 `channels.rs` 新增 `test_channel` handler**
 
 - 路径参数 `id` 取渠道 ID
-- 请求体 `TestChannelRequest { model, test_protocol, api_key_id, stream }`
+- 请求体 `TestChannelRequest { model, test_protocol, api_key, stream }`
 - 查渠道取 `api_keys`、`endpoints`、`custom_headers`
-- 校验：渠道存在且启用、`api_key_id` 匹配到 key、`test_protocol` 匹配到 endpoint
+- 校验：渠道存在且启用、`api_key` 匹配到渠道内 enabled key、`test_protocol` 匹配到 endpoint
 - 构建（流式/非流式）请求 → 发送到上游 → 解析响应
 
 **步骤 3：复用 `test_model.rs` 的核心逻辑**
@@ -278,7 +245,7 @@ pub fn parse_api_keys(json_str: &str) -> Vec<UpstreamApiKey> {
 
 **功能**：
 
-1. **Key 选择**：下拉展示渠道所有 api_keys（显示 `note` + 脱敏 key 如 `...k8j6`），选中后传 `api_key_id`
+1. **Key 选择**：下拉展示渠道所有 api_keys（显示 `note` + 脱敏 key 如 `...k8j6`），选中后传真实 `api_key`
 2. **协议选择**：下拉展示渠道已配置的 endpoints（显示 `openai_chat` / `anthropic` 等）
 3. **流式开关**：可选，开启后后端内部用流式请求测试
 4. **模型列表**：展示渠道所有 models（支持搜索过滤）
@@ -296,11 +263,11 @@ pub fn parse_api_keys(json_str: &str) -> Vec<UpstreamApiKey> {
 ```
 渠道编辑页 → [测试] 按钮 → ChannelTestDialog
   ├─ 加载渠道数据（api_keys, endpoints, models）
-  ├─ 用户选 key（传 api_key_id）+ protocol + stream
+  ├─ 用户选 key（传 api_key）+ protocol + stream
   ├─ 展示模型列表（可搜索/过滤）
   ├─ 用户勾选模型 → 批量测试
   │   └─ Promise.allSettled(
-  │        models.map(m => POST /channels/{id}/test { model, test_protocol, api_key_id, stream })
+  │        models.map(m => POST /channels/{id}/test { model, test_protocol, api_key, stream })
   │      )
   └─ 每个模型独立更新状态
 ```
@@ -310,9 +277,9 @@ pub fn parse_api_keys(json_str: &str) -> Vec<UpstreamApiKey> {
 | 场景 | 展示内容 | 说明 |
 |------|---------|------|
 | 渠道列表 | 不显示 key | 信息密度高，无需 |
-| 渠道详情 | `note` + `...k8j6`（脱敏） | `id` 隐藏，不可编辑 |
-| 渠道编辑 | `note` 输入框 + `key` 密码框 + `enabled` 开关 | `id` 不展示，前端回传时携带 |
-| 测试弹窗 Key 下拉 | `note` + `...k8j6` | 选中后传 `api_key_id` |
+| 渠道详情 | `note` + `...k8j6`（脱敏） | 不显示完整 key |
+| 渠道编辑 | `note` 输入框 + `key` 密码框 + `enabled` 开关 | 不携带 upstream key id |
+| 测试弹窗 Key 下拉 | `note` + `...k8j6` | 选中后传真实 `api_key` |
 
 ---
 
@@ -440,7 +407,7 @@ Max Tokens:  [ 1024 ]  (数字输入, 1-4096, 可空)
 
 ## 实施顺序
 
-1. **前置：`UpstreamApiKey` 加 `id`** → 结构体改造 + create/update handler 补 UUID + 旧数据迁移
+1. **前置：`UpstreamApiKey` 保持无 id** → 移除测试专用 key id + 清理旧 JSON id 字段
 2. **后端渠道测试重构** → 删除旧端点，新增 `/channels/{id}/test`，支持流式
 3. **前端渠道详情页** → 新 `ChannelDetail` 组件，只读弹窗
 4. **前端渠道测试面板** → 新组件，集成到渠道编辑页

@@ -55,7 +55,6 @@ export interface CustomHeader {
 }
 
 export interface UpstreamApiKey {
-  id?: string
   key: string
   note?: string
   enabled?: boolean
@@ -114,7 +113,7 @@ export interface FetchModelsRequest {
 export interface TestChannelRequest {
   model: string
   test_protocol: string
-  api_key_id: string
+  api_key: string
   stream?: boolean
 }
 
@@ -173,6 +172,7 @@ export interface UpdateGroupRequest {
   max_retries?: number
   first_token_timeout_secs?: number
   enabled?: boolean
+  items?: CreateGroupItemRequest[]
 }
 
 export interface AddGroupItemRequest {

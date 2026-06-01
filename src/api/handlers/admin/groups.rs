@@ -75,6 +75,7 @@ pub struct UpdateGroupRequest {
     pub max_retries: Option<i32>,
     pub first_token_timeout_secs: Option<i32>,
     pub enabled: Option<bool>,
+    pub items: Option<Vec<CreateGroupItemRequest>>,
 }
 
 /// 添加分组项请求
@@ -293,6 +294,18 @@ pub async fn update(
         return Err(ApiError::not_found("分组不存在"));
     }
 
+    if let Some(items) = &req.items
+        && items.is_empty()
+    {
+        return Err(ApiError::bad_request("至少需要一个分组项"));
+    }
+
+    let mut tx = state
+        .pool
+        .begin()
+        .await
+        .map_err(|e| ApiError::internal_error(e.to_string()))?;
+
     let mut builder = sqlx::QueryBuilder::new("UPDATE groups SET ");
     let mut separated = builder.separated(", ");
 
@@ -328,7 +341,46 @@ pub async fn update(
 
     builder
         .build()
-        .execute(&state.pool)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| ApiError::internal_error(e.to_string()))?;
+
+    if let Some(items) = &req.items {
+        sqlx::query("DELETE FROM group_items WHERE group_id = ?")
+            .bind(&id)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| ApiError::internal_error(e.to_string()))?;
+
+        for item in items {
+            let item_id = generate_id();
+            sqlx::query(
+                r#"
+                INSERT INTO group_items (id, group_id, channel_id, model_name, priority, weight)
+                VALUES (?, ?, ?, ?, ?, ?)
+                "#,
+            )
+            .bind(&item_id)
+            .bind(&id)
+            .bind(&item.channel_id)
+            .bind(&item.model_name)
+            .bind(item.priority.unwrap_or(1))
+            .bind(item.weight.unwrap_or(100))
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| {
+                if e.to_string().contains("FOREIGN KEY constraint failed") {
+                    ApiError::bad_request("渠道不存在")
+                } else if e.to_string().contains("UNIQUE constraint failed") {
+                    ApiError::conflict("分组项重复")
+                } else {
+                    ApiError::internal_error(e.to_string())
+                }
+            })?;
+        }
+    }
+
+    tx.commit()
         .await
         .map_err(|e| ApiError::internal_error(e.to_string()))?;
 

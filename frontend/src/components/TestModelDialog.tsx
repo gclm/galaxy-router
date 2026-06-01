@@ -34,7 +34,7 @@ function maskKey(key: string) {
 }
 
 export function TestModelDialog({ channel, open, onOpenChange }: TestModelDialogProps) {
-  const [selectedKeyId, setSelectedKeyId] = useState('')
+  const [selectedKey, setSelectedKey] = useState('')
   const [protocol, setProtocol] = useState('')
   const [useStream, setUseStream] = useState(false)
   const [searchTerm, setSearchTerm] = useState('')
@@ -43,7 +43,7 @@ export function TestModelDialog({ channel, open, onOpenChange }: TestModelDialog
   const [isBatchTesting, setIsBatchTesting] = useState(false)
 
   const resetState = useCallback(() => {
-    setSelectedKeyId('')
+    setSelectedKey('')
     setProtocol('')
     setUseStream(false)
     setSearchTerm('')
@@ -61,7 +61,7 @@ export function TestModelDialog({ channel, open, onOpenChange }: TestModelDialog
     .filter(([key]) => endpointTypes.has(key as EndpointType))
     .map(([key, label]) => ({ value: key as EndpointType, label }))
 
-  const currentKeyId = selectedKeyId || enabledKeys[0]?.id || ''
+  const currentKey = selectedKey || enabledKeys[0]?.key || ''
   const currentProtocol = protocol || availableProtocols[0]?.value || ''
 
   const filteredModels = useMemo(() => {
@@ -84,7 +84,7 @@ export function TestModelDialog({ channel, open, onOpenChange }: TestModelDialog
   }
 
   const testSingle = async (model: string): Promise<ModelTestResult | undefined> => {
-    if (!channel || !currentKeyId || !currentProtocol) return undefined
+    if (!channel || !currentKey || !currentProtocol) return undefined
 
     markTesting(model, true)
     updateResult(model, { status: 'testing' })
@@ -94,7 +94,7 @@ export function TestModelDialog({ channel, open, onOpenChange }: TestModelDialog
       const res: TestChannelResponse = await channelsApi.testChannel(channel.id, {
         model,
         test_protocol: currentProtocol,
-        api_key_id: currentKeyId,
+        api_key: currentKey,
         stream: useStream || undefined,
       })
       finalResult = {
@@ -152,12 +152,12 @@ export function TestModelDialog({ channel, open, onOpenChange }: TestModelDialog
             <div className="space-y-1.5">
               <label className="text-sm font-medium">API Key</label>
               <select
-                value={currentKeyId}
-                onChange={(e) => setSelectedKeyId(e.target.value)}
+                value={currentKey}
+                onChange={(e) => setSelectedKey(e.target.value)}
                 className="input"
               >
                 {enabledKeys.map((k) => (
-                  <option key={k.id} value={k.id}>
+                  <option key={k.key} value={k.key}>
                     {k.note || '未命名'} {maskKey(k.key)}
                   </option>
                 ))}
@@ -224,7 +224,7 @@ export function TestModelDialog({ channel, open, onOpenChange }: TestModelDialog
               <Button
                 size="sm"
                 onClick={handleBatchTest}
-                disabled={isAnyTesting || !currentKeyId || !currentProtocol || filteredModels.length === 0}
+                disabled={isAnyTesting || !currentKey || !currentProtocol || filteredModels.length === 0}
               >
                 {isBatchTesting ? (
                   <>
@@ -292,7 +292,7 @@ export function TestModelDialog({ channel, open, onOpenChange }: TestModelDialog
                             size="sm"
                             className="h-7 text-xs"
                             onClick={() => testSingle(model)}
-                            disabled={isTesting || isBatchTesting || !currentKeyId || !currentProtocol}
+                            disabled={isTesting || isBatchTesting || !currentKey || !currentProtocol}
                           >
                             {isTesting ? (
                               <Loader2 className="h-3 w-3 animate-spin" />

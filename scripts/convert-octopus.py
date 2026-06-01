@@ -25,11 +25,15 @@ def convert(input_path: str, output_path: str):
     with open(input_path, encoding="utf-8") as f:
         src = json.load(f)
 
-    # channel_id(int) → keys list
-    channel_keys_map: dict[int, list[str]] = {}
+    # channel_id(int) → upstream api key objects
+    channel_keys_map: dict[int, list[dict]] = {}
     for ck in src.get("channel_keys", []):
         if ck.get("enabled", True):
-            channel_keys_map.setdefault(ck["channel_id"], []).append(ck["channel_key"])
+            channel_keys_map.setdefault(ck["channel_id"], []).append({
+                "key": ck["channel_key"],
+                "note": ck.get("name", "") or ck.get("remark", "") or "",
+                "enabled": True,
+            })
 
     # channel_id(int) → channel dict
     channel_map: dict[int, dict] = {}
