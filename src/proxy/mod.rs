@@ -790,6 +790,60 @@ pub fn extract_usage(
     }
 }
 
+/// 估算 token 数（当上游不返回 usage 时作为兜底）
+/// 混合中英文内容的经验值：约 1 token ≈ 3 字节
+fn estimate_tokens(text: &str) -> i32 {
+    if text.is_empty() {
+        return 0;
+    }
+    ((text.len() as f64) / 3.0).ceil() as i32
+}
+
+/// 从请求体提取文本（兼容 OpenAI / Anthropic 格式）
+fn extract_request_text(body: &serde_json::Value) -> String {
+    let mut text = String::new();
+    if let Some(sys) = body["system"].as_str() {
+        text.push_str(sys);
+        text.push(' ');
+    }
+    if let Some(messages) = body["messages"].as_array() {
+        for msg in messages {
+            if let Some(content) = msg["content"].as_str() {
+                text.push_str(content);
+                text.push(' ');
+            } else if let Some(parts) = msg["content"].as_array() {
+                for part in parts {
+                    if let Some(t) = part["text"].as_str() {
+                        text.push_str(t);
+                        text.push(' ');
+                    }
+                }
+            }
+        }
+    }
+    text
+}
+
+/// 从非流式响应体提取文本（兼容 OpenAI / Anthropic 格式）
+fn extract_response_text(body: &serde_json::Value) -> String {
+    let mut text = String::new();
+    if let Some(choices) = body["choices"].as_array() {
+        for choice in choices {
+            if let Some(content) = choice["message"]["content"].as_str() {
+                text.push_str(content);
+            }
+        }
+    }
+    if let Some(content) = body["content"].as_array() {
+        for block in content {
+            if let Some(t) = block["text"].as_str() {
+                text.push_str(t);
+            }
+        }
+    }
+    text
+}
+
 /// 选择渠道（支持重试排除）
 async fn select_channel_for_proxy(
     state: &ProxyState,
@@ -1103,7 +1157,14 @@ async fn execute_proxy_request(
 
     let (input_tokens, output_tokens, cache_read, cache_creation) =
         if (200..400).contains(&status_u16) {
-            extract_usage(&body_value, &prepared.upstream_endpoint)
+            let (i, o, cr, cc) = extract_usage(&body_value, &prepared.upstream_endpoint);
+            if i == 0 && o == 0 {
+                let req_text = extract_request_text(body);
+                let resp_text = extract_response_text(&body_value);
+                (estimate_tokens(&req_text), estimate_tokens(&resp_text), cr, cc)
+            } else {
+                (i, o, cr, cc)
+            }
         } else {
             (0, 0, 0, 0)
         };
@@ -1449,17 +1510,19 @@ async fn execute_proxy_stream(
     let needs_conversion = prepared.needs_conversion;
     let api_key_id_clone = api_key_id.map(|s| s.to_string());
     let request_content_clone = serde_json::to_string(&body).ok();
+    let req_text_for_estimation = extract_request_text(body);
 
     let (stats_tx, stats_rx) = tokio::sync::oneshot::channel::<(
-        i32,
-        i32,
-        i32,
-        i32,
-        Option<f64>,
-        i32,
-        Option<String>,
-        Option<String>,
-        Option<i32>,
+        i32,  // status_code
+        i32,  // input_tokens
+        i32,  // output_tokens
+        i32,  // cache_read
+        i32,  // cache_creation
+        Option<f64>,  // cost
+        i32,  // latency_ms
+        Option<String>,  // error_message
+        Option<String>,  // response_content
+        Option<i32>,  // ttft_ms
     )>();
 
     // 提前 clone 给 spawn 任务使用（async_stream 会 move 原值）
@@ -1670,7 +1733,7 @@ async fn execute_proxy_stream(
 
         // 流结束后发送统计到 oneshot
         let latency_ms = start_time.elapsed().as_millis() as i64;
-        let (input_tokens, output_tokens, cache_read, cache_creation) = match &upstream_endpoint_clone {
+        let (mut input_tokens, mut output_tokens, cache_read, cache_creation) = match &upstream_endpoint_clone {
             EndpointType::Anthropic => {
                 let input = input_usage.as_ref()
                     .and_then(|u| u["input_tokens"].as_i64())
@@ -1698,6 +1761,12 @@ async fn execute_proxy_stream(
                     .unwrap_or((0, 0, 0, 0))
             }
         };
+
+        // 兜底估算：上游不返回 usage 时从内容长度推算
+        if input_tokens == 0 && output_tokens == 0 {
+            input_tokens = estimate_tokens(&req_text_for_estimation);
+            output_tokens = estimate_tokens(&collected_text);
+        }
 
         let cost = if input_tokens > 0 || output_tokens > 0 {
             Some(state_clone.model_registry.calculate_cost(
@@ -1750,6 +1819,7 @@ async fn execute_proxy_stream(
             input_tokens,
             output_tokens,
             cache_read,
+            cache_creation,
             cost,
             latency_ms as i32,
             error_message,
@@ -1765,7 +1835,8 @@ async fn execute_proxy_stream(
                 status_code,
                 input_tokens,
                 output_tokens,
-                _cache_read,
+                cache_read,
+                cache_creation,
                 cost,
                 latency_ms,
                 error_message,
@@ -1794,8 +1865,8 @@ async fn execute_proxy_stream(
                     actual_model: Some(sc_target_model),
                     input_tokens,
                     output_tokens,
-                    cache_read_tokens: 0,
-                    cache_creation_tokens: 0,
+                    cache_read_tokens: cache_read,
+                    cache_creation_tokens: cache_creation,
                     cost,
                     latency_ms: Some(latency_ms),
                     ttft_ms,
@@ -2194,6 +2265,13 @@ fn apply_sse_usage(
     }
 }
 
+/// 提取 SSE 行字段值（兼容 `field: value` 和 `field:value` 两种格式）
+#[inline]
+fn sse_field<'a>(line: &'a str, field: &str) -> Option<&'a str> {
+    let colon = format!("{}:", field);
+    line.strip_prefix(&colon).map(|rest| rest.strip_prefix(' ').unwrap_or(rest))
+}
+
 /// SSE 中提取到的 usage 来源
 #[derive(Debug, Clone)]
 enum SseUsageSource {
@@ -2210,7 +2288,7 @@ fn extract_usage_from_sse(text: &str, endpoint_type: &EndpointType) -> Option<Ss
     match endpoint_type {
         EndpointType::OpenAiChat | EndpointType::OpenAiResponse => {
             for line in text.lines() {
-                if let Some(data) = line.strip_prefix("data: ")
+                if let Some(data) = sse_field(line, "data")
                     && let Ok(parsed) = serde_json::from_str::<serde_json::Value>(data)
                     && parsed.get("usage").is_some()
                 {
@@ -2223,19 +2301,17 @@ fn extract_usage_from_sse(text: &str, endpoint_type: &EndpointType) -> Option<Ss
             let mut event_type = "";
             let mut data = "";
             for line in text.lines() {
-                if let Some(stripped) = line.strip_prefix("event: ") {
+                if let Some(stripped) = sse_field(line, "event") {
                     event_type = stripped;
-                } else if let Some(stripped) = line.strip_prefix("data: ") {
+                } else if let Some(stripped) = sse_field(line, "data") {
                     data = stripped;
                 }
             }
             if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(data) {
                 if event_type == "message_start" {
-                    // 标准格式: message.usage.input_tokens
                     if let Some(usage) = parsed.get("message").and_then(|m| m.get("usage")) {
                         return Some(SseUsageSource::AnthropicInput(usage.clone()));
                     }
-                    // 兼容: 某些供应商 usage 在根级
                     if let Some(usage) = parsed.get("usage") {
                         return Some(SseUsageSource::AnthropicInput(usage.clone()));
                     }
@@ -2258,9 +2334,9 @@ fn extract_error_from_sse(text: &str, _endpoint_type: &EndpointType) -> Option<S
 
     for line in text.lines() {
         let line = line.trim_end_matches('\r');
-        if let Some(stripped) = line.strip_prefix("event: ") {
+        if let Some(stripped) = sse_field(line, "event") {
             event_type = stripped.trim();
-        } else if let Some(stripped) = line.strip_prefix("data: ") {
+        } else if let Some(stripped) = sse_field(line, "data") {
             data_lines.push(stripped.trim_start());
         }
     }
@@ -2360,7 +2436,7 @@ fn collect_sse_content(
     match endpoint_type {
         EndpointType::OpenAiChat | EndpointType::OpenAiResponse => {
             for line in text.lines() {
-                if let Some(data) = line.strip_prefix("data: ") {
+                if let Some(data) = sse_field(line, "data") {
                     if data == "[DONE]" {
                         continue;
                     }
@@ -2392,9 +2468,9 @@ fn collect_sse_content(
             let mut event_type = "";
             let mut data = "";
             for line in text.lines() {
-                if let Some(stripped) = line.strip_prefix("event: ") {
+                if let Some(stripped) = sse_field(line, "event") {
                     event_type = stripped.trim();
-                } else if let Some(stripped) = line.strip_prefix("data: ") {
+                } else if let Some(stripped) = sse_field(line, "data") {
                     data = stripped.trim_start();
                 }
             }
