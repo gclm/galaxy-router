@@ -1022,20 +1022,20 @@ async fn prepare_proxy_request(
         reqwest_headers.insert(key.clone(), value.clone());
     }
 
-    reqwest_headers.insert("Content-Type", "application/json".parse().unwrap());
+    reqwest_headers.insert("Content-Type", "application/json".parse().expect("static value"));
 
     if needs_conversion {
         get_outbound(&upstream_endpoint).set_auth_header(&mut reqwest_headers, api_key);
     } else {
         match client_endpoint {
             EndpointType::Anthropic => {
-                reqwest_headers.insert("x-api-key", api_key.parse().unwrap());
-                reqwest_headers.insert("anthropic-version", "2023-06-01".parse().unwrap());
+                reqwest_headers.insert("x-api-key", api_key.parse().expect("api_key validated at save"));
+                reqwest_headers.insert("anthropic-version", "2023-06-01".parse().expect("static value"));
             }
             _ => {
                 reqwest_headers.insert(
                     "Authorization",
-                    format!("Bearer {}", api_key).parse().unwrap(),
+                    format!("Bearer {}", api_key).parse().expect("api_key validated at save"),
                 );
             }
         }
@@ -2350,6 +2350,15 @@ pub fn format_proxy_error(e: ProxyError, format: &ErrorFormat) -> axum::response
     }
 }
 
+/// 验证字符串可作为 HTTP header value
+/// 用于在保存上游 API Key 时一次性拦截含 CRLF / 控制字符的输入，
+/// 避免转发时 `HeaderValue::from_str(...).unwrap()` panic。
+pub(crate) fn validate_header_value(s: &str) -> Result<(), String> {
+    reqwest::header::HeaderValue::from_str(s)
+        .map(|_| ())
+        .map_err(|e| format!("含非法 header 字符 ({e})"))
+}
+
 fn is_key_retryable_upstream_error(status: StatusCode, body: &str) -> bool {
     if matches!(
         status,
@@ -2412,6 +2421,16 @@ mod tests {
             StatusCode::INTERNAL_SERVER_ERROR,
             r#"{"error":{"message":"upstream overloaded"}}"#
         ));
+    }
+
+    #[test]
+    fn validate_header_value_accepts_normal_and_rejects_crlf() {
+        assert!(validate_header_value("sk-abc.123_OK-9").is_ok());
+        assert!(validate_header_value("sk-abc/def+ghi=").is_ok());
+        assert!(validate_header_value("sk-abc").is_ok());
+        assert!(validate_header_value("sk-abc\r\nfoo").is_err());
+        assert!(validate_header_value("sk-abc\0").is_err());
+        assert!(validate_header_value("sk-abc\x7f").is_err());
     }
 }
 

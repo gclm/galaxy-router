@@ -279,6 +279,10 @@ pub async fn create(
     if req.endpoints.is_empty() {
         return Err(ApiError::bad_request("至少需要一个端点"));
     }
+    for k in &req.api_keys {
+        crate::proxy::validate_header_value(&k.key)
+            .map_err(|e| ApiError::bad_request(format!("API Key 非法: {e}")))?;
+    }
 
     let id = generate_id();
     let api_keys_json = serde_json::to_string(&req.api_keys)
@@ -338,7 +342,7 @@ pub async fn get(
 pub async fn update(
     State(state): State<ChannelState>,
     Path(id): Path<String>,
-    Json(mut req): Json<UpdateChannelRequest>,
+    Json(req): Json<UpdateChannelRequest>,
 ) -> Result<Json<ApiResponse<Channel>>, (StatusCode, Json<ApiError>)> {
     // 检查渠道是否存在
     let existing = sqlx::query_scalar::<_, String>("SELECT id FROM channels WHERE id = ?")
@@ -361,7 +365,11 @@ pub async fn update(
         separated.push_bind_unseparated(name);
         has_update = true;
     }
-    if let Some(ref mut api_keys) = req.api_keys {
+    if let Some(ref api_keys) = req.api_keys {
+        for k in api_keys {
+            crate::proxy::validate_header_value(&k.key)
+                .map_err(|e| ApiError::bad_request(format!("API Key 非法: {e}")))?;
+        }
         separated.push("api_keys = ");
         separated.push_bind_unseparated(serde_json::to_string(api_keys).unwrap_or_default());
         has_update = true;
