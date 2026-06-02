@@ -59,7 +59,11 @@ pub async fn create_router(
         cache: shared_cache.clone(),
     };
 
-    let api_key_state = ApiKeyState { pool: pool.clone() };
+    let api_key_cache = crate::api::middleware::ApiKeyCache::new();
+    let api_key_state = ApiKeyState {
+        pool: pool.clone(),
+        api_key_cache,
+    };
 
     let stats_state = StatsApiState {
         stats: StatsState::new(pool.clone(), config.server.timezone_offset),

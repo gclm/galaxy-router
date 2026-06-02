@@ -151,6 +151,7 @@ impl ProxyState {
         if let Some(hash) = session_hash
             && let Some(channel_id) = self.lb_state.get_sticky_session(hash).await
             && !exclude_ids.contains(&channel_id)
+            && self.lb_state.is_channel_available(&channel_id).await
             && let Ok(channel) = self.get_channel(&channel_id).await
             && let Some(endpoint) = find_endpoint(&channel)
         {

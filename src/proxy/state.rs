@@ -95,6 +95,8 @@ pub struct LoadBalancerState {
     pub blacklist_threshold: u64,
     /// 拉黑时长（分钟）
     pub blacklist_minutes: i64,
+    /// 粘性会话最大容量
+    max_sticky_sessions: usize,
 }
 
 impl Default for LoadBalancerState {
@@ -111,6 +113,7 @@ impl LoadBalancerState {
             sticky_ttl_secs: 3600,
             blacklist_threshold: 3,
             blacklist_minutes: 10,
+            max_sticky_sessions: 10000,
         }
     }
 
@@ -177,6 +180,23 @@ impl LoadBalancerState {
     /// 设置粘性会话
     pub async fn set_sticky_session(&self, session_hash: &str, channel_id: &str) {
         let mut sessions = self.sticky_sessions.write().await;
+
+        // 容量检查：超过上限时清理过期条目
+        if sessions.len() >= self.max_sticky_sessions {
+            let now = Utc::now();
+            sessions.retain(|_, session| now < session.expires_at);
+
+            // 清理后仍然满，拒绝新 session
+            if sessions.len() >= self.max_sticky_sessions {
+                tracing::warn!(
+                    "粘性会话已满（{}），拒绝新 session: {}",
+                    self.max_sticky_sessions,
+                    session_hash
+                );
+                return;
+            }
+        }
+
         let now = Utc::now();
         sessions.insert(
             session_hash.to_string(),
@@ -192,6 +212,15 @@ impl LoadBalancerState {
         let mut sessions = self.sticky_sessions.write().await;
         let now = Utc::now();
         sessions.retain(|_, session| now < session.expires_at);
+    }
+
+    /// 检查渠道是否可用（供粘性会话路径使用）
+    pub async fn is_channel_available(&self, channel_id: &str) -> bool {
+        let states = self.channel_states.read().await;
+        states
+            .get(channel_id)
+            .map(|s| s.is_available())
+            .unwrap_or(true) // 无状态记录视为可用
     }
 
     /// 清理过期的拉黑

@@ -22,6 +22,12 @@ impl StatsState {
     }
 
     fn tz_modifier(&self) -> String {
+        // 验证时区偏移量在合理范围内（-12 到 +14 小时）
+        assert!(
+            (-12..=14).contains(&self.timezone_offset),
+            "时区偏移量超出合理范围: {}",
+            self.timezone_offset
+        );
         if self.timezone_offset >= 0 {
             format!("+{} hours", self.timezone_offset)
         } else {

@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
 
 use crate::api::{ApiError, ApiResponse, response::generate_id};
+use crate::api::middleware::ApiKeyCache;
 
 /// API Key
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -39,6 +40,7 @@ pub struct UpdateApiKeyRequest {
 #[derive(Clone)]
 pub struct ApiKeyState {
     pub pool: SqlitePool,
+    pub api_key_cache: ApiKeyCache,
 }
 
 /// 空字符串转 None
@@ -168,16 +170,14 @@ pub async fn update(
     Path(id): Path<String>,
     Json(req): Json<UpdateApiKeyRequest>,
 ) -> Result<Json<ApiResponse<ApiKey>>, (StatusCode, Json<ApiError>)> {
-    // 检查 API Key 是否存在
-    let existing = sqlx::query_scalar::<_, String>("SELECT id FROM api_keys WHERE id = ?")
+    // 检查 API Key 是否存在，并获取当前 api_key 值用于清除缓存
+    let existing = sqlx::query_scalar::<_, String>("SELECT api_key FROM api_keys WHERE id = ?")
         .bind(&id)
         .fetch_optional(&state.pool)
         .await
         .map_err(|e| ApiError::internal_error(e.to_string()))?;
 
-    if existing.is_none() {
-        return Err(ApiError::not_found("API Key 不存在"));
-    }
+    let api_key_value = existing.ok_or_else(|| ApiError::not_found("API Key 不存在"))?;
 
     // 构建更新语句
     let mut builder = sqlx::QueryBuilder::new("UPDATE api_keys SET ");
@@ -215,6 +215,9 @@ pub async fn update(
         .await
         .map_err(|e| ApiError::internal_error(e.to_string()))?;
 
+    // 清除缓存，确保下次请求获取最新状态
+    state.api_key_cache.invalidate(&api_key_value).await;
+
     // 返回更新后的 API Key
     get(State(state), Path(id)).await
 }
@@ -224,6 +227,16 @@ pub async fn delete(
     State(state): State<ApiKeyState>,
     Path(id): Path<String>,
 ) -> Result<Json<ApiResponse<()>>, (StatusCode, Json<ApiError>)> {
+    // 先获取 api_key 值用于清除缓存
+    let api_key_value =
+        sqlx::query_scalar::<_, String>("SELECT api_key FROM api_keys WHERE id = ?")
+            .bind(&id)
+            .fetch_optional(&state.pool)
+            .await
+            .map_err(|e| ApiError::internal_error(e.to_string()))?;
+
+    let api_key_value = api_key_value.ok_or_else(|| ApiError::not_found("API Key 不存在"))?;
+
     let result = sqlx::query("DELETE FROM api_keys WHERE id = ?")
         .bind(&id)
         .execute(&state.pool)
@@ -233,6 +246,9 @@ pub async fn delete(
     if result.rows_affected() == 0 {
         return Err(ApiError::not_found("API Key 不存在"));
     }
+
+    // 清除缓存
+    state.api_key_cache.invalidate(&api_key_value).await;
 
     Ok(Json(crate::api::response::success_empty()))
 }

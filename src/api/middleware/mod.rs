@@ -77,6 +77,12 @@ impl ApiKeyCache {
             },
         );
     }
+
+    /// 清除指定 API Key 的缓存
+    pub async fn invalidate(&self, key: &str) {
+        let mut cache = self.keys.write().await;
+        cache.remove(key);
+    }
 }
 
 /// 从请求中提取 Claims（管理 API 认证）
