@@ -137,11 +137,12 @@ impl CircuitBreaker {
         let key = format!("{}:{}", channel_id, key_hint);
         let mut entries = self.entries.write().await;
 
-        if let Some(entry) = entries.get_mut(&key) {
-            if entry.state == CircuitState::HalfOpen && !entry.half_open_probe {
-                entry.half_open_probe = true;
-                return true;
-            }
+        if let Some(entry) = entries.get_mut(&key)
+            && entry.state == CircuitState::HalfOpen
+            && !entry.half_open_probe
+        {
+            entry.half_open_probe = true;
+            return true;
         }
         false
     }

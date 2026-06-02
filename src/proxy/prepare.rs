@@ -55,6 +55,7 @@ pub(super) fn estimate_tokens(text: &str) -> i32 {
 }
 
 /// 估算 token 数（指定模型）
+#[allow(dead_code)]
 pub(super) fn estimate_tokens_for_model(text: &str, model: &str) -> i32 {
     if text.is_empty() {
         return 0;
