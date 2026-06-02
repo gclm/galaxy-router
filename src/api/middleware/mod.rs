@@ -3,6 +3,8 @@ use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::RwLock;
 
+pub mod cors;
+
 use axum::{
     Json, RequestPartsExt,
     body::Body,

@@ -11,6 +11,7 @@ const tabs = [
   { id: 'account', label: '账户安全', icon: Shield },
   { id: 'scheduler', label: '调度策略', icon: Sliders },
   { id: 'sticky-session', label: '粘性会话', icon: TrendingUp },
+  { id: 'cors', label: '跨域设置', icon: Globe },
   { id: 'backup', label: '数据备份', icon: Database },
   { id: 'proxy', label: '上游代理', icon: Globe },
   { id: 'infra', label: '基础配置', icon: Server },
@@ -41,6 +42,9 @@ const fieldDefs: Record<string, FieldDef[]> = {
   sticky_session: [
     { key: 'sticky_session.enabled', label: '启用粘性会话', description: '同一 session_hash 路由到同一上游', type: 'switch' },
     { key: 'sticky_session.ttl_seconds', label: '会话保持时间', type: 'number', min: 60, max: 86400, unit: '秒' },
+  ],
+  cors: [
+    { key: 'cors.allow_origins', label: '允许的跨域来源', description: '逗号分隔域名列表，空=禁止跨域，*=允许所有（如 "https://example.com,http://localhost:3000"）', type: 'text' },
   ],
   proxy: [
     { key: 'proxy.enabled', label: '启用上游代理', description: '通过代理服务器转发请求到上游 API', type: 'switch' },
@@ -126,6 +130,9 @@ export function Settings() {
         )}
         {activeTab === 'sticky-session' && (
           <FieldSetTab category="sticky_session" settingMap={settingMap} onUpdate={handleUpdate} />
+        )}
+        {activeTab === 'cors' && (
+          <CorsTab settingMap={settingMap} onUpdate={handleUpdate} />
         )}
         {activeTab === 'backup' && <BackupTab />}
         {activeTab === 'proxy' && (
@@ -499,6 +506,139 @@ function InlineNumberEdit({ value, onSave, min, max, step, unit }: {
       <Button size="sm" onClick={save} disabled={pending}>保存</Button>
       <Button size="sm" variant="ghost" onClick={() => setEditing(false)}>取消</Button>
     </div>
+  )
+}
+
+/* ── 跨域设置（标签化输入） ── */
+
+function CorsTab({
+  settingMap,
+  onUpdate,
+}: {
+  settingMap: Record<string, SettingItem>
+  onUpdate: (key: string, value: string) => Promise<void>
+}) {
+  const corsValue = settingMap['cors.allow_origins']?.value ?? ''
+  const [inputValue, setInputValue] = useState('')
+  const [pending, setPending] = useState(false)
+  const [savedValue, setSavedValue] = useState(corsValue)
+
+  useEffect(() => {
+    setSavedValue(corsValue)
+  }, [corsValue])
+
+  const originsList = useMemo(() => {
+    const value = savedValue.trim()
+    if (!value) return []
+    if (value === '*') return ['*']
+    return Array.from(new Set(
+      value.split(/[,，]/).map(item => item.trim()).filter(Boolean)
+    ))
+  }, [savedValue])
+
+  const handleAdd = () => {
+    const raw = inputValue.trim()
+    if (!raw) return
+    const newOrigins = raw.split(/[,，]/).map(s => s.trim()).filter(Boolean)
+    if (newOrigins.includes('*')) {
+      saveOrigins(['*'])
+    } else {
+      saveOrigins([...originsList, ...newOrigins])
+    }
+    setInputValue('')
+  }
+
+  const handleRemove = (origin: string) => {
+    const next = originsList.filter(o => o !== origin)
+    saveOrigins(next)
+  }
+
+  const handlePreset = (preset: string) => {
+    saveOrigins(preset === '*' ? ['*'] : [])
+  }
+
+  const saveOrigins = async (origins: string[]) => {
+    const normalized = Array.from(new Set(origins.map(o => o.trim()).filter(Boolean)))
+    const value = normalized.includes('*') ? '*' : normalized.join(',')
+    setPending(true)
+    try {
+      await onUpdate('cors.allow_origins', value)
+      setSavedValue(value)
+    } finally {
+      setPending(false)
+    }
+  }
+
+  return (
+    <section className="rounded-2xl border bg-card p-5 space-y-4">
+      <h2 className="text-sm font-medium text-muted-foreground flex items-center gap-2">
+        <Globe className="h-4 w-4" />
+        跨域白名单
+      </h2>
+
+      <p className="text-xs text-muted-foreground">
+        控制哪些域名可以通过浏览器访问本服务的 API。
+        为空时禁止所有跨域请求，<code className="rounded bg-muted px-1">{'*'}</code> 表示允许所有来源。
+      </p>
+
+      {/* 快捷操作 */}
+      <div className="flex gap-2">
+        <Button
+          size="sm"
+          variant={savedValue === '*' ? 'default' : 'outline'}
+          onClick={() => handlePreset('*')}
+          disabled={pending}
+        >
+          允许所有 ({'*'})
+        </Button>
+        <Button
+          size="sm"
+          variant={savedValue === '' ? 'default' : 'outline'}
+          onClick={() => handlePreset('')}
+          disabled={pending}
+        >
+          禁止跨域
+        </Button>
+      </div>
+
+      {/* 已添加的域名标签 */}
+      {originsList.length > 0 && (
+        <div className="flex flex-wrap gap-2">
+          {originsList.map((origin) => (
+            <span
+              key={origin}
+              className="inline-flex items-center gap-1 rounded-full bg-muted px-3 py-1 text-xs font-medium"
+            >
+              {origin === '*' ? '所有来源' : origin}
+              <button
+                type="button"
+                onClick={() => handleRemove(origin)}
+                className="text-muted-foreground hover:text-foreground transition-colors"
+                disabled={pending}
+              >
+                ×
+              </button>
+            </span>
+          ))}
+        </div>
+      )}
+
+      {/* 输入框 */}
+      <div className="flex gap-2">
+        <input
+          type="text"
+          className="input flex-1"
+          placeholder="输入域名，如 https://example.com 或多个用逗号分隔"
+          value={inputValue}
+          onChange={(e) => setInputValue(e.target.value)}
+          onKeyDown={(e) => { if (e.key === 'Enter') handleAdd() }}
+          disabled={pending}
+        />
+        <Button size="sm" onClick={handleAdd} disabled={pending || !inputValue.trim()}>
+          添加
+        </Button>
+      </div>
+    </section>
   )
 }
 

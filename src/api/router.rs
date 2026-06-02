@@ -8,7 +8,6 @@ use axum::{
 };
 use serde_json::{Value, json};
 use sqlx::SqlitePool;
-use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
 
 use crate::api::handlers::admin::api_keys::{self, ApiKeyState};
@@ -217,6 +216,14 @@ pub async fn create_router(
         .nest("/api/v1/admin", protected_admin)
         // 静态文件服务（SPA fallback）
         .fallback(static_assets::serve)
+        // CORS 中间件（从 DB 动态读取白名单）
+        .layer(middleware::from_fn({
+            let cors_pool = pool.clone();
+            move |req, next| {
+                let pool = cors_pool.clone();
+                crate::api::middleware::cors::require_cors(pool, req, next)
+            }
+        }))
         // 注入 pool 和 JWT secret 到 extensions
         .layer(middleware::from_fn(
             move |mut req: Request<Body>, next: middleware::Next| {
@@ -229,8 +236,6 @@ pub async fn create_router(
                 }
             },
         ))
-        // 中间件
-        .layer(CorsLayer::permissive())
         .layer(middleware::from_fn(crate::api::middleware::require_json))
         .layer(TraceLayer::new_for_http())
 }
