@@ -479,3 +479,229 @@ async fn send_streaming_test(
         )
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn build_test_payload_for_openai_chat() {
+        let (body, path) = build_test_payload(&EndpointType::OpenAiChat, "gpt-4o").unwrap();
+        assert_eq!(path, "/chat/completions");
+        assert_eq!(body["model"], "gpt-4o");
+        assert_eq!(body["stream"], false);
+        assert_eq!(body["max_tokens"], 100);
+        assert_eq!(body["messages"][0]["role"], "user");
+        assert_eq!(body["messages"][0]["content"], TEST_PROMPT);
+    }
+
+    #[test]
+    fn build_test_payload_for_openai_response() {
+        let (body, path) = build_test_payload(&EndpointType::OpenAiResponse, "o1").unwrap();
+        assert_eq!(path, "/responses");
+        assert_eq!(body["model"], "o1");
+        assert_eq!(body["input"], TEST_PROMPT);
+        assert_eq!(body["max_output_tokens"], 100);
+        assert!(body.get("stream").is_none());
+    }
+
+    #[test]
+    fn build_test_payload_for_anthropic() {
+        let (body, path) = build_test_payload(&EndpointType::Anthropic, "claude-sonnet").unwrap();
+        assert_eq!(path, "/messages");
+        assert_eq!(body["max_tokens"], 100);
+        assert_eq!(body["messages"][0]["content"], TEST_PROMPT);
+    }
+
+    #[test]
+    fn build_test_payload_for_embedding_uses_input_field() {
+        let (body, path) = build_test_payload(&EndpointType::OpenAiEmbedding, "text-embed").unwrap();
+        assert_eq!(path, "/embeddings");
+        assert_eq!(body["input"], TEST_PROMPT);
+    }
+
+    #[test]
+    fn build_test_payload_for_images_uses_prompt_field() {
+        let (body, path) = build_test_payload(&EndpointType::OpenAiImages, "dall-e").unwrap();
+        assert_eq!(path, "/images/generations");
+        assert_eq!(body["prompt"], TEST_PROMPT);
+        assert_eq!(body["n"], 1);
+    }
+
+    #[test]
+    fn build_test_payload_for_gemini_unsupported() {
+        assert!(build_test_payload(&EndpointType::Gemini, "gemini-pro").is_none());
+    }
+
+    #[test]
+    fn build_streaming_test_payload_sets_stream_true() {
+        for proto in [
+            EndpointType::OpenAiChat,
+            EndpointType::Anthropic,
+            EndpointType::OpenAiResponse,
+        ] {
+            let (body, _path) = build_streaming_test_payload(&proto, "m").unwrap();
+            assert_eq!(body["stream"], true, "stream should be true for {:?}", proto);
+        }
+    }
+
+    #[test]
+    fn build_streaming_test_payload_unsupported_protocols() {
+        assert!(build_streaming_test_payload(&EndpointType::OpenAiEmbedding, "m").is_none());
+        assert!(build_streaming_test_payload(&EndpointType::OpenAiImages, "m").is_none());
+        assert!(build_streaming_test_payload(&EndpointType::Gemini, "m").is_none());
+    }
+
+    #[test]
+    fn extract_test_content_reads_openai_chat_choices() {
+        let body = json!({
+            "choices": [{"message": {"content": "hello"}}]
+        });
+        assert_eq!(extract_test_content(&body, &EndpointType::OpenAiChat), "hello");
+    }
+
+    #[test]
+    fn extract_test_content_reads_openai_response_nested_text() {
+        let body = json!({
+            "output": [{"content": [{"text": "world"}]}]
+        });
+        assert_eq!(
+            extract_test_content(&body, &EndpointType::OpenAiResponse),
+            "world"
+        );
+    }
+
+    #[test]
+    fn extract_test_content_reads_anthropic_content_array() {
+        let body = json!({
+            "content": [{"text": "alpha"}]
+        });
+        assert_eq!(extract_test_content(&body, &EndpointType::Anthropic), "alpha");
+    }
+
+    #[test]
+    fn extract_test_content_falls_back_to_placeholder_on_missing_field() {
+        let body = json!({});
+        assert_eq!(
+            extract_test_content(&body, &EndpointType::OpenAiChat),
+            "(无内容)"
+        );
+        assert_eq!(
+            extract_test_content(&body, &EndpointType::Anthropic),
+            "(无内容)"
+        );
+    }
+
+    #[test]
+    fn extract_test_content_reports_embedding_count() {
+        let body = json!({"data": [{}, {}, {}]});
+        assert_eq!(
+            extract_test_content(&body, &EndpointType::OpenAiEmbedding),
+            "Embedding 返回 3 条向量数据"
+        );
+    }
+
+    #[test]
+    fn extract_test_content_reports_images_count() {
+        let body = json!({"data": [{}, {}]});
+        assert_eq!(
+            extract_test_content(&body, &EndpointType::OpenAiImages),
+            "图片生成成功，共 2 张"
+        );
+    }
+
+    #[test]
+    fn extract_test_content_unknown_protocol_returns_marker() {
+        let body = json!({});
+        assert_eq!(extract_test_content(&body, &EndpointType::Gemini), "(未知协议)");
+    }
+
+    #[test]
+    fn extract_usage_openai_chat_reads_prompt_and_completion() {
+        let body = json!({
+            "usage": {"prompt_tokens": 11, "completion_tokens": 22}
+        });
+        assert_eq!(
+            extract_usage(&body, &EndpointType::OpenAiChat),
+            (Some(11), Some(22))
+        );
+    }
+
+    #[test]
+    fn extract_usage_anthropic_reads_input_and_output() {
+        let body = json!({
+            "usage": {"input_tokens": 7, "output_tokens": 13}
+        });
+        assert_eq!(
+            extract_usage(&body, &EndpointType::Anthropic),
+            (Some(7), Some(13))
+        );
+    }
+
+    #[test]
+    fn extract_usage_openai_response_uses_input_output_field_names() {
+        let body = json!({
+            "usage": {"input_tokens": 3, "output_tokens": 5}
+        });
+        assert_eq!(
+            extract_usage(&body, &EndpointType::OpenAiResponse),
+            (Some(3), Some(5))
+        );
+    }
+
+    #[test]
+    fn extract_usage_returns_none_when_usage_missing() {
+        let body = json!({});
+        assert_eq!(
+            extract_usage(&body, &EndpointType::OpenAiChat),
+            (None, None)
+        );
+        assert_eq!(
+            extract_usage(&body, &EndpointType::Anthropic),
+            (None, None)
+        );
+    }
+
+    #[test]
+    fn extract_usage_unsupported_protocol_returns_none() {
+        let body = json!({"usage": {"prompt_tokens": 99}});
+        assert_eq!(
+            extract_usage(&body, &EndpointType::Gemini),
+            (None, None)
+        );
+        assert_eq!(
+            extract_usage(&body, &EndpointType::OpenAiEmbedding),
+            (None, None)
+        );
+    }
+
+    #[test]
+    fn parse_protocol_round_trips_known_strings() {
+        assert_eq!(
+            parse_protocol("openai_chat"),
+            Some(EndpointType::OpenAiChat)
+        );
+        assert_eq!(
+            parse_protocol("openai_response"),
+            Some(EndpointType::OpenAiResponse)
+        );
+        assert_eq!(parse_protocol("anthropic"), Some(EndpointType::Anthropic));
+        assert_eq!(parse_protocol("gemini"), Some(EndpointType::Gemini));
+        assert_eq!(
+            parse_protocol("openai_embedding"),
+            Some(EndpointType::OpenAiEmbedding)
+        );
+        assert_eq!(
+            parse_protocol("openai_images"),
+            Some(EndpointType::OpenAiImages)
+        );
+    }
+
+    #[test]
+    fn parse_protocol_rejects_unknown_strings() {
+        assert_eq!(parse_protocol(""), None);
+        assert_eq!(parse_protocol("unknown_protocol"), None);
+        assert_eq!(parse_protocol("openai"), None);
+    }
+}
