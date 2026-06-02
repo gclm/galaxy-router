@@ -700,7 +700,7 @@ pub async fn handle_proxy_request(
                 .header("Cache-Control", "no-cache")
                 .header("Connection", "keep-alive")
                 .body(axum::body::Body::from_stream(stream))
-                .unwrap()
+                .expect("static headers + StatusCode from upstream are valid Response inputs")
                 .into_response(),
             Err(e) => format_proxy_error(e, error_format),
         }
@@ -710,7 +710,7 @@ pub async fn handle_proxy_request(
                 .status(result.status)
                 .header("Content-Type", "application/json")
                 .body(axum::body::Body::from(result.body))
-                .unwrap()
+                .expect("static Content-Type + StatusCode are valid Response inputs")
                 .into_response(),
             Err(e) => format_proxy_error(e, error_format),
         }

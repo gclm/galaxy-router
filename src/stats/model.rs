@@ -408,10 +408,7 @@ fn flatten_and_filter(
             let modalities = model.modalities.as_ref();
 
             // 跳过没有定价的模型
-            if cost.is_none() {
-                continue;
-            }
-            let cost = cost.unwrap();
+            let Some(cost) = cost else { continue };
 
             let info = ModelInfo {
                 model: model.id.clone(),

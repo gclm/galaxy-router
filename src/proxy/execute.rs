@@ -990,3 +990,159 @@ pub(super) async fn execute_proxy_stream(
         None,
     ))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::stats::recorder::{ChannelAttempt, RequestRecord};
+
+    fn sample_attempt(status_code: u16) -> AttemptStats {
+        AttemptStats {
+            channel_id: "ch-1".into(),
+            target_model: "gpt-4o".into(),
+            upstream_endpoint: EndpointType::OpenAiChat,
+            needs_conversion: false,
+            latency_ms: 123,
+            status_code,
+            input_tokens: 10,
+            output_tokens: 20,
+            cache_read: 3,
+            cache_creation: 0,
+            cost: Some(0.001),
+            error_message: None,
+            upstream_key_hint: "sk-abcde...mnop".into(),
+        }
+    }
+
+    fn sample_attempts() -> Vec<ChannelAttempt> {
+        vec![ChannelAttempt {
+            channel_id: "ch-1".into(),
+            channel_name: None,
+            status: "failed".into(),
+            duration_ms: 100,
+            error: Some("upstream 500".into()),
+            upstream_key_hint: Some("sk-abcde...mnop".into()),
+        }]
+    }
+
+    #[test]
+    fn from_last_attempt_propagates_all_fields() {
+        let last = sample_attempt(200);
+        let record = RequestRecord::from_last_attempt(
+            &last,
+            Some("key-1"),
+            Some("grp-1"),
+            "gpt-4o",
+            Some("hi".into()),
+            Some("hello".into()),
+            sample_attempts(),
+            Some(45),
+            false,
+            Some("ua/1.0".into()),
+        );
+        assert_eq!(record.api_key_id.as_deref(), Some("key-1"));
+        assert_eq!(record.channel_id.as_deref(), Some("ch-1"));
+        assert_eq!(record.group_id.as_deref(), Some("grp-1"));
+        assert_eq!(record.requested_model, "gpt-4o");
+        assert_eq!(record.actual_model.as_deref(), Some("gpt-4o"));
+        assert_eq!(record.input_tokens, 10);
+        assert_eq!(record.output_tokens, 20);
+        assert_eq!(record.cache_read_tokens, 3);
+        assert_eq!(record.cost, Some(0.001));
+        assert_eq!(record.latency_ms, Some(123));
+        assert_eq!(record.ttft_ms, Some(45));
+        assert_eq!(record.status_code, Some(200));
+        assert_eq!(record.error_message, None);
+        assert_eq!(record.endpoint_type.as_deref(), Some("openai_chat"));
+        assert_eq!(record.request_type, "passthrough");
+        assert!(!record.is_stream);
+        assert_eq!(record.upstream_key_hint.as_deref(), Some("sk-abcde...mnop"));
+        assert_eq!(record.attempts.len(), 1);
+        assert_eq!(record.user_agent.as_deref(), Some("ua/1.0"));
+    }
+
+    #[test]
+    fn from_last_attempt_marks_conversion_path() {
+        let mut last = sample_attempt(200);
+        last.needs_conversion = true;
+        let record = RequestRecord::from_last_attempt(
+            &last,
+            None,
+            None,
+            "claude-sonnet",
+            None,
+            None,
+            vec![],
+            None,
+            false,
+            None,
+        );
+        assert_eq!(record.request_type, "conversion");
+    }
+
+    #[test]
+    fn from_last_attempt_marks_passthrough_path() {
+        let last = sample_attempt(200);
+        let record = RequestRecord::from_last_attempt(
+            &last,
+            None,
+            None,
+            "gpt-4o",
+            None,
+            None,
+            vec![],
+            None,
+            true,
+            None,
+        );
+        assert_eq!(record.request_type, "passthrough");
+        assert!(record.is_stream);
+    }
+
+    #[test]
+    fn from_last_attempt_preserves_error_message_on_failed_status() {
+        let mut last = sample_attempt(503);
+        last.error_message = Some("upstream timeout".into());
+        let record = RequestRecord::from_last_attempt(
+            &last,
+            None,
+            None,
+            "gpt-4o",
+            None,
+            None,
+            vec![],
+            None,
+            false,
+            None,
+        );
+        assert_eq!(record.status_code, Some(503));
+        assert_eq!(record.error_message.as_deref(), Some("upstream timeout"));
+    }
+
+    #[test]
+    fn minimal_for_select_failure_fills_503_and_marker_text() {
+        let record = RequestRecord::minimal_for_select_failure(
+            Some("key-1"),
+            Some("grp-1"),
+            "gpt-4o",
+            Some("hi".into()),
+            None,
+            sample_attempts(),
+            false,
+            Some("ua/1.0".into()),
+        );
+        assert_eq!(record.status_code, Some(503));
+        assert_eq!(record.error_message.as_deref(), Some("请求未到达上游"));
+        assert!(record.channel_id.is_none());
+        assert!(record.actual_model.is_none());
+        assert_eq!(record.input_tokens, 0);
+        assert_eq!(record.output_tokens, 0);
+        assert!(record.cost.is_none());
+        assert!(record.latency_ms.is_none());
+        assert!(record.ttft_ms.is_none());
+        assert!(record.endpoint_type.is_none());
+        assert!(record.upstream_key_hint.is_none());
+        assert_eq!(record.request_type, "unknown");
+        assert_eq!(record.attempts.len(), 1);
+    }
+}
