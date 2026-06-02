@@ -267,3 +267,139 @@ async fn shutdown_signal() {
     }
     info!("收到关停信号，正在优雅关闭...");
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+
+    fn make_config() -> AppConfig {
+        AppConfig {
+            server: config::ServerConfig {
+                host: "127.0.0.1".into(),
+                port: 8080,
+                timezone_offset: 0,
+            },
+            database: config::DatabaseConfig {
+                path: "/tmp/galaxy_test_main.db".into(),
+            },
+            logging: config::LoggingConfig {
+                level: "info".into(),
+                format: "compact".into(),
+                file: false,
+                file_path: "/tmp/galaxy_test_main.log".into(),
+            },
+            auth: config::AuthConfig {
+                jwt_secret: String::new(),
+                token_expiry_hours: 24,
+            },
+            queuing: config::QueuingConfig::default(),
+            pricing: config::PricingTomlConfig {
+                cache_path: "/tmp/galaxy_test_main_pricing.json".into(),
+                refresh_interval_hours: 24,
+                providers: vec![],
+            },
+        }
+    }
+
+    #[test]
+    fn apply_cli_overrides_no_args_leaves_config_unchanged() {
+        let config = make_config();
+        let cli = Cli {
+            config: PathBuf::from("config.toml"),
+            port: None,
+            host: None,
+            log_level: None,
+        };
+        let out = apply_cli_overrides(config.clone(), &cli);
+        assert_eq!(out.server.port, 8080);
+        assert_eq!(out.server.host, "127.0.0.1");
+    }
+
+    #[test]
+    fn apply_cli_overrides_port_and_host() {
+        let config = make_config();
+        let cli = Cli {
+            config: PathBuf::from("config.toml"),
+            port: Some(9999),
+            host: Some("0.0.0.0".into()),
+            log_level: None,
+        };
+        let out = apply_cli_overrides(config, &cli);
+        assert_eq!(out.server.port, 9999);
+        assert_eq!(out.server.host, "0.0.0.0");
+    }
+
+    #[test]
+    fn ensure_jwt_secret_preserves_existing() {
+        let mut config = make_config();
+        config.auth.jwt_secret = "preset-secret".into();
+        let path = PathBuf::from("/tmp/galaxy_test_main_nofile.toml");
+        let _ = std::fs::remove_file(&path);
+
+        let out = ensure_jwt_secret(config, &path).unwrap();
+        assert_eq!(out.auth.jwt_secret, "preset-secret");
+        // 不应写文件
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn ensure_jwt_secret_generates_and_persists() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let mut f = std::fs::File::create(&path).unwrap();
+        write!(
+            f,
+            r#"
+[server]
+host = "0.0.0.0"
+port = 8080
+
+[auth]
+jwt_secret = ""
+token_expiry_hours = 24
+"#
+        )
+        .unwrap();
+        drop(f);
+
+        let mut config = make_config();
+        config.auth.jwt_secret = String::new();
+        let out = ensure_jwt_secret(config, &path).unwrap();
+        assert_eq!(out.auth.jwt_secret.len(), 32);
+
+        // 重新读回文件，应包含新 secret
+        let content = std::fs::read_to_string(&path).unwrap();
+        assert!(content.contains("jwt_secret ="));
+        assert!(!content.contains(r#"jwt_secret = """#));
+    }
+
+    #[test]
+    fn cli_parse_defaults() {
+        let cli = Cli::try_parse_from(["galaxy-router"]).unwrap();
+        assert_eq!(cli.config, PathBuf::from("config.toml"));
+        assert_eq!(cli.port, None);
+        assert_eq!(cli.host, None);
+        assert_eq!(cli.log_level, None);
+    }
+
+    #[test]
+    fn cli_parse_with_overrides() {
+        let cli = Cli::try_parse_from([
+            "galaxy-router",
+            "--config",
+            "/etc/galaxy.toml",
+            "--port",
+            "7777",
+            "--host",
+            "0.0.0.0",
+            "--log-level",
+            "debug",
+        ])
+        .unwrap();
+        assert_eq!(cli.config, PathBuf::from("/etc/galaxy.toml"));
+        assert_eq!(cli.port, Some(7777));
+        assert_eq!(cli.host.as_deref(), Some("0.0.0.0"));
+        assert_eq!(cli.log_level.as_deref(), Some("debug"));
+    }
+}

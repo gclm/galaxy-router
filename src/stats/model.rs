@@ -507,3 +507,187 @@ fn compute_cost(
 
     input_cost + output_cost + cache_read_cost + cache_creation_cost
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::Database;
+
+    async fn make_pool() -> sqlx::SqlitePool {
+        let db_path = format!("/tmp/galaxy_stats_model_{}.db", uuid::Uuid::now_v7());
+        let _ = std::fs::remove_file(&db_path);
+        let db_url = format!("sqlite:{}?mode=rwc", db_path);
+        Database::new(&db_url).await.unwrap().pool().clone()
+    }
+
+    fn info(model: &str, input: f64, output: f64) -> ModelInfo {
+        ModelInfo {
+            model: model.into(),
+            provider: "test".into(),
+            mode: "chat".into(),
+            input_price: Some(input),
+            output_price: Some(output),
+            cache_read_price: None,
+            cache_creation_price: None,
+            max_input_tokens: None,
+            max_output_tokens: None,
+            supports_function_calling: None,
+            supports_reasoning: None,
+            supports_vision: None,
+            supports_pdf_input: None,
+            supports_prompt_caching: None,
+            supports_system_messages: None,
+            supports_tool_choice: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn calculate_cost_basic_input_output() {
+        let pool = make_pool().await;
+        let reg = ModelRegistry::new(pool);
+
+        reg.set_model_info(info("gpt-4o", 2.5, 10.0)).await.unwrap();
+
+        // 1M input + 0.5M output = 2.5 + 5.0 = 7.5
+        let cost = reg.calculate_cost("gpt-4o", 1_000_000, 500_000, 0, 0).await;
+        assert!((cost - 7.5).abs() < 1e-9);
+
+        // 0 tokens -> 0
+        let cost = reg.calculate_cost("gpt-4o", 0, 0, 0, 0).await;
+        assert_eq!(cost, 0.0);
+    }
+
+    #[tokio::test]
+    async fn calculate_cost_includes_cache_prices() {
+        let pool = make_pool().await;
+        let reg = ModelRegistry::new(pool);
+
+        let mut m = info("claude", 3.0, 15.0);
+        m.cache_read_price = Some(0.3);
+        m.cache_creation_price = Some(3.75);
+        reg.set_model_info(m).await.unwrap();
+
+        // input 1M (3.0) + output 1M (15.0) + cache_read 1M (0.3) + cache_creation 1M (3.75) = 22.05
+        let cost = reg
+            .calculate_cost("claude", 1_000_000, 1_000_000, 1_000_000, 1_000_000)
+            .await;
+        assert!((cost - 22.05).abs() < 1e-9);
+    }
+
+    #[tokio::test]
+    async fn calculate_cost_missing_prices_default_zero() {
+        let pool = make_pool().await;
+        let reg = ModelRegistry::new(pool);
+
+        // 没有 input_price 的模型
+        let mut m = info("mystery", 0.0, 0.0);
+        m.input_price = None;
+        reg.set_model_info(m).await.unwrap();
+
+        let cost = reg.calculate_cost("mystery", 1_000_000, 1_000_000, 0, 0).await;
+        assert_eq!(cost, 0.0);
+    }
+
+    #[tokio::test]
+    async fn calculate_cost_unknown_model_returns_zero() {
+        let pool = make_pool().await;
+        let reg = ModelRegistry::new(pool);
+
+        let cost = reg.calculate_cost("nope", 1_000_000, 1_000_000, 0, 0).await;
+        assert_eq!(cost, 0.0);
+    }
+
+    #[tokio::test]
+    async fn calculate_cost_fuzzy_match_by_suffix() {
+        // key 形如 "openai/gpt-4o" 时，传入 "gpt-4o" 也应命中
+        let pool = make_pool().await;
+        let reg = ModelRegistry::new(pool);
+
+        reg.set_model_info(info("openai/gpt-4o", 1.0, 2.0))
+            .await
+            .unwrap();
+
+        let cost = reg.calculate_cost("gpt-4o", 1_000_000, 0, 0, 0).await;
+        assert!((cost - 1.0).abs() < 1e-9);
+    }
+
+    #[tokio::test]
+    async fn get_model_info_round_trip() {
+        let pool = make_pool().await;
+        let reg = ModelRegistry::new(pool);
+
+        assert!(reg.get_model_info("gpt-4o").await.is_none());
+
+        reg.set_model_info(info("gpt-4o", 2.5, 10.0)).await.unwrap();
+        let got = reg.get_model_info("gpt-4o").await.expect("应能取回");
+        assert_eq!(got.model, "gpt-4o");
+        assert_eq!(got.input_price, Some(2.5));
+        assert_eq!(got.output_price, Some(10.0));
+    }
+
+    #[tokio::test]
+    async fn get_all_models_returns_sorted() {
+        let pool = make_pool().await;
+        let reg = ModelRegistry::new(pool);
+
+        reg.set_model_info(info("z-model", 1.0, 2.0)).await.unwrap();
+        reg.set_model_info(info("a-model", 3.0, 4.0)).await.unwrap();
+        reg.set_model_info(info("m-model", 5.0, 6.0)).await.unwrap();
+
+        let all = reg.get_all_models().await;
+        assert_eq!(all.len(), 3);
+        assert_eq!(all[0].model, "a-model");
+        assert_eq!(all[1].model, "m-model");
+        assert_eq!(all[2].model, "z-model");
+    }
+
+    #[tokio::test]
+    async fn load_from_db_empty_returns_no_models() {
+        let pool = make_pool().await;
+        let reg = ModelRegistry::new(pool);
+        reg.load_from_db().await.unwrap();
+        assert!(reg.get_all_models().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn load_from_db_reads_existing_rows() {
+        let pool = make_pool().await;
+        let reg = ModelRegistry::new(pool);
+
+        // 直接 SQL 写一行（模拟 remote source 的预置数据）
+        let id = crate::api::response::generate_id();
+        sqlx::query(
+            r#"INSERT INTO model_info (id, model, provider, mode, input_price, output_price, source)
+               VALUES (?, 'preloaded', 'openai', 'chat', 1.5, 6.0, 'remote')"#,
+        )
+        .bind(&id)
+        .execute(&reg.pool)
+        .await
+        .unwrap();
+
+        reg.load_from_db().await.unwrap();
+        let got = reg.get_model_info("preloaded").await.expect("应能加载");
+        assert_eq!(got.provider, "openai");
+        assert_eq!(got.input_price, Some(1.5));
+    }
+
+    #[tokio::test]
+    async fn set_model_info_upsert_updates_existing() {
+        let pool = make_pool().await;
+        let reg = ModelRegistry::new(pool);
+
+        reg.set_model_info(info("dup", 1.0, 2.0)).await.unwrap();
+        reg.set_model_info(info("dup", 5.0, 10.0)).await.unwrap();
+
+        let got = reg.get_model_info("dup").await.unwrap();
+        assert_eq!(got.input_price, Some(5.0));
+        assert_eq!(got.output_price, Some(10.0));
+        // 不应产生重复行
+        let count: i32 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM model_info WHERE model = 'dup'")
+                .fetch_one(&reg.pool)
+                .await
+                .unwrap();
+        assert_eq!(count, 1);
+    }
+}

@@ -42,7 +42,18 @@ impl ProxyCache {
     pub async fn set_channel(&self, channel: ChannelInfo) {
         let mut cache = self.channels.write().await;
 
+        // 如果渠道已存在，先从旧模型的索引中清除此 channel_id
+        if let Some(old_ch) = cache.get(&channel.id) {
+            let mut idx = self.model_index.write().await;
+            for model in &old_ch.models {
+                if let Some(ids) = idx.get_mut(model) {
+                    ids.retain(|id| id != &channel.id);
+                }
+            }
+        }
+
         if cache.len() >= CACHE_MAX_SIZE
+            && !cache.contains_key(&channel.id)
             && let Some(oldest_key) = cache.keys().next().cloned()
         {
             let mut idx = self.model_index.write().await;
@@ -197,7 +208,8 @@ mod tests {
         let cache = ProxyCache::new();
         cache.set_channel(sample_channel("ch-a", vec!["gpt-4"])).await;
         cache.set_channel(sample_channel("ch-a", vec!["gpt-3.5"])).await;
-        // 覆盖时新 model 仍写入 index，旧 model 引用依赖显式 invalidate
+        // 覆盖时旧 model 索引应被清理
+        assert!(cache.find_channels_by_model("gpt-4").await.is_empty());
         assert_eq!(
             cache.find_channels_by_model("gpt-3.5").await,
             vec!["ch-a"]

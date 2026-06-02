@@ -59,3 +59,37 @@ jobs:
 
       - run: cargo clippy -- -D warnings
       - run: cargo test
+
+  coverage:
+    name: coverage gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-coverage-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-coverage-
+
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y libsqlite3-dev
+
+      - name: Prepare frontend dist
+        run: mkdir -p frontend/dist && touch frontend/dist/.keep
+
+      - name: Install tarpaulin
+        run: cargo install cargo-tarpaulin --version 0.35.4 --locked
+
+      - name: Run coverage gate
+        # --fail-under 锁底：当前 ~52%，每次新增覆盖后由维护者手工上调
+        # --out Xml 输出供 GitHub Actions summary 渲染
+        # --timeout 防止 SQLite 并发死锁卡死 CI
+        run: cargo tarpaulin --all-targets --skip-clean --timeout 300 --fail-under 50 --out Xml

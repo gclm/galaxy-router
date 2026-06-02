@@ -648,3 +648,364 @@ fn daily_row_to_stats(row: DailyRow) -> DailyStats {
         total_cost: row.8,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::Database;
+
+    async fn make_pool() -> sqlx::SqlitePool {
+        let db_path = format!("/tmp/galaxy_stats_mod_{}.db", uuid::Uuid::now_v7());
+        let _ = std::fs::remove_file(&db_path);
+        let db_url = format!("sqlite:{}?mode=rwc", db_path);
+        Database::new(&db_url).await.unwrap().pool().clone()
+    }
+
+    fn new_state(pool: sqlx::SqlitePool) -> StatsState {
+        StatsState::new(pool, 0) // UTC
+    }
+
+    async fn seed_log(
+        pool: &sqlx::SqlitePool,
+        model: &str,
+        channel_id: Option<&str>,
+        api_key_id: Option<&str>,
+        status_code: i32,
+        input: i32,
+        output: i32,
+        cost: f64,
+    ) {
+        let id = crate::api::response::generate_id();
+        sqlx::query(
+            r#"INSERT INTO usage_logs
+               (id, requested_model, channel_id, api_key_id, status_code,
+                input_tokens, output_tokens, cost, request_type, is_stream)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'passthrough', 0)"#,
+        )
+        .bind(&id)
+        .bind(model)
+        .bind(channel_id)
+        .bind(api_key_id)
+        .bind(status_code)
+        .bind(input)
+        .bind(output)
+        .bind(cost)
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn get_overview_empty_db() {
+        let pool = make_pool().await;
+        let state = new_state(pool);
+        let ov = state.get_overview().await.unwrap();
+        assert_eq!(ov.total_requests, 0);
+        assert_eq!(ov.total_input_tokens, 0);
+        assert_eq!(ov.total_cost, 0.0);
+        assert_eq!(ov.today_requests, 0);
+    }
+
+    #[tokio::test]
+    async fn get_overview_aggregates_total_and_today() {
+        let pool = make_pool().await;
+        // 今天的请求
+        seed_log(&pool, "gpt-4o", None, None, 200, 100, 50, 0.005).await;
+        seed_log(&pool, "gpt-4o", None, None, 200, 200, 100, 0.01).await;
+        // 失败的请求
+        seed_log(&pool, "gpt-4o", None, None, 500, 50, 0, 0.0).await;
+        let state = new_state(pool);
+        let ov = state.get_overview().await.unwrap();
+        assert_eq!(ov.total_requests, 3);
+        assert_eq!(ov.total_input_tokens, 350);
+        assert_eq!(ov.total_output_tokens, 150);
+        assert!((ov.total_cost - 0.015).abs() < 1e-9);
+        assert_eq!(ov.today_requests, 3);
+    }
+
+    #[tokio::test]
+    async fn get_model_stats_groups_by_model() {
+        let pool = make_pool().await;
+        seed_log(&pool, "gpt-4o", None, None, 200, 100, 50, 0.001).await;
+        seed_log(&pool, "gpt-4o", None, None, 200, 100, 50, 0.001).await;
+        seed_log(&pool, "claude", None, None, 200, 200, 100, 0.002).await;
+        let state = new_state(pool);
+        let stats = state.get_model_stats(7).await.unwrap();
+        assert_eq!(stats.len(), 2);
+        // 按请求数降序
+        assert_eq!(stats[0].model, "gpt-4o");
+        assert_eq!(stats[0].request_count, 2);
+        assert_eq!(stats[1].model, "claude");
+    }
+
+    #[tokio::test]
+    async fn get_channel_stats_joins_channel_name() {
+        let pool = make_pool().await;
+        let channel_id = "ch-1";
+        sqlx::query("INSERT INTO channels (id, name, api_keys, endpoints) VALUES (?, 'OpenAI', '[]', '[]')")
+            .bind(channel_id)
+            .execute(&pool)
+            .await
+            .unwrap();
+        seed_log(&pool, "gpt-4o", Some(channel_id), None, 200, 10, 5, 0.0001).await;
+        seed_log(&pool, "gpt-4o", Some(channel_id), None, 500, 10, 0, 0.0).await;
+        // 渠道已被删除的日志，LEFT JOIN 应保留并标记 unknown
+        seed_log(&pool, "gpt-4o", Some("ghost"), None, 200, 5, 5, 0.0).await;
+
+        let state = new_state(pool);
+        let stats = state.get_channel_stats(7).await.unwrap();
+        assert_eq!(stats.len(), 2);
+        let ch1 = stats.iter().find(|s| s.channel_id == channel_id).unwrap();
+        assert_eq!(ch1.channel_name, "OpenAI");
+        assert_eq!(ch1.request_count, 2);
+        assert_eq!(ch1.success_count, 1);
+        assert_eq!(ch1.failure_count, 1);
+        let ghost = stats.iter().find(|s| s.channel_id == "ghost").unwrap();
+        assert_eq!(ghost.channel_name, "unknown");
+    }
+
+    #[tokio::test]
+    async fn get_daily_stats_one_day_fills_24_hours() {
+        let pool = make_pool().await;
+        // 两条今天的日志（默认 created_at = now）
+        seed_log(&pool, "gpt-4o", None, None, 200, 10, 5, 0.001).await;
+        seed_log(&pool, "claude", None, None, 500, 20, 0, 0.0).await;
+        let state = new_state(pool);
+        let stats = state.get_daily_stats(1).await.unwrap();
+        assert_eq!(stats.len(), 24, "应补齐 24 个小时槽位");
+        // 至少有一个槽位有数据
+        let non_empty: Vec<&DailyStats> =
+            stats.iter().filter(|s| s.request_count > 0).collect();
+        assert!(!non_empty.is_empty());
+        // 当前小时的 success+failure 应等于总请求数
+        let total_success: i32 = stats.iter().map(|s| s.success_count).sum();
+        let total_failure: i32 = stats.iter().map(|s| s.failure_count).sum();
+        assert_eq!(total_success + total_failure, 2);
+    }
+
+    #[tokio::test]
+    async fn get_daily_stats_seven_days_aggregates_by_date() {
+        let pool = make_pool().await;
+        // 直接写一条 5 天前的日志
+        let id = crate::api::response::generate_id();
+        sqlx::query(
+            r#"INSERT INTO usage_logs
+               (id, requested_model, status_code, input_tokens, output_tokens,
+                cost, request_type, is_stream, created_at)
+               VALUES (?, 'gpt-4o', 200, 100, 50, 0.001, 'passthrough', 0,
+                       datetime('now', '-5 days'))"#,
+        )
+        .bind(&id)
+        .execute(&pool)
+        .await
+        .unwrap();
+        let state = new_state(pool);
+        let stats = state.get_daily_stats(7).await.unwrap();
+        assert!(!stats.is_empty());
+        // 不超过 7 天（含今天）
+        assert!(stats.len() <= 7);
+    }
+
+    #[tokio::test]
+    async fn get_daily_stats_by_range() {
+        let pool = make_pool().await;
+        seed_log(&pool, "gpt-4o", None, None, 200, 10, 5, 0.001).await;
+        let state = new_state(pool);
+        let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+        let stats = state
+            .get_daily_stats_by_range(&today, &today)
+            .await
+            .unwrap();
+        assert_eq!(stats.len(), 1);
+        assert_eq!(stats[0].date, today);
+    }
+
+    #[tokio::test]
+    async fn get_model_stats_by_range() {
+        let pool = make_pool().await;
+        seed_log(&pool, "gpt-4o", None, None, 200, 10, 5, 0.001).await;
+        seed_log(&pool, "claude", None, None, 200, 20, 10, 0.002).await;
+        let state = new_state(pool);
+        let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+        let stats = state
+            .get_model_stats_by_range(&today, &today)
+            .await
+            .unwrap();
+        assert_eq!(stats.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn get_channel_stats_by_range() {
+        let pool = make_pool().await;
+        let cid = "ch-1";
+        sqlx::query("INSERT INTO channels (id, name, api_keys, endpoints) VALUES (?, 'A', '[]', '[]')")
+            .bind(cid)
+            .execute(&pool)
+            .await
+            .unwrap();
+        seed_log(&pool, "gpt-4o", Some(cid), None, 200, 10, 5, 0.001).await;
+        let state = new_state(pool);
+        let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+        let stats = state
+            .get_channel_stats_by_range(&today, &today)
+            .await
+            .unwrap();
+        assert_eq!(stats.len(), 1);
+        assert_eq!(stats[0].channel_name, "A");
+    }
+
+    #[tokio::test]
+    async fn get_logs_paginated_and_parsed_attempts() {
+        let pool = make_pool().await;
+        // 写 attempts 字段以验证 JSON 解析路径（生产 SQL 用 `as raw_attempts` 重命名）
+        let id = crate::api::response::generate_id();
+        let attempts = r#"[{"channel_id":"c1","status":"ok","duration_ms":12}]"#;
+        sqlx::query(
+            r#"INSERT INTO usage_logs
+               (id, requested_model, status_code, input_tokens, output_tokens,
+                cost, request_type, is_stream, attempts)
+               VALUES (?, 'gpt-4o', 200, 10, 5, 0.001, 'passthrough', 0, ?)"#,
+        )
+        .bind(&id)
+        .bind(attempts)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let state = new_state(pool);
+        let page = state
+            .get_logs(LogsFilter {
+                offset: 0,
+                limit: 10,
+                model: None,
+                channel_id: None,
+                status: None,
+                api_key_id: None,
+            })
+            .await
+            .unwrap();
+        assert_eq!(page.total, 1);
+        assert_eq!(page.items.len(), 1);
+        let row = &page.items[0];
+        assert!(row.attempts.is_some(), "attempts 应被反序列化为 JSON Value");
+    }
+
+    #[tokio::test]
+    async fn get_logs_filter_by_model_channel_status() {
+        let pool = make_pool().await;
+        let cid_a = "ch-a";
+        let cid_b = "ch-b";
+        sqlx::query("INSERT INTO channels (id, name, api_keys, endpoints) VALUES (?, 'A', '[]', '[]')")
+            .bind(cid_a).execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO channels (id, name, api_keys, endpoints) VALUES (?, 'B', '[]', '[]')")
+            .bind(cid_b).execute(&pool).await.unwrap();
+
+        seed_log(&pool, "gpt-4o", Some(cid_a), None, 200, 1, 1, 0.0).await;
+        seed_log(&pool, "claude", Some(cid_b), None, 500, 1, 0, 0.0).await;
+        let state = new_state(pool);
+
+        // 按 model
+        let p = state
+            .get_logs(LogsFilter {
+                offset: 0,
+                limit: 10,
+                model: Some("claude".into()),
+                channel_id: None,
+                status: None,
+                api_key_id: None,
+            })
+            .await
+            .unwrap();
+        assert_eq!(p.total, 1);
+        assert_eq!(p.items[0].requested_model, "claude");
+
+        // 按 status=success（200~399）
+        let p = state
+            .get_logs(LogsFilter {
+                offset: 0,
+                limit: 10,
+                model: None,
+                channel_id: None,
+                status: Some("success".into()),
+                api_key_id: None,
+            })
+            .await
+            .unwrap();
+        assert_eq!(p.total, 1);
+
+        // 按 status=failure
+        let p = state
+            .get_logs(LogsFilter {
+                offset: 0,
+                limit: 10,
+                model: None,
+                channel_id: None,
+                status: Some("failure".into()),
+                api_key_id: None,
+            })
+            .await
+            .unwrap();
+        assert_eq!(p.total, 1);
+
+        // 按 channel
+        let p = state
+            .get_logs(LogsFilter {
+                offset: 0,
+                limit: 10,
+                model: None,
+                channel_id: Some(cid_b.into()),
+                status: None,
+                api_key_id: None,
+            })
+            .await
+            .unwrap();
+        assert_eq!(p.total, 1);
+    }
+
+    #[tokio::test]
+    async fn get_log_detail_returns_full_row() {
+        let pool = make_pool().await;
+        let id = crate::api::response::generate_id();
+        let attempts = r#"[{"channel_id":"c1","status":"ok","duration_ms":12}]"#;
+        sqlx::query(
+            r#"INSERT INTO usage_logs
+               (id, requested_model, status_code, input_tokens, output_tokens,
+                cost, request_type, is_stream, request_content, response_content, attempts)
+               VALUES (?, 'gpt-4o', 200, 10, 5, 0.001, 'passthrough', 0, '{}', '{}', ?)"#,
+        )
+        .bind(&id)
+        .bind(attempts)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let state = new_state(pool);
+        let detail = state
+            .get_log_detail(&id)
+            .await
+            .unwrap()
+            .expect("应能取到详情");
+        assert_eq!(detail.id, id);
+        assert!(detail.request_content.is_some());
+        assert!(detail.attempts.is_some());
+    }
+
+    #[tokio::test]
+    async fn get_log_detail_missing_returns_none() {
+        let pool = make_pool().await;
+        let state = new_state(pool);
+        let detail = state.get_log_detail("nonexistent").await.unwrap();
+        assert!(detail.is_none());
+    }
+
+    #[tokio::test]
+    async fn get_log_models_returns_distinct_sorted() {
+        let pool = make_pool().await;
+        seed_log(&pool, "gpt-4o", None, None, 200, 1, 1, 0.0).await;
+        seed_log(&pool, "claude", None, None, 200, 1, 1, 0.0).await;
+        seed_log(&pool, "gpt-4o", None, None, 200, 1, 1, 0.0).await; // 重复
+        let state = new_state(pool);
+        let models = state.get_log_models().await.unwrap();
+        assert_eq!(models, vec!["claude".to_string(), "gpt-4o".to_string()]);
+    }
+}

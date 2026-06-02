@@ -100,3 +100,93 @@ impl StatsRecorder {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    async fn make_pool() -> sqlx::SqlitePool {
+        let db_path = format!("/tmp/galaxy_stats_recorder_{}.db", uuid::Uuid::now_v7());
+        let _ = std::fs::remove_file(&db_path);
+        let db_url = format!("sqlite:{}?mode=rwc", db_path);
+        crate::db::Database::new(&db_url).await.unwrap().pool().clone()
+    }
+
+    fn base_record(attempts: Vec<ChannelAttempt>) -> RequestRecord {
+        RequestRecord {
+            api_key_id: Some("k1".into()),
+            channel_id: Some("c1".into()),
+            group_id: None,
+            requested_model: "gpt-4o".into(),
+            actual_model: None,
+            input_tokens: 10,
+            output_tokens: 5,
+            cache_read_tokens: 0,
+            cache_creation_tokens: 0,
+            cost: Some(0.0001),
+            latency_ms: Some(120),
+            ttft_ms: Some(50),
+            status_code: Some(200),
+            error_message: None,
+            endpoint_type: Some("openai_chat".into()),
+            request_type: "passthrough".into(),
+            request_content: Some(r#"{"m":"x"}"#.into()),
+            response_content: Some(r#"{"ok":true}"#.into()),
+            is_stream: false,
+            upstream_key_hint: Some("sk-...abc".into()),
+            attempts,
+            user_agent: Some("test/1.0".into()),
+        }
+    }
+
+    #[tokio::test]
+    async fn record_request_with_no_attempts_inserts_null() {
+        let pool = make_pool().await;
+        let rec = StatsRecorder::new(pool.clone());
+        rec.record_request(base_record(vec![])).await.unwrap();
+
+        let attempts: Option<String> =
+            sqlx::query_scalar("SELECT attempts FROM usage_logs LIMIT 1")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert!(attempts.is_none());
+    }
+
+    #[tokio::test]
+    async fn record_request_with_attempts_serializes_json() {
+        let pool = make_pool().await;
+        let rec = StatsRecorder::new(pool.clone());
+        let attempts = vec![
+            ChannelAttempt {
+                channel_id: "c1".into(),
+                channel_name: Some("OpenAI".into()),
+                status: "ok".into(),
+                duration_ms: 12,
+                error: None,
+                upstream_key_hint: Some("sk-...abc".into()),
+            },
+            ChannelAttempt {
+                channel_id: "c2".into(),
+                channel_name: None,
+                status: "fail".into(),
+                duration_ms: 5,
+                error: Some("timeout".into()),
+                upstream_key_hint: None,
+            },
+        ];
+        rec.record_request(base_record(attempts))
+            .await
+            .unwrap();
+
+        let attempts_json: String =
+            sqlx::query_scalar("SELECT attempts FROM usage_logs LIMIT 1")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        let parsed: Vec<ChannelAttempt> = serde_json::from_str(&attempts_json).unwrap();
+        assert_eq!(parsed.len(), 2);
+        assert_eq!(parsed[0].channel_id, "c1");
+        assert_eq!(parsed[1].error.as_deref(), Some("timeout"));
+    }
+}

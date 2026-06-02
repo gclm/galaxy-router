@@ -1145,4 +1145,183 @@ mod tests {
         assert_eq!(record.request_type, "unknown");
         assert_eq!(record.attempts.len(), 1);
     }
+
+    // ============================================================
+    // 端到端：mock 本地 upstream + 真实 ProxyState 调 proxy_request
+    // ============================================================
+
+    use crate::db::Database;
+    use crate::proxy::ProxyState;
+    use crate::stats::model::ModelRegistry;
+    use axum::{Router, routing::post};
+
+    async fn spawn_mock_upstream() -> String {
+        use axum::extract::Json as AxJson;
+
+        async fn mock_chat(AxJson(_body): AxJson<serde_json::Value>) -> AxJson<serde_json::Value> {
+            AxJson(serde_json::json!({
+                "id": "chatcmpl-test",
+                "object": "chat.completion",
+                "model": "gpt-4o",
+                "choices": [{
+                    "index": 0,
+                    "message": {"role": "assistant", "content": "hi back"},
+                    "finish_reason": "stop"
+                }],
+                "usage": {
+                    "prompt_tokens": 10,
+                    "completion_tokens": 5,
+                    "total_tokens": 15
+                }
+            }))
+        }
+
+        let app = Router::new().route("/v1/chat/completions", post(mock_chat));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let _ = axum::serve(listener, app).await;
+        });
+        // 等服务器就绪：发起一次 OPTIONS 失败会得到 405，证明已监听
+        let url = format!("http://{}/v1/chat/completions", addr);
+        for _ in 0..20 {
+            if reqwest::Client::new()
+                .request(reqwest::Method::POST, &url)
+                .body("{}")
+                .send()
+                .await
+                .is_ok()
+            {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+        url
+    }
+
+    async fn make_state_with_channel(upstream_url: &str) -> (ProxyState, sqlx::SqlitePool) {
+        let db_path = format!("/tmp/galaxy_execute_{}.db", uuid::Uuid::now_v7());
+        let _ = std::fs::remove_file(&db_path);
+        let db_url = format!("sqlite:{}?mode=rwc", db_path);
+        let db = Database::new(&db_url).await.unwrap();
+        let pool = db.pool().clone();
+
+        // base_url 是 URL 去掉 /chat/completions 后的部分
+        let base_url = upstream_url.trim_end_matches("/chat/completions");
+        let channel_id = "ch-mock";
+        let api_keys = r#"[{"key":"sk-mock","note":"","enabled":true}]"#;
+        let endpoints = format!(
+            r#"[{{"type":"openai_chat","base_url":"{}","enabled":true}}]"#,
+            base_url
+        );
+        let models = r#"["gpt-4o"]"#;
+        sqlx::query(
+            "INSERT INTO channels (id, name, api_keys, endpoints, models, enabled) \
+             VALUES (?, 'mock', ?, ?, ?, 1)",
+        )
+        .bind(channel_id)
+        .bind(api_keys)
+        .bind(&endpoints)
+        .bind(models)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let group_id = "grp-mock";
+        sqlx::query("INSERT INTO groups (id, name, enabled) VALUES (?, 'gpt-4o', 1)")
+            .bind(group_id)
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO group_items (id, group_id, channel_id, model_name) \
+             VALUES ('item-mock', ?, ?, 'gpt-4o')",
+        )
+        .bind(group_id)
+        .bind(channel_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let registry = ModelRegistry::new(pool.clone());
+        let state = ProxyState::new(pool.clone(), registry).await;
+        (state, pool)
+    }
+
+    #[tokio::test]
+    async fn proxy_request_passes_through_to_local_upstream() {
+        let upstream = spawn_mock_upstream().await;
+        let (state, pool) = make_state_with_channel(&upstream).await;
+
+        let body = serde_json::json!({
+            "model": "gpt-4o",
+            "messages": [{"role": "user", "content": "hi"}]
+        });
+        let headers = axum::http::HeaderMap::new();
+        let result = proxy_request(
+            &state,
+            Some("key-1"),
+            &headers,
+            &body,
+            &EndpointType::OpenAiChat,
+        )
+        .await
+        .expect("proxy should succeed");
+
+        assert_eq!(result.status, 200);
+        let resp: serde_json::Value = serde_json::from_slice(&result.body).unwrap();
+        assert_eq!(resp["choices"][0]["message"]["content"], "hi back");
+        assert_eq!(resp["usage"]["prompt_tokens"], 10);
+
+        // 日志应被记录
+        let count: i32 = sqlx::query_scalar("SELECT COUNT(*) FROM usage_logs")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(count, 1, "应记录 1 条请求日志");
+    }
+
+    #[tokio::test]
+    async fn proxy_request_no_available_channel_returns_error() {
+        // 没有 channel/group 时
+        let db_path = format!("/tmp/galaxy_execute_empty_{}.db", uuid::Uuid::now_v7());
+        let _ = std::fs::remove_file(&db_path);
+        let db_url = format!("sqlite:{}?mode=rwc", db_path);
+        let db = Database::new(&db_url).await.unwrap();
+        let pool = db.pool().clone();
+        let registry = ModelRegistry::new(pool.clone());
+        let state = ProxyState::new(pool.clone(), registry).await;
+
+        let body = serde_json::json!({
+            "model": "gpt-4o",
+            "messages": [{"role": "user", "content": "hi"}]
+        });
+        let headers = axum::http::HeaderMap::new();
+        let result = proxy_request(
+            &state,
+            Some("key-1"),
+            &headers,
+            &body,
+            &EndpointType::OpenAiChat,
+        )
+        .await;
+        let err = match result {
+            Ok(_) => panic!("expected NoAvailableChannel, got Ok"),
+            Err(e) => e,
+        };
+        assert!(matches!(err, ProxyError::NoAvailableChannel(_)), "got {:?}", err);
+
+        // 失败也应记录日志（minimal_for_select_failure 路径）
+        let count: i32 = sqlx::query_scalar("SELECT COUNT(*) FROM usage_logs")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(count, 1, "渠道选择失败也应记录日志");
+        let status: Option<i32> =
+            sqlx::query_scalar("SELECT status_code FROM usage_logs LIMIT 1")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(status, Some(503));
+    }
 }
