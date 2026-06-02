@@ -63,10 +63,7 @@ async fn test_anthropic_inbound_with_system() {
     assert_eq!(req.model, "claude-sonnet-4-20250514");
     // Anthropic max_tokens 字段映射到 LlmRequest::max_completion_tokens
     assert_eq!(req.max_completion_tokens, Some(2048));
-    assert!(req.messages.iter().any(|m| matches!(
-        m.role,
-        Role::System
-    )));
+    assert!(req.messages.iter().any(|m| matches!(m.role, Role::System)));
 }
 
 #[tokio::test]
@@ -197,10 +194,7 @@ fn test_openai_responses_outbound_uses_bearer() {
     let outbound = OpenAiResponsesOutbound;
     let mut headers = HeaderMap::new();
     outbound.set_auth_header(&mut headers, "sk-oai");
-    assert_eq!(
-        headers.get("authorization").unwrap(),
-        "Bearer sk-oai"
-    );
+    assert_eq!(headers.get("authorization").unwrap(), "Bearer sk-oai");
 }
 
 // ============================================================
@@ -418,9 +412,11 @@ async fn test_anthropic_inbound_image_and_tool_use_and_result() {
     // 第一条：image 转为 ImageUrl
     match &req.messages[0].content {
         Some(Content::Parts(parts)) => {
-            assert!(parts
-                .iter()
-                .any(|p| matches!(p, ContentPart::ImageUrl { .. })));
+            assert!(
+                parts
+                    .iter()
+                    .any(|p| matches!(p, ContentPart::ImageUrl { .. }))
+            );
         }
         _ => panic!("expected Parts for image"),
     }
@@ -493,9 +489,7 @@ async fn test_anthropic_inbound_with_tools() {
 fn test_anthropic_inbound_response_with_reasoning_and_tool_use() {
     let mut resp = sample_llm_response();
     resp.choices[0].message.reasoning_content = Some("because...".into());
-    let bytes = AnthropicInbound
-        .transform_response(&resp)
-        .unwrap();
+    let bytes = AnthropicInbound.transform_response(&resp).unwrap();
     let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
     let content = v["content"].as_array().unwrap();
     assert!(content.iter().any(|c| c["type"] == "thinking"));
@@ -524,9 +518,11 @@ fn test_anthropic_inbound_response_with_tool_use_part() {
     let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
     assert_eq!(v["stop_reason"], "tool_use");
     let content = v["content"].as_array().unwrap();
-    assert!(content
-        .iter()
-        .any(|c| c["type"] == "tool_use" && c["id"] == "tu-x"));
+    assert!(
+        content
+            .iter()
+            .any(|c| c["type"] == "tool_use" && c["id"] == "tu-x")
+    );
 }
 
 #[test]
@@ -543,9 +539,7 @@ fn test_anthropic_inbound_response_with_empty_choices() {
 
 #[test]
 fn test_anthropic_inbound_stream_event_emits_text_delta_and_stop() {
-    use galaxy_router::protocol::model::{
-        FinishReason, LlmStreamResponse, Message, StreamChoice,
-    };
+    use galaxy_router::protocol::model::{FinishReason, LlmStreamResponse, Message, StreamChoice};
     let event = LlmStreamResponse {
         id: String::new(),
         object: "chunk".into(),
@@ -652,10 +646,12 @@ fn test_anthropic_outbound_stream_event_done_returns_none() {
 
 #[test]
 fn test_anthropic_outbound_stream_event_empty_text_returns_none() {
-    assert!(AnthropicOutbound
-        .transform_stream_event(b"")
-        .unwrap()
-        .is_none());
+    assert!(
+        AnthropicOutbound
+            .transform_stream_event(b"")
+            .unwrap()
+            .is_none()
+    );
 }
 
 #[test]
@@ -714,7 +710,10 @@ async fn test_openai_chat_inbound_with_tool_calls() {
     assert_eq!(calls[0].function.name, "get_weather");
     let tools = req.tools.expect("tools present");
     assert_eq!(tools[0].function.name, "get_weather");
-    assert!(matches!(req.tool_choice, Some(galaxy_router::protocol::model::ToolChoice::Auto)));
+    assert!(matches!(
+        req.tool_choice,
+        Some(galaxy_router::protocol::model::ToolChoice::Auto)
+    ));
 }
 
 #[tokio::test]
@@ -752,9 +751,7 @@ async fn test_openai_chat_inbound_tool_choice_required_and_function() {
 
 #[test]
 fn test_openai_chat_inbound_stream_event_serializes() {
-    use galaxy_router::protocol::model::{
-        FinishReason, LlmStreamResponse, Message, StreamChoice,
-    };
+    use galaxy_router::protocol::model::{FinishReason, LlmStreamResponse, Message, StreamChoice};
     let event = LlmStreamResponse {
         id: "x".into(),
         object: "chunk".into(),
@@ -854,15 +851,13 @@ async fn test_openai_responses_inbound_input_as_array_with_roles() {
         .unwrap();
     // system/user/assistant 都映射成消息；tool 角色降级为 user（unknown 分支）
     assert!(req.messages.len() >= 3);
-    assert!(req
-        .messages
-        .iter()
-        .any(|m| matches!(m.role, Role::System)));
+    assert!(req.messages.iter().any(|m| matches!(m.role, Role::System)));
     assert!(req.messages.iter().any(|m| matches!(m.role, Role::User)));
-    assert!(req
-        .messages
-        .iter()
-        .any(|m| matches!(m.role, Role::Assistant)));
+    assert!(
+        req.messages
+            .iter()
+            .any(|m| matches!(m.role, Role::Assistant))
+    );
 }
 
 #[tokio::test]
@@ -912,16 +907,16 @@ async fn test_openai_responses_inbound_with_tools_and_previous_response_id() {
     assert_eq!(req.temperature, Some(0.5));
     assert_eq!(req.max_completion_tokens, Some(256));
     assert_eq!(
-        req.extra.get("previous_response_id").and_then(|v| v.as_str()),
+        req.extra
+            .get("previous_response_id")
+            .and_then(|v| v.as_str()),
         Some("resp_prev")
     );
 }
 
 #[test]
 fn test_openai_responses_inbound_stream_event_serializes() {
-    use galaxy_router::protocol::model::{
-        FinishReason, LlmStreamResponse, Message, StreamChoice,
-    };
+    use galaxy_router::protocol::model::{FinishReason, LlmStreamResponse, Message, StreamChoice};
     let event = LlmStreamResponse {
         id: String::new(),
         object: "chunk".into(),
@@ -943,7 +938,9 @@ fn test_openai_responses_inbound_stream_event_serializes() {
         usage: None,
         system_fingerprint: None,
     };
-    let bytes = OpenAiResponsesInbound.transform_stream_event(&event).unwrap();
+    let bytes = OpenAiResponsesInbound
+        .transform_stream_event(&event)
+        .unwrap();
     let s = String::from_utf8(bytes).unwrap();
     assert!(s.contains("data: "));
     assert!(s.contains("\"delta\":\"ok\""));
@@ -997,7 +994,9 @@ fn test_openai_responses_inbound_stream_event_reasoning() {
         usage: None,
         system_fingerprint: None,
     };
-    let bytes = OpenAiResponsesInbound.transform_stream_event(&event).unwrap();
+    let bytes = OpenAiResponsesInbound
+        .transform_stream_event(&event)
+        .unwrap();
     let s = String::from_utf8(bytes).unwrap();
     assert!(s.contains("response.reasoning.delta"));
     assert!(s.contains("\"delta\":\"thinking...\""));
@@ -1033,7 +1032,9 @@ fn test_openai_responses_inbound_stream_event_finish_emits_completed() {
         }),
         system_fingerprint: None,
     };
-    let bytes = OpenAiResponsesInbound.transform_stream_event(&event).unwrap();
+    let bytes = OpenAiResponsesInbound
+        .transform_stream_event(&event)
+        .unwrap();
     let s = String::from_utf8(bytes).unwrap();
     assert!(s.contains("response.completed"));
     assert!(s.contains("\"id\":\"resp_42\""));
@@ -1071,7 +1072,9 @@ fn test_openai_responses_inbound_stream_event_tool_calls() {
         usage: None,
         system_fingerprint: None,
     };
-    let bytes = OpenAiResponsesInbound.transform_stream_event(&event).unwrap();
+    let bytes = OpenAiResponsesInbound
+        .transform_stream_event(&event)
+        .unwrap();
     let s = String::from_utf8(bytes).unwrap();
     assert!(s.contains("response.function_call_arguments.delta"));
     assert!(s.contains("\"call_id\":\"call_x\""));

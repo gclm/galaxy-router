@@ -6,8 +6,8 @@ use axum::{
 use sqlx::SqlitePool;
 
 use super::types::{
-    Channel, ChannelRow, ChannelState, CreateChannelRequest, ListChannelsQuery,
-    PaginatedResponse, UpdateChannelRequest, UpstreamApiKey,
+    Channel, ChannelRow, ChannelState, CreateChannelRequest, ListChannelsQuery, PaginatedResponse,
+    UpdateChannelRequest, UpstreamApiKey,
 };
 use crate::api::response::generate_id;
 use crate::api::{ApiError, ApiResponse};

@@ -133,10 +133,7 @@ pub fn extract_summary(content: &str) -> Option<String> {
 
     // 提取 max_tokens
     if let Some(max_tokens) = value.get("max_tokens").and_then(|v| v.as_i64()) {
-        summary.insert(
-            "max_tokens".to_string(),
-            Value::Number(max_tokens.into()),
-        );
+        summary.insert("max_tokens".to_string(), Value::Number(max_tokens.into()));
     }
 
     Some(serde_json::to_string(&summary).unwrap_or_default())

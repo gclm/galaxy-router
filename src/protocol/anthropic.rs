@@ -634,7 +634,13 @@ impl Outbound for AnthropicOutbound {
     }
 
     fn set_auth_header(&self, headers: &mut reqwest::header::HeaderMap, api_key: &str) {
-        headers.insert("x-api-key", api_key.parse().expect("api_key validated at save"));
-        headers.insert("anthropic-version", "2023-06-01".parse().expect("static value"));
+        headers.insert(
+            "x-api-key",
+            api_key.parse().expect("api_key validated at save"),
+        );
+        headers.insert(
+            "anthropic-version",
+            "2023-06-01".parse().expect("static value"),
+        );
     }
 }

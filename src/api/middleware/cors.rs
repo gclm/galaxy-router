@@ -7,14 +7,12 @@ use sqlx::SqlitePool;
 /// 从数据库读取 CORS 允许的 origins
 /// 返回值：空=禁止跨域，"*"=允许所有，其他=逗号分隔的白名单
 async fn load_cors_origins(pool: &SqlitePool) -> String {
-    sqlx::query_scalar::<_, String>(
-        "SELECT value FROM settings WHERE key = 'cors.allow_origins'",
-    )
-    .fetch_optional(pool)
-    .await
-    .ok()
-    .flatten()
-    .unwrap_or_default()
+    sqlx::query_scalar::<_, String>("SELECT value FROM settings WHERE key = 'cors.allow_origins'")
+        .fetch_optional(pool)
+        .await
+        .ok()
+        .flatten()
+        .unwrap_or_default()
 }
 
 /// 检查 origin 是否在允许列表中
@@ -84,11 +82,7 @@ fn set_cors_headers(headers: &mut HeaderMap, origin: &str) {
 }
 
 /// CORS 中间件：异步从 DB 读取配置，动态校验 origin
-pub async fn require_cors(
-    pool: SqlitePool,
-    request: Request<Body>,
-    next: Next,
-) -> Response {
+pub async fn require_cors(pool: SqlitePool, request: Request<Body>, next: Next) -> Response {
     // 仅处理携带 Origin header 的请求（跨域请求）
     let origin = match request
         .headers()

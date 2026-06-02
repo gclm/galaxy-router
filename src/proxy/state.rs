@@ -132,7 +132,9 @@ impl LoadBalancerState {
             }
         }
         // 通知熔断器（使用空的 key_hint，后续可扩展）
-        self.circuit_breaker.record_success(channel_id, "default").await;
+        self.circuit_breaker
+            .record_success(channel_id, "default")
+            .await;
     }
 
     /// 记录请求失败
@@ -151,7 +153,9 @@ impl LoadBalancerState {
             }
         }
         // 通知熔断器
-        self.circuit_breaker.record_failure(channel_id, "default").await;
+        self.circuit_breaker
+            .record_failure(channel_id, "default")
+            .await;
     }
 
     /// 检查渠道是否可用（使用熔断器）

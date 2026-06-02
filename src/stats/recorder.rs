@@ -109,7 +109,11 @@ mod tests {
         let db_path = format!("/tmp/galaxy_stats_recorder_{}.db", uuid::Uuid::now_v7());
         let _ = std::fs::remove_file(&db_path);
         let db_url = format!("sqlite:{}?mode=rwc", db_path);
-        crate::db::Database::new(&db_url).await.unwrap().pool().clone()
+        crate::db::Database::new(&db_url)
+            .await
+            .unwrap()
+            .pool()
+            .clone()
     }
 
     fn base_record(attempts: Vec<ChannelAttempt>) -> RequestRecord {
@@ -175,15 +179,12 @@ mod tests {
                 upstream_key_hint: None,
             },
         ];
-        rec.record_request(base_record(attempts))
+        rec.record_request(base_record(attempts)).await.unwrap();
+
+        let attempts_json: String = sqlx::query_scalar("SELECT attempts FROM usage_logs LIMIT 1")
+            .fetch_one(&pool)
             .await
             .unwrap();
-
-        let attempts_json: String =
-            sqlx::query_scalar("SELECT attempts FROM usage_logs LIMIT 1")
-                .fetch_one(&pool)
-                .await
-                .unwrap();
         let parsed: Vec<ChannelAttempt> = serde_json::from_str(&attempts_json).unwrap();
         assert_eq!(parsed.len(), 2);
         assert_eq!(parsed[0].channel_id, "c1");

@@ -154,9 +154,7 @@ impl<S: Send + Sync> FromRequestParts<S> for ApiKeyAuth {
                     })),
                 ));
             }
-            return Ok(ApiKeyAuth {
-                key_id: id,
-            });
+            return Ok(ApiKeyAuth { key_id: id });
         }
 
         // 2. 缓存未命中，查询数据库
@@ -197,9 +195,7 @@ impl<S: Send + Sync> FromRequestParts<S> for ApiKeyAuth {
                         })),
                     ));
                 }
-                Ok(ApiKeyAuth {
-                    key_id: id,
-                })
+                Ok(ApiKeyAuth { key_id: id })
             }
             None => Err((
                 StatusCode::UNAUTHORIZED,

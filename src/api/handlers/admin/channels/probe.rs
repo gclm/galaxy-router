@@ -6,7 +6,9 @@ use axum::{
 use reqwest::Client;
 
 use super::crud::get_channel_by_id;
-use super::types::{ChannelState, CustomHeader, EndpointType, TestChannelRequest, TestChannelResponse};
+use super::types::{
+    ChannelState, CustomHeader, EndpointType, TestChannelRequest, TestChannelResponse,
+};
 use crate::api::{ApiError, ApiResponse};
 
 const TEST_PROMPT: &str = "Hello! Please respond with a brief greeting in one sentence.";
@@ -516,7 +518,8 @@ mod tests {
 
     #[test]
     fn build_test_payload_for_embedding_uses_input_field() {
-        let (body, path) = build_test_payload(&EndpointType::OpenAiEmbedding, "text-embed").unwrap();
+        let (body, path) =
+            build_test_payload(&EndpointType::OpenAiEmbedding, "text-embed").unwrap();
         assert_eq!(path, "/embeddings");
         assert_eq!(body["input"], TEST_PROMPT);
     }
@@ -542,7 +545,11 @@ mod tests {
             EndpointType::OpenAiResponse,
         ] {
             let (body, _path) = build_streaming_test_payload(&proto, "m").unwrap();
-            assert_eq!(body["stream"], true, "stream should be true for {:?}", proto);
+            assert_eq!(
+                body["stream"], true,
+                "stream should be true for {:?}",
+                proto
+            );
         }
     }
 
@@ -558,7 +565,10 @@ mod tests {
         let body = json!({
             "choices": [{"message": {"content": "hello"}}]
         });
-        assert_eq!(extract_test_content(&body, &EndpointType::OpenAiChat), "hello");
+        assert_eq!(
+            extract_test_content(&body, &EndpointType::OpenAiChat),
+            "hello"
+        );
     }
 
     #[test]
@@ -577,7 +587,10 @@ mod tests {
         let body = json!({
             "content": [{"text": "alpha"}]
         });
-        assert_eq!(extract_test_content(&body, &EndpointType::Anthropic), "alpha");
+        assert_eq!(
+            extract_test_content(&body, &EndpointType::Anthropic),
+            "alpha"
+        );
     }
 
     #[test]
@@ -614,7 +627,10 @@ mod tests {
     #[test]
     fn extract_test_content_unknown_protocol_returns_marker() {
         let body = json!({});
-        assert_eq!(extract_test_content(&body, &EndpointType::Gemini), "(未知协议)");
+        assert_eq!(
+            extract_test_content(&body, &EndpointType::Gemini),
+            "(未知协议)"
+        );
     }
 
     #[test]
@@ -657,19 +673,13 @@ mod tests {
             extract_usage(&body, &EndpointType::OpenAiChat),
             (None, None)
         );
-        assert_eq!(
-            extract_usage(&body, &EndpointType::Anthropic),
-            (None, None)
-        );
+        assert_eq!(extract_usage(&body, &EndpointType::Anthropic), (None, None));
     }
 
     #[test]
     fn extract_usage_unsupported_protocol_returns_none() {
         let body = json!({"usage": {"prompt_tokens": 99}});
-        assert_eq!(
-            extract_usage(&body, &EndpointType::Gemini),
-            (None, None)
-        );
+        assert_eq!(extract_usage(&body, &EndpointType::Gemini), (None, None));
         assert_eq!(
             extract_usage(&body, &EndpointType::OpenAiEmbedding),
             (None, None)

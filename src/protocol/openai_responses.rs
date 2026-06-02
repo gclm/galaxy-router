@@ -583,7 +583,9 @@ impl Outbound for OpenAiResponsesOutbound {
     fn set_auth_header(&self, headers: &mut reqwest::header::HeaderMap, api_key: &str) {
         headers.insert(
             "Authorization",
-            format!("Bearer {}", api_key).parse().expect("api_key validated at save"),
+            format!("Bearer {}", api_key)
+                .parse()
+                .expect("api_key validated at save"),
         );
     }
 }

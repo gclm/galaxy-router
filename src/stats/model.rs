@@ -584,7 +584,9 @@ mod tests {
         m.input_price = None;
         reg.set_model_info(m).await.unwrap();
 
-        let cost = reg.calculate_cost("mystery", 1_000_000, 1_000_000, 0, 0).await;
+        let cost = reg
+            .calculate_cost("mystery", 1_000_000, 1_000_000, 0, 0)
+            .await;
         assert_eq!(cost, 0.0);
     }
 
@@ -683,11 +685,10 @@ mod tests {
         assert_eq!(got.input_price, Some(5.0));
         assert_eq!(got.output_price, Some(10.0));
         // 不应产生重复行
-        let count: i32 =
-            sqlx::query_scalar("SELECT COUNT(*) FROM model_info WHERE model = 'dup'")
-                .fetch_one(&reg.pool)
-                .await
-                .unwrap();
+        let count: i32 = sqlx::query_scalar("SELECT COUNT(*) FROM model_info WHERE model = 'dup'")
+            .fetch_one(&reg.pool)
+            .await
+            .unwrap();
         assert_eq!(count, 1);
     }
 }

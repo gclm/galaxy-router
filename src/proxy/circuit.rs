@@ -83,11 +83,7 @@ impl CircuitBreaker {
 
     /// 检查渠道是否被熔断
     /// 返回 (is_tripped, remaining_cooldown)
-    pub async fn is_tripped(
-        &self,
-        channel_id: &str,
-        key_hint: &str,
-    ) -> (bool, Option<Duration>) {
+    pub async fn is_tripped(&self, channel_id: &str, key_hint: &str) -> (bool, Option<Duration>) {
         let key = format!("{}:{}", channel_id, key_hint);
         let entries = self.entries.read().await;
 
@@ -377,9 +373,8 @@ mod tests {
         {
             let mut entries = breaker.entries.write().await;
             if let Some(entry) = entries.get_mut("ch1:key1") {
-                entry.last_failure_time = Some(
-                    std::time::Instant::now() - std::time::Duration::from_secs(120),
-                );
+                entry.last_failure_time =
+                    Some(std::time::Instant::now() - std::time::Duration::from_secs(120));
             }
         }
 

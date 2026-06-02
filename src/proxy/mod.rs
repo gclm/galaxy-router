@@ -18,10 +18,10 @@ use self::state::LoadBalancerState;
 use crate::api::handlers::admin::channels::{
     CustomHeader, EndpointConfig, EndpointType, UpstreamApiKey, parse_api_keys,
 };
-use crate::proxy::execute::{execute_proxy_stream, proxy_request, save_request_record};
-use crate::proxy::prepare::select_channel_for_proxy;
 use crate::protocol::inbound::Inbound;
 use crate::protocol::outbound::Outbound;
+use crate::proxy::execute::{execute_proxy_stream, proxy_request, save_request_record};
+use crate::proxy::prepare::select_channel_for_proxy;
 use crate::proxy::sse::sanitize_upstream_error;
 use crate::stats::model::ModelRegistry;
 use crate::stats::recorder::StatsRecorder;
@@ -277,11 +277,13 @@ impl ProxyState {
 
         Ok(items
             .into_iter()
-            .map(|(channel_id, model_name, _priority, weight)| GroupItemInfo {
-                channel_id,
-                model_name,
-                weight,
-            })
+            .map(
+                |(channel_id, model_name, _priority, weight)| GroupItemInfo {
+                    channel_id,
+                    model_name,
+                    weight,
+                },
+            )
             .collect())
     }
 
@@ -547,34 +549,29 @@ pub async fn proxy_stream(
     let mut attempts = Vec::new();
 
     for attempt in 0..max_retries {
-        let selection = match select_channel_for_proxy(
-            state,
-            headers,
-            body,
-            client_endpoint,
-            &exclude_ids,
-        )
-        .await
-        {
-            Ok(s) => s,
-            Err(e) => {
-                // 渠道选择失败时也记录日志
-                save_request_record(
-                    state,
-                    api_key_id,
-                    None,
-                    &model,
-                    request_content.clone(),
-                    None,
-                    &attempts,
-                    None,
-                    true,
-                    user_agent.clone(),
-                )
-                .await;
-                return Err(e);
-            }
-        };
+        let selection =
+            match select_channel_for_proxy(state, headers, body, client_endpoint, &exclude_ids)
+                .await
+            {
+                Ok(s) => s,
+                Err(e) => {
+                    // 渠道选择失败时也记录日志
+                    save_request_record(
+                        state,
+                        api_key_id,
+                        None,
+                        &model,
+                        request_content.clone(),
+                        None,
+                        &attempts,
+                        None,
+                        true,
+                        user_agent.clone(),
+                    )
+                    .await;
+                    return Err(e);
+                }
+            };
         let channel_id = selection.channel.id.clone();
         let group_id = selection.group_id.clone();
         let api_key_attempts = state.api_key_attempts(&selection.channel);

@@ -2,7 +2,7 @@ use axum::body::Bytes;
 use axum::http::{HeaderMap, StatusCode};
 
 use super::prepare::{
-    extract_request_text, extract_response_text, extract_usage, estimate_tokens,
+    estimate_tokens, extract_request_text, extract_response_text, extract_usage,
     prepare_proxy_request, select_channel_for_proxy,
 };
 use super::selection::SelectionResult;
@@ -333,34 +333,29 @@ pub async fn proxy_request(
     let mut attempts = Vec::new();
 
     for attempt in 0..max_retries {
-        let selection = match select_channel_for_proxy(
-            state,
-            headers,
-            body,
-            client_endpoint,
-            &exclude_ids,
-        )
-        .await
-        {
-            Ok(s) => s,
-            Err(e) => {
-                // 渠道选择失败时也记录日志
-                save_request_record(
-                    state,
-                    api_key_id,
-                    None,
-                    &model,
-                    request_content.clone(),
-                    None,
-                    &attempts,
-                    None,
-                    false,
-                    user_agent.clone(),
-                )
-                .await;
-                return Err(e);
-            }
-        };
+        let selection =
+            match select_channel_for_proxy(state, headers, body, client_endpoint, &exclude_ids)
+                .await
+            {
+                Ok(s) => s,
+                Err(e) => {
+                    // 渠道选择失败时也记录日志
+                    save_request_record(
+                        state,
+                        api_key_id,
+                        None,
+                        &model,
+                        request_content.clone(),
+                        None,
+                        &attempts,
+                        None,
+                        false,
+                        user_agent.clone(),
+                    )
+                    .await;
+                    return Err(e);
+                }
+            };
         let channel_id = selection.channel.id.clone();
         let group_id = selection.group_id.clone();
         let api_key_attempts = state.api_key_attempts(&selection.channel);
@@ -1312,7 +1307,11 @@ mod tests {
             Ok(_) => panic!("expected NoAvailableChannel, got Ok"),
             Err(e) => e,
         };
-        assert!(matches!(err, ProxyError::NoAvailableChannel(_)), "got {:?}", err);
+        assert!(
+            matches!(err, ProxyError::NoAvailableChannel(_)),
+            "got {:?}",
+            err
+        );
 
         // 失败也应记录日志（minimal_for_select_failure 路径）
         let count: i32 = sqlx::query_scalar("SELECT COUNT(*) FROM usage_logs")
@@ -1320,11 +1319,10 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(count, 1, "渠道选择失败也应记录日志");
-        let status: Option<i32> =
-            sqlx::query_scalar("SELECT status_code FROM usage_logs LIMIT 1")
-                .fetch_one(&pool)
-                .await
-                .unwrap();
+        let status: Option<i32> = sqlx::query_scalar("SELECT status_code FROM usage_logs LIMIT 1")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
         assert_eq!(status, Some(503));
     }
 }

@@ -5,7 +5,10 @@
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use galaxy_router::api::router::create_router;
-use galaxy_router::config::{AppConfig, AuthConfig, DatabaseConfig, LoggingConfig, PricingTomlConfig, QueuingConfig, ServerConfig};
+use galaxy_router::config::{
+    AppConfig, AuthConfig, DatabaseConfig, LoggingConfig, PricingTomlConfig, QueuingConfig,
+    ServerConfig,
+};
 use galaxy_router::db::Database;
 use galaxy_router::stats::model::ModelRegistry;
 use tower::ServiceExt;
@@ -45,7 +48,15 @@ async fn build_test_app() -> axum::Router {
         },
     };
 
-    create_router(pool, "test-e2e-secret".to_string(), &config.queuing.clone(), "127.0.0.1:0", config, registry).await
+    create_router(
+        pool,
+        "test-e2e-secret".to_string(),
+        &config.queuing.clone(),
+        "127.0.0.1:0",
+        config,
+        registry,
+    )
+    .await
 }
 
 #[tokio::test]
@@ -496,7 +507,9 @@ async fn test_e2e_admin_api_keys_crud() {
                 .uri("/api/v1/admin/api-keys")
                 .header("authorization", format!("Bearer {}", jwt))
                 .header("content-type", "application/json")
-                .body(Body::from(r#"{"name":"test-key","supported_models":"gpt-4o,claude-sonnet-4"}"#))
+                .body(Body::from(
+                    r#"{"name":"test-key","supported_models":"gpt-4o,claude-sonnet-4"}"#,
+                ))
                 .unwrap(),
         )
         .await

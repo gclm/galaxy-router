@@ -390,10 +390,7 @@ fn test_password_hash_resists_tampering() {
     let mut tampered = hash.clone();
     let last = tampered.pop().unwrap();
     tampered.push(if last == 'A' { 'B' } else { 'A' });
-    assert!(
-        !galaxy_router::auth::PasswordService::verify_password(password, &tampered)
-            .unwrap()
-    );
+    assert!(!galaxy_router::auth::PasswordService::verify_password(password, &tampered).unwrap());
 }
 
 #[test]
@@ -473,7 +470,8 @@ async fn test_channel_rejects_crlf_in_api_key() {
         enabled: true,
     }];
     let json = serde_json::to_string(&api_keys).unwrap();
-    let parsed: Vec<UpstreamApiKey> = galaxy_router::api::handlers::admin::channels::parse_api_keys(&json);
+    let parsed: Vec<UpstreamApiKey> =
+        galaxy_router::api::handlers::admin::channels::parse_api_keys(&json);
     // parse_api_keys 只做 JSON 反序列化，CRLF 字符在 JSON 字符串里合法，所以解析通过
     // 真正的安全校验在 validate_header_value（创建渠道时调用）
     assert_eq!(parsed.len(), 1);
@@ -508,5 +506,8 @@ async fn test_channel_rejects_crlf_in_api_key() {
     let serialized = serde_json::to_string(&ch).unwrap();
     let deserialized: Channel = serde_json::from_str(&serialized).unwrap();
     assert_eq!(deserialized.id, "test");
-    assert_eq!(deserialized.endpoints[0].endpoint_type, EndpointType::Anthropic);
+    assert_eq!(
+        deserialized.endpoints[0].endpoint_type,
+        EndpointType::Anthropic
+    );
 }

@@ -55,7 +55,10 @@ mod tests {
         let p1 = q.acquire().await.unwrap();
         let p2 = q.acquire().await.unwrap();
         // 容量已满，第三次应当超时
-        assert!(matches!(q.acquire().await, Err(QueueError::QueueFull { .. })));
+        assert!(matches!(
+            q.acquire().await,
+            Err(QueueError::QueueFull { .. })
+        ));
         drop(p1);
         drop(p2);
     }

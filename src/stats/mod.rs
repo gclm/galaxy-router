@@ -1,7 +1,7 @@
 pub mod model;
 pub mod pricing_refresher;
-pub mod redaction;
 pub mod recorder;
+pub mod redaction;
 pub mod token_estimator;
 
 use serde::{Deserialize, Serialize};
@@ -750,11 +750,13 @@ mod tests {
     async fn get_channel_stats_joins_channel_name() {
         let pool = make_pool().await;
         let channel_id = "ch-1";
-        sqlx::query("INSERT INTO channels (id, name, api_keys, endpoints) VALUES (?, 'OpenAI', '[]', '[]')")
-            .bind(channel_id)
-            .execute(&pool)
-            .await
-            .unwrap();
+        sqlx::query(
+            "INSERT INTO channels (id, name, api_keys, endpoints) VALUES (?, 'OpenAI', '[]', '[]')",
+        )
+        .bind(channel_id)
+        .execute(&pool)
+        .await
+        .unwrap();
         seed_log(&pool, "gpt-4o", Some(channel_id), None, 200, 10, 5, 0.0001).await;
         seed_log(&pool, "gpt-4o", Some(channel_id), None, 500, 10, 0, 0.0).await;
         // 渠道已被删除的日志，LEFT JOIN 应保留并标记 unknown
@@ -782,8 +784,7 @@ mod tests {
         let stats = state.get_daily_stats(1).await.unwrap();
         assert_eq!(stats.len(), 24, "应补齐 24 个小时槽位");
         // 至少有一个槽位有数据
-        let non_empty: Vec<&DailyStats> =
-            stats.iter().filter(|s| s.request_count > 0).collect();
+        let non_empty: Vec<&DailyStats> = stats.iter().filter(|s| s.request_count > 0).collect();
         assert!(!non_empty.is_empty());
         // 当前小时的 success+failure 应等于总请求数
         let total_success: i32 = stats.iter().map(|s| s.success_count).sum();
@@ -846,11 +847,13 @@ mod tests {
     async fn get_channel_stats_by_range() {
         let pool = make_pool().await;
         let cid = "ch-1";
-        sqlx::query("INSERT INTO channels (id, name, api_keys, endpoints) VALUES (?, 'A', '[]', '[]')")
-            .bind(cid)
-            .execute(&pool)
-            .await
-            .unwrap();
+        sqlx::query(
+            "INSERT INTO channels (id, name, api_keys, endpoints) VALUES (?, 'A', '[]', '[]')",
+        )
+        .bind(cid)
+        .execute(&pool)
+        .await
+        .unwrap();
         seed_log(&pool, "gpt-4o", Some(cid), None, 200, 10, 5, 0.001).await;
         let state = new_state(pool);
         let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
@@ -903,10 +906,20 @@ mod tests {
         let pool = make_pool().await;
         let cid_a = "ch-a";
         let cid_b = "ch-b";
-        sqlx::query("INSERT INTO channels (id, name, api_keys, endpoints) VALUES (?, 'A', '[]', '[]')")
-            .bind(cid_a).execute(&pool).await.unwrap();
-        sqlx::query("INSERT INTO channels (id, name, api_keys, endpoints) VALUES (?, 'B', '[]', '[]')")
-            .bind(cid_b).execute(&pool).await.unwrap();
+        sqlx::query(
+            "INSERT INTO channels (id, name, api_keys, endpoints) VALUES (?, 'A', '[]', '[]')",
+        )
+        .bind(cid_a)
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO channels (id, name, api_keys, endpoints) VALUES (?, 'B', '[]', '[]')",
+        )
+        .bind(cid_b)
+        .execute(&pool)
+        .await
+        .unwrap();
 
         seed_log(&pool, "gpt-4o", Some(cid_a), None, 200, 1, 1, 0.0).await;
         seed_log(&pool, "claude", Some(cid_b), None, 500, 1, 0, 0.0).await;

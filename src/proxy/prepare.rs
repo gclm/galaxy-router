@@ -250,20 +250,31 @@ pub(super) async fn prepare_proxy_request(
         reqwest_headers.insert(key.clone(), value.clone());
     }
 
-    reqwest_headers.insert("Content-Type", "application/json".parse().expect("static value"));
+    reqwest_headers.insert(
+        "Content-Type",
+        "application/json".parse().expect("static value"),
+    );
 
     if needs_conversion {
         get_outbound(&upstream_endpoint).set_auth_header(&mut reqwest_headers, api_key);
     } else {
         match client_endpoint {
             EndpointType::Anthropic => {
-                reqwest_headers.insert("x-api-key", api_key.parse().expect("api_key validated at save"));
-                reqwest_headers.insert("anthropic-version", "2023-06-01".parse().expect("static value"));
+                reqwest_headers.insert(
+                    "x-api-key",
+                    api_key.parse().expect("api_key validated at save"),
+                );
+                reqwest_headers.insert(
+                    "anthropic-version",
+                    "2023-06-01".parse().expect("static value"),
+                );
             }
             _ => {
                 reqwest_headers.insert(
                     "Authorization",
-                    format!("Bearer {}", api_key).parse().expect("api_key validated at save"),
+                    format!("Bearer {}", api_key)
+                        .parse()
+                        .expect("api_key validated at save"),
                 );
             }
         }

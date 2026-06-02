@@ -4,9 +4,9 @@
 
 use galaxy_router::api::handlers::admin::channels::EndpointType;
 use galaxy_router::proxy::sse::{
-    apply_sse_usage, collect_sse_content, extract_error_from_sse, extract_usage_from_sse,
-    find_sse_boundary, format_stream_error_event, sanitize_upstream_error, sse_field,
-    SseUsageSource,
+    SseUsageSource, apply_sse_usage, collect_sse_content, extract_error_from_sse,
+    extract_usage_from_sse, find_sse_boundary, format_stream_error_event, sanitize_upstream_error,
+    sse_field,
 };
 
 #[test]
@@ -61,10 +61,7 @@ fn test_sanitize_upstream_error_keeps_short_bodies_intact() {
 
 #[test]
 fn test_format_stream_error_event_openai_chat_uses_data_only() {
-    let bytes = format_stream_error_event(
-        r#"{"error": "invalid key"}"#,
-        &EndpointType::OpenAiChat,
-    );
+    let bytes = format_stream_error_event(r#"{"error": "invalid key"}"#, &EndpointType::OpenAiChat);
     let text = String::from_utf8(bytes).unwrap();
     assert!(text.starts_with("data: "));
     assert!(text.ends_with("\n\n"));
@@ -74,10 +71,7 @@ fn test_format_stream_error_event_openai_chat_uses_data_only() {
 
 #[test]
 fn test_format_stream_error_event_anthropic_uses_event_and_data() {
-    let bytes = format_stream_error_event(
-        r#"{"error": "overloaded"}"#,
-        &EndpointType::Anthropic,
-    );
+    let bytes = format_stream_error_event(r#"{"error": "overloaded"}"#, &EndpointType::Anthropic);
     let text = String::from_utf8(bytes).unwrap();
     assert!(text.contains("event: error"));
     assert!(text.contains("data: "));
@@ -92,7 +86,13 @@ fn test_collect_sse_content_openai_chat_concatenates_deltas() {
     let mut content = String::new();
     let mut reasoning = String::new();
     let mut tool_calls = Vec::new();
-    collect_sse_content(sse, &EndpointType::OpenAiChat, &mut content, &mut reasoning, &mut tool_calls);
+    collect_sse_content(
+        sse,
+        &EndpointType::OpenAiChat,
+        &mut content,
+        &mut reasoning,
+        &mut tool_calls,
+    );
     assert_eq!(content, "hello world");
     assert!(reasoning.is_empty());
     assert!(tool_calls.is_empty());
@@ -106,7 +106,13 @@ fn test_collect_sse_content_openai_chat_collects_reasoning() {
     let mut content = String::new();
     let mut reasoning = String::new();
     let mut tool_calls = Vec::new();
-    collect_sse_content(sse, &EndpointType::OpenAiChat, &mut content, &mut reasoning, &mut tool_calls);
+    collect_sse_content(
+        sse,
+        &EndpointType::OpenAiChat,
+        &mut content,
+        &mut reasoning,
+        &mut tool_calls,
+    );
     assert_eq!(content, "answer");
     assert_eq!(reasoning, "thinking...");
 }
@@ -119,7 +125,13 @@ fn test_collect_sse_content_anthropic_uses_delta_text_field() {
     let mut content = String::new();
     let mut reasoning = String::new();
     let mut tool_calls = Vec::new();
-    collect_sse_content(sse, &EndpointType::Anthropic, &mut content, &mut reasoning, &mut tool_calls);
+    collect_sse_content(
+        sse,
+        &EndpointType::Anthropic,
+        &mut content,
+        &mut reasoning,
+        &mut tool_calls,
+    );
     assert_eq!(content, "Hi there");
 }
 

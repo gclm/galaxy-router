@@ -175,19 +175,20 @@ mod tests {
     #[tokio::test]
     async fn set_channel_updates_model_index() {
         let cache = ProxyCache::new();
-        cache.set_channel(sample_channel("ch-a", vec!["gpt-4", "gpt-3.5"])).await;
+        cache
+            .set_channel(sample_channel("ch-a", vec!["gpt-4", "gpt-3.5"]))
+            .await;
         assert_eq!(cache.find_channels_by_model("gpt-4").await, vec!["ch-a"]);
-        assert_eq!(
-            cache.find_channels_by_model("gpt-3.5").await,
-            vec!["ch-a"]
-        );
+        assert_eq!(cache.find_channels_by_model("gpt-3.5").await, vec!["ch-a"]);
         assert!(cache.find_channels_by_model("claude").await.is_empty());
     }
 
     #[tokio::test]
     async fn invalidate_channel_removes_from_index() {
         let cache = ProxyCache::new();
-        cache.set_channel(sample_channel("ch-a", vec!["gpt-4"])).await;
+        cache
+            .set_channel(sample_channel("ch-a", vec!["gpt-4"]))
+            .await;
         cache.invalidate_channel("ch-a").await;
         assert!(cache.find_channels_by_model("gpt-4").await.is_empty());
         assert!(cache.get_channel("ch-a").await.is_none());
@@ -196,8 +197,12 @@ mod tests {
     #[tokio::test]
     async fn invalidate_all_channels_clears_index() {
         let cache = ProxyCache::new();
-        cache.set_channel(sample_channel("ch-a", vec!["gpt-4"])).await;
-        cache.set_channel(sample_channel("ch-b", vec!["claude"])).await;
+        cache
+            .set_channel(sample_channel("ch-a", vec!["gpt-4"]))
+            .await;
+        cache
+            .set_channel(sample_channel("ch-b", vec!["claude"]))
+            .await;
         cache.invalidate_all_channels().await;
         assert!(cache.find_channels_by_model("gpt-4").await.is_empty());
         assert!(cache.find_channels_by_model("claude").await.is_empty());
@@ -206,14 +211,15 @@ mod tests {
     #[tokio::test]
     async fn set_channel_replaces_existing_entry() {
         let cache = ProxyCache::new();
-        cache.set_channel(sample_channel("ch-a", vec!["gpt-4"])).await;
-        cache.set_channel(sample_channel("ch-a", vec!["gpt-3.5"])).await;
+        cache
+            .set_channel(sample_channel("ch-a", vec!["gpt-4"]))
+            .await;
+        cache
+            .set_channel(sample_channel("ch-a", vec!["gpt-3.5"]))
+            .await;
         // 覆盖时旧 model 索引应被清理
         assert!(cache.find_channels_by_model("gpt-4").await.is_empty());
-        assert_eq!(
-            cache.find_channels_by_model("gpt-3.5").await,
-            vec!["ch-a"]
-        );
+        assert_eq!(cache.find_channels_by_model("gpt-3.5").await, vec!["ch-a"]);
         let stored = cache.get_channel("ch-a").await.unwrap();
         assert_eq!(stored.models, vec!["gpt-3.5".to_string()]);
     }

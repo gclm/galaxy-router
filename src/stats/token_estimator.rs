@@ -423,7 +423,8 @@ mod tests {
     #[test]
     fn test_estimate_long_text() {
         let estimator = TokenEstimator::new();
-        let text = "This is a longer text with multiple words and sentences. It should have more tokens.";
+        let text =
+            "This is a longer text with multiple words and sentences. It should have more tokens.";
         let tokens = estimator.estimate(text, &Provider::OpenAI);
         assert!(tokens >= 15);
     }
