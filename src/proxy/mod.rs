@@ -11,7 +11,6 @@ pub mod state;
 
 pub use cache::ProxyCache;
 pub use channel::ChannelInfo;
-pub use circuit::{CircuitBreaker, CircuitConfig};
 pub use queue::RequestQueue;
 pub use selection::{GroupInfo, GroupItemInfo, SelectionResult};
 

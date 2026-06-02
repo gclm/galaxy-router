@@ -107,6 +107,7 @@ pub fn sanitize_json_content(content: &str) -> String {
 }
 
 /// 提取关键信息（用于日志摘要）
+#[allow(dead_code)]
 pub fn extract_summary(content: &str) -> Option<String> {
     let value: Value = serde_json::from_str(content).ok()?;
 

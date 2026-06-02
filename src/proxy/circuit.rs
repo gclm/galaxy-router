@@ -34,6 +34,7 @@ pub struct CircuitConfig {
     /// 最大冷却时间（秒）
     pub max_cooldown_secs: u64,
     /// HalfOpen 状态试探超时（秒）
+    #[allow(dead_code)]
     pub probe_timeout_secs: u64,
 }
 
@@ -133,6 +134,7 @@ impl CircuitBreaker {
     }
 
     /// 开始试探请求（HalfOpen -> 标记试探中）
+    #[allow(dead_code)]
     pub async fn begin_probe(&self, channel_id: &str, key_hint: &str) -> bool {
         let key = format!("{}:{}", channel_id, key_hint);
         let mut entries = self.entries.write().await;
@@ -216,6 +218,7 @@ impl CircuitBreaker {
     }
 
     /// 清理过期条目
+    #[allow(dead_code)]
     pub async fn cleanup_expired(&self, max_age: Duration) {
         let mut entries = self.entries.write().await;
         let now = Instant::now();
@@ -228,6 +231,7 @@ impl CircuitBreaker {
     }
 
     /// 获取熔断器状态（用于监控）
+    #[allow(dead_code)]
     pub async fn get_status(&self, channel_id: &str, key_hint: &str) -> Option<CircuitState> {
         let key = format!("{}:{}", channel_id, key_hint);
         let entries = self.entries.read().await;
