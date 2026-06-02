@@ -33,4 +33,8 @@ test_data/
 tmp/
 /.claude/
 /.vite/
+
+# 覆盖率报告
+coverage/
+tarpaulin-report.html
 /coverage/
