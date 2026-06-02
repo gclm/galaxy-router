@@ -1,11 +1,8 @@
 # Galaxy Router Makefile
 
-.PHONY: all build frontend-build dev dev-rust dev-frontend dev-stop \
-        test fmt clippy clean check doc watch watch-test db-reset \
-        release release-version release-archive release-all \
-        release-linux-amd64 release-linux-arm64 \
-        release-darwin-arm64 release-darwin-x86_64 \
-        release-windows-amd64 \
+.PHONY: all build frontend-build dev dev-stop \
+        test fmt fmt-check clippy clean check \
+        release release-version \
         brew-deploy brew-restart \
         docker docker-run help
 
@@ -31,12 +28,6 @@ frontend-build:
 build: frontend-build
 	cargo build
 
-dev-rust:
-	cargo run
-
-dev-frontend:
-	cd frontend && pnpm dev
-
 dev:
 	@echo "启动开发环境..."
 	@trap 'kill 0; exit 0' INT TERM; \
@@ -58,6 +49,9 @@ test:
 fmt:
 	cargo fmt
 
+fmt-check:
+	cargo fmt --check
+
 clippy:
 	cargo clippy -- -D warnings
 
@@ -67,20 +61,7 @@ clean:
 	rm -rf /tmp/galaxy_test*
 	rm -rf $(DIST)
 
-check: fmt clippy test
-
-doc:
-	cargo doc --open
-
-watch:
-	cargo watch -x build
-
-watch-test:
-	cargo watch -x test
-
-db-reset:
-	rm -f data/galaxy.db
-	@echo "Database reset. Run 'make run' to recreate."
+check: clippy test
 
 # ===== 发布构建 =====
 
@@ -121,51 +102,6 @@ release-version: check
 	git push origin HEAD; \
 	git push origin "$$tag"; \
 	echo "已发布版本: $$tag"
-
-# 单目标交叉编译（需要对应 toolchain 已安装）
-release-linux-amd64:
-	cross build --release --target x86_64-unknown-linux-gnu
-
-release-linux-arm64:
-	cross build --release --target aarch64-unknown-linux-gnu
-
-release-darwin-arm64:
-	cargo build --release --target aarch64-apple-darwin
-
-release-darwin-x86_64:
-	cargo build --release --target x86_64-apple-darwin
-
-release-windows-amd64:
-	cross build --release --target x86_64-pc-windows-gnu
-
-# 打 zip 包（在交叉编译完成后调用）
-# 用法: make release-archive TARGET=aarch64-apple-darwin
-release-archive:
-	@mkdir -p $(DIST)
-	@target=$(TARGET); \
-	os=$${target%-*-*}; \
-	arch=$${target##*-}; \
-	case "$$os" in \
-	  x86_64-pc-windows-gnu) ext=".exe"; name="windows-amd64";; \
-	  aarch64-apple-darwin) name="darwin-arm64";; \
-	  x86_64-apple-darwin) name="darwin-x86_64";; \
-	  x86_64-unknown-linux-gnu) name="linux-amd64";; \
-	  aarch64-unknown-linux-gnu) name="linux-arm64";; \
-	  *) name="$$os-$$arch";; \
-	esac; \
-	bin="target/$$target/release/$(APP)$${ext}"; \
-	if [ -f "$$bin" ]; then \
-	  cp "$$bin" "$(DIST)/$(APP)"; \
-	  cd $(DIST) && zip -q "$(APP)-$$name.zip" $(APP) && rm $(APP); \
-	  echo "已打包: $(DIST)/$(APP)-$$name.zip"; \
-	else \
-	  echo "二进制不存在: $$bin" >&2; exit 1; \
-	fi
-
-# CI 用：全平台构建 + 打包（由 GitHub Actions 按矩阵调用单个目标）
-# 本地全量构建需要所有 toolchain 就绪
-release-all: release-darwin-arm64 release-darwin-x86_64 \
-             release-linux-amd64 release-linux-arm64
 
 # ===== Homebrew 本地部署 =====
 
@@ -231,18 +167,12 @@ help:
 	@echo "  test               运行测试"
 	@echo "  fmt                格式化代码"
 	@echo "  clippy             代码检查"
-	@echo "  check              完整检查（格式+检查+测试）"
+	@echo "  check              完整检查（lint+测试）"
 	@echo ""
 	@echo "发布:"
 	@echo "  release            本机 release 构建"
 	@echo "  release-version VERSION=x.y.z"
 	@echo "                     同步 Cargo/前端版本并推送 git tag"
-	@echo "  release-darwin-arm64    macOS ARM64"
-	@echo "  release-darwin-x86_64   macOS x86_64"
-	@echo "  release-linux-amd64     Linux AMD64"
-	@echo "  release-linux-arm64     Linux ARM64"
-	@echo "  release-windows-amd64   Windows AMD64"
-	@echo "  release-archive TARGET=<triple>  打 zip 包"
 	@echo "  brew-deploy        构建并覆盖 Homebrew 部署二进制"
 	@echo "                     可覆盖 BREW_BIN / BREW_SERVICE / BREW_RESTART"
 	@echo ""
@@ -250,5 +180,4 @@ help:
 	@echo "  brew-restart       重启 Homebrew 服务"
 	@echo "  docker             Docker 构建"
 	@echo "  docker-run         Docker 运行"
-	@echo "  db-reset           重置数据库"
 	@echo "  clean              清理构建产物"

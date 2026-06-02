@@ -10,12 +10,10 @@ permissions:
   contents: read
 
 jobs:
+  # 前端构建（共享给后续 job）
   frontend:
     name: frontend
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: frontend
     steps:
       - uses: actions/checkout@v5
 
@@ -29,11 +27,18 @@ jobs:
           cache: pnpm
           cache-dependency-path: frontend/pnpm-lock.yaml
 
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm build
+      - run: cd frontend && pnpm install --frozen-lockfile && pnpm build
 
+      # 上传前端产物，供后续 job 使用
+      - uses: actions/upload-artifact@v4
+        with:
+          name: frontend-dist
+          path: frontend/dist
+
+  # 后端检查（使用 make check）
   backend:
     name: backend
+    needs: frontend
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -54,14 +59,19 @@ jobs:
       - name: Install dependencies
         run: sudo apt-get update && sudo apt-get install -y libsqlite3-dev
 
-      - name: Prepare frontend dist
-        run: mkdir -p frontend/dist && touch frontend/dist/.keep
+      # 下载前端产物
+      - uses: actions/download-artifact@v4
+        with:
+          name: frontend-dist
+          path: frontend/dist
 
-      - run: cargo clippy -- -D warnings
-      - run: cargo test
+      # 使用 make check 统一入口
+      - run: make check
 
+  # 覆盖率（独立 job，不使用 make）
   coverage:
     name: coverage gate
+    needs: frontend
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -82,8 +92,11 @@ jobs:
       - name: Install dependencies
         run: sudo apt-get update && sudo apt-get install -y libsqlite3-dev
 
-      - name: Prepare frontend dist
-        run: mkdir -p frontend/dist && touch frontend/dist/.keep
+      # 下载前端产物
+      - uses: actions/download-artifact@v4
+        with:
+          name: frontend-dist
+          path: frontend/dist
 
       - name: Install tarpaulin
         run: cargo install cargo-tarpaulin --version 0.35.4 --locked

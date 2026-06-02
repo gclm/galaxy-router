@@ -9,8 +9,34 @@ permissions:
   packages: write
 
 jobs:
+  # 前端构建（只构建一次，共享给所有平台）
+  frontend:
+    name: frontend
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: pnpm/action-setup@v6
+        with:
+          version: latest
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+
+      - run: cd frontend && pnpm install --frozen-lockfile && pnpm build
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: frontend-dist
+          path: frontend/dist
+
+  # 各平台构建二进制
   build:
     name: build (${{ matrix.target }})
+    needs: frontend
     runs-on: ${{ matrix.runner }}
     strategy:
       matrix:
@@ -38,9 +64,25 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
+      # 缓存 cross 工具（避免每次安装）
+      - name: Cache cross
+        if: runner.os == 'Linux'
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/cross
+          key: ${{ runner.os }}-cross-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cross-
+
       - name: Install cross (Linux/Windows)
         if: runner.os == 'Linux'
-        run: cargo install cross --locked
+        run: |
+          if ! command -v cross &> /dev/null; then
+            cargo install cross --locked
+          fi
+
+      # 使用 sccache 加速编译
+      - name: Install sccache
+        uses: mozilla-actions/sccache-action@v0.0.5
 
       - name: Cache cargo
         uses: actions/cache@v4
@@ -56,29 +98,23 @@ jobs:
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libsqlite3-dev zip
 
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v6
+      # 下载前端产物（不重复构建）
+      - uses: actions/download-artifact@v4
         with:
-          version: latest
+          name: frontend-dist
+          path: frontend/dist
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v6
-        with:
-          node-version: 22
-          cache: pnpm
-          cache-dependency-path: frontend/pnpm-lock.yaml
-
-      - name: Build frontend
-        run: cd frontend && pnpm install --frozen-lockfile && pnpm build
-
+      # 使用 make release 构建（macOS）
       - name: Build binary (macOS)
         if: runner.os == 'macOS'
-        run: cargo build --release --target ${{ matrix.target }}
+        run: make release
 
+      # 使用 cross 构建（Linux/Windows）
       - name: Build binary (Linux/Windows via cross)
         if: runner.os == 'Linux'
         run: cross build --release --target ${{ matrix.target }}
 
+      # 打包
       - name: Package archive
         run: |
           mkdir -p build/dist
@@ -95,6 +131,7 @@ jobs:
           name: galaxy-router-${{ matrix.artifact }}
           path: build/dist/galaxy-router-${{ matrix.artifact }}.zip
 
+  # 发布到 GitHub Release
   release:
     name: release
     needs: build
@@ -123,6 +160,7 @@ jobs:
             build/dist/checksums-sha256.txt
           generate_release_notes: true
 
+  # Docker 镜像构建
   docker:
     name: docker
     needs: build
