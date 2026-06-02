@@ -1,5 +1,6 @@
 pub mod cache;
 pub mod channel;
+pub mod circuit;
 pub mod execute;
 pub mod prepare;
 pub mod queue;
@@ -10,6 +11,7 @@ pub mod state;
 
 pub use cache::ProxyCache;
 pub use channel::ChannelInfo;
+pub use circuit::{CircuitBreaker, CircuitConfig};
 pub use queue::RequestQueue;
 pub use selection::{GroupInfo, GroupItemInfo, SelectionResult};
 

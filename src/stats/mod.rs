@@ -1,6 +1,8 @@
 pub mod model;
 pub mod pricing_refresher;
+pub mod redaction;
 pub mod recorder;
+pub mod token_estimator;
 
 use serde::{Deserialize, Serialize};
 use sqlx::{AssertSqlSafe, SqlitePool};

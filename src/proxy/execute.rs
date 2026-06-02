@@ -12,6 +12,7 @@ use crate::proxy::sse::{
     apply_sse_usage, collect_sse_content, extract_error_from_sse, extract_usage_from_sse,
     find_sse_boundary, format_stream_error_event, sanitize_upstream_error,
 };
+use crate::stats::redaction::sanitize_json_content;
 
 /// 单次尝试的统计信息
 pub(super) struct AttemptStats {
@@ -319,7 +320,9 @@ pub async fn proxy_request(
     };
 
     let model = body["model"].as_str().unwrap_or("unknown").to_string();
-    let request_content = serde_json::to_string(&body).ok();
+    let request_content = serde_json::to_string(&body)
+        .ok()
+        .map(|c| sanitize_json_content(&c));
     let user_agent = headers
         .get("user-agent")
         .and_then(|v| v.to_str().ok())

@@ -3,6 +3,7 @@ use axum::http::HeaderMap;
 use super::selection::SelectionResult;
 use crate::api::handlers::admin::channels::EndpointType;
 use crate::proxy::{ProxyError, ProxyState, get_inbound, get_outbound};
+use crate::stats::token_estimator::TokenEstimator;
 
 /// 准备好的代理请求
 pub(super) struct PreparedProxyRequest {
@@ -43,12 +44,23 @@ pub(super) fn extract_usage(
 }
 
 /// 估算 token 数（当上游不返回 usage 时作为兜底）
-/// 混合中英文内容的经验值：约 1 token ≈ 3 字节
+/// 使用多维度加权估算，区分不同厂商和字符类型
 pub(super) fn estimate_tokens(text: &str) -> i32 {
     if text.is_empty() {
         return 0;
     }
-    ((text.len() as f64) / 3.0).ceil() as i32
+    // 默认使用 OpenAI 权重
+    let estimator = TokenEstimator::new();
+    estimator.estimate(text, &crate::stats::token_estimator::Provider::OpenAI)
+}
+
+/// 估算 token 数（指定模型）
+pub(super) fn estimate_tokens_for_model(text: &str, model: &str) -> i32 {
+    if text.is_empty() {
+        return 0;
+    }
+    let estimator = TokenEstimator::new();
+    estimator.estimate_request_tokens(text, model)
 }
 
 /// 从请求体提取文本（兼容 OpenAI / Anthropic 格式）
@@ -293,11 +305,18 @@ mod tests {
     }
 
     #[test]
-    fn estimate_tokens_approximates_3_bytes_per_token() {
-        // 30 字节 → 10 token
-        assert_eq!(estimate_tokens(&"a".repeat(30)), 10);
-        // 1 字节 → 1 token (向上取整)
-        assert_eq!(estimate_tokens("a"), 1);
+    fn estimate_tokens_approximates_english_words() {
+        // 使用新的多维度估算，英文单词约 1.02 token/word
+        // "a".repeat(30) 是 30 个字母，但被识别为一个单词
+        let tokens = estimate_tokens(&"a".repeat(30));
+        assert!(tokens >= 1 && tokens <= 5);
+
+        // 多个单词
+        let tokens = estimate_tokens("hello world test");
+        assert!(tokens >= 3 && tokens <= 6);
+
+        // 单个字符（1.02 向上取整 = 2）
+        assert_eq!(estimate_tokens("a"), 2);
     }
 
     #[test]

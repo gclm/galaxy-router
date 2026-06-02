@@ -3,6 +3,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
+use super::circuit::{CircuitBreaker, CircuitConfig};
+
 /// 渠道状态
 #[derive(Debug, Clone)]
 pub struct ChannelStatus {
@@ -89,6 +91,8 @@ pub struct LoadBalancerState {
     pub channel_states: Arc<RwLock<HashMap<String, ChannelStatus>>>,
     /// 粘性会话
     pub sticky_sessions: Arc<RwLock<HashMap<String, StickySession>>>,
+    /// 熔断器（新增）
+    pub circuit_breaker: CircuitBreaker,
     /// 粘性会话 TTL（秒）
     pub sticky_ttl_secs: i64,
     /// 拉黑阈值（连续失败次数）
@@ -110,6 +114,7 @@ impl LoadBalancerState {
         Self {
             channel_states: Arc::new(RwLock::new(HashMap::new())),
             sticky_sessions: Arc::new(RwLock::new(HashMap::new())),
+            circuit_breaker: CircuitBreaker::new(CircuitConfig::default()),
             sticky_ttl_secs: 3600,
             blacklist_threshold: 3,
             blacklist_minutes: 10,
@@ -119,24 +124,40 @@ impl LoadBalancerState {
 
     /// 记录请求成功
     pub async fn record_success(&self, channel_id: &str, latency_ms: f64) {
-        let mut states = self.channel_states.write().await;
-        if let Some(status) = states.get_mut(channel_id) {
-            status.record_success(latency_ms);
+        // 更新统计
+        {
+            let mut states = self.channel_states.write().await;
+            if let Some(status) = states.get_mut(channel_id) {
+                status.record_success(latency_ms);
+            }
         }
+        // 通知熔断器（使用空的 key_hint，后续可扩展）
+        self.circuit_breaker.record_success(channel_id, "default").await;
     }
 
     /// 记录请求失败
     pub async fn record_failure(&self, channel_id: &str, should_blacklist: bool) {
-        let mut states = self.channel_states.write().await;
-        if let Some(status) = states.get_mut(channel_id) {
-            status.record_failure();
+        // 更新统计
+        {
+            let mut states = self.channel_states.write().await;
+            if let Some(status) = states.get_mut(channel_id) {
+                status.record_failure();
 
-            // 检查是否需要拉黑
-            if should_blacklist && status.failure_count >= self.blacklist_threshold {
-                status.blacklist(self.blacklist_minutes);
-                tracing::warn!("渠道 {} 被拉黑 {} 分钟", channel_id, self.blacklist_minutes);
+                // 检查是否需要拉黑
+                if should_blacklist && status.failure_count >= self.blacklist_threshold {
+                    status.blacklist(self.blacklist_minutes);
+                    tracing::warn!("渠道 {} 被拉黑 {} 分钟", channel_id, self.blacklist_minutes);
+                }
             }
         }
+        // 通知熔断器
+        self.circuit_breaker.record_failure(channel_id, "default").await;
+    }
+
+    /// 检查渠道是否可用（使用熔断器）
+    pub async fn is_channel_available(&self, channel_id: &str) -> bool {
+        let (tripped, _) = self.circuit_breaker.is_tripped(channel_id, "default").await;
+        !tripped
     }
 
     /// 计算渠道评分
@@ -212,15 +233,6 @@ impl LoadBalancerState {
         let mut sessions = self.sticky_sessions.write().await;
         let now = Utc::now();
         sessions.retain(|_, session| now < session.expires_at);
-    }
-
-    /// 检查渠道是否可用（供粘性会话路径使用）
-    pub async fn is_channel_available(&self, channel_id: &str) -> bool {
-        let states = self.channel_states.read().await;
-        states
-            .get(channel_id)
-            .map(|s| s.is_available())
-            .unwrap_or(true) // 无状态记录视为可用
     }
 
     /// 清理过期的拉黑
