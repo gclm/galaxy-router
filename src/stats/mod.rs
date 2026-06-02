@@ -487,15 +487,15 @@ impl StatsState {
         let mut count_builder = QueryBuilder::new("SELECT COUNT(*) FROM usage_logs ul WHERE 1=1");
         if let Some(ref model) = filter.model {
             count_builder.push(" AND ul.requested_model = ");
-            count_builder.push(model.clone());
+            count_builder.push_bind(model.clone());
         }
         if let Some(ref cid) = filter.channel_id {
             count_builder.push(" AND ul.channel_id = ");
-            count_builder.push(cid.clone());
+            count_builder.push_bind(cid.clone());
         }
         if let Some(ref kid) = filter.api_key_id {
             count_builder.push(" AND ul.api_key_id = ");
-            count_builder.push(kid.clone());
+            count_builder.push_bind(kid.clone());
         }
         match filter.status.as_deref() {
             Some("success") => {
@@ -524,15 +524,15 @@ impl StatsState {
         );
         if let Some(ref model) = filter.model {
             data_builder.push(" AND ul.requested_model = ");
-            data_builder.push(model.clone());
+            data_builder.push_bind(model.clone());
         }
         if let Some(ref cid) = filter.channel_id {
             data_builder.push(" AND ul.channel_id = ");
-            data_builder.push(cid.clone());
+            data_builder.push_bind(cid.clone());
         }
         if let Some(ref kid) = filter.api_key_id {
             data_builder.push(" AND ul.api_key_id = ");
-            data_builder.push(kid.clone());
+            data_builder.push_bind(kid.clone());
         }
         match filter.status.as_deref() {
             Some("success") => {
