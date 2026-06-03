@@ -13,6 +13,7 @@ pub(crate) struct ChannelRow {
     pub(crate) failure_threshold: i32,
     pub(crate) blacklist_minutes: i32,
     pub(crate) concurrency: i32,
+    pub(crate) timeout_secs: i32,
     pub(crate) custom_headers: String,
     pub(crate) enabled: bool,
     pub(crate) created_at: String,
@@ -122,6 +123,7 @@ pub struct Channel {
     pub failure_threshold: i32,
     pub blacklist_minutes: i32,
     pub concurrency: i32,
+    pub timeout_secs: i32,
     pub custom_headers: Vec<CustomHeader>,
     pub enabled: bool,
     pub created_at: String,
@@ -140,6 +142,7 @@ pub struct CreateChannelRequest {
     pub failure_threshold: Option<i32>,
     pub blacklist_minutes: Option<i32>,
     pub concurrency: Option<i32>,
+    pub timeout_secs: Option<i32>,
     pub custom_headers: Option<Vec<CustomHeader>>,
     pub enabled: Option<bool>,
 }
@@ -156,6 +159,7 @@ pub struct UpdateChannelRequest {
     pub failure_threshold: Option<i32>,
     pub blacklist_minutes: Option<i32>,
     pub concurrency: Option<i32>,
+    pub timeout_secs: Option<i32>,
     pub custom_headers: Option<Vec<CustomHeader>>,
     pub enabled: Option<bool>,
 }

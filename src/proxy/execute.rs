@@ -194,6 +194,7 @@ pub(super) async fn execute_proxy_request(
     let response = state
         .http_client
         .post(&prepared.url)
+        .timeout(std::time::Duration::from_secs(selection.channel.timeout_secs))
         .headers(prepared.headers)
         .body(prepared.body)
         .send()
@@ -498,6 +499,7 @@ pub(super) async fn execute_proxy_stream(
     let response = state
         .http_client
         .post(&prepared.url)
+        .timeout(std::time::Duration::from_secs(selection.channel.timeout_secs))
         .headers(prepared.headers)
         .body(prepared.body)
         .send()

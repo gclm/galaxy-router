@@ -161,6 +161,7 @@ mod tests {
             }],
             models: models.into_iter().map(String::from).collect(),
             custom_headers: vec![],
+            timeout_secs: 300,
         }
     }
 

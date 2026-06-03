@@ -41,7 +41,7 @@ pub async fn list(
     let total: i64 = sqlx::Row::get(&count_row, 0);
 
     let mut data_builder = sqlx::QueryBuilder::new(
-        "SELECT id, name, api_keys, endpoints, models, rate_limit_rpm, rate_limit_tpm, failure_threshold, blacklist_minutes, concurrency, custom_headers, enabled, created_at, updated_at FROM channels",
+        "SELECT id, name, api_keys, endpoints, models, rate_limit_rpm, rate_limit_tpm, failure_threshold, blacklist_minutes, concurrency, timeout_secs, custom_headers, enabled, created_at, updated_at FROM channels",
     );
     push_where(&mut data_builder, &query);
     data_builder.push(format!(" ORDER BY {} {} ", order_field, order_dir));
@@ -128,8 +128,8 @@ pub async fn create(
 
     sqlx::query(
         r#"
-        INSERT INTO channels (id, name, api_keys, endpoints, models, rate_limit_rpm, rate_limit_tpm, failure_threshold, blacklist_minutes, concurrency, custom_headers, enabled)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO channels (id, name, api_keys, endpoints, models, rate_limit_rpm, rate_limit_tpm, failure_threshold, blacklist_minutes, concurrency, timeout_secs, custom_headers, enabled)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         "#
     )
     .bind(&id)
@@ -142,6 +142,7 @@ pub async fn create(
     .bind(req.failure_threshold.unwrap_or(3))
     .bind(req.blacklist_minutes.unwrap_or(10))
     .bind(req.concurrency.unwrap_or(10))
+    .bind(req.timeout_secs.unwrap_or(300))
     .bind(&custom_headers_json)
     .bind(req.enabled.unwrap_or(true))
     .execute(&state.pool)
@@ -247,6 +248,11 @@ pub async fn update(
         separated.push_bind_unseparated(concurrency);
         has_update = true;
     }
+    if let Some(timeout_secs) = req.timeout_secs {
+        separated.push("timeout_secs = ");
+        separated.push_bind_unseparated(timeout_secs);
+        has_update = true;
+    }
 
     if !has_update {
         return Err(ApiError::bad_request("没有需要更新的字段"));
@@ -293,7 +299,7 @@ pub(super) async fn get_channel_by_id(
     id: &str,
 ) -> Result<Channel, (StatusCode, Json<ApiError>)> {
     let result = sqlx::query_as::<_, ChannelRow>(
-        "SELECT id, name, api_keys, endpoints, models, rate_limit_rpm, rate_limit_tpm, failure_threshold, blacklist_minutes, concurrency, custom_headers, enabled, created_at, updated_at FROM channels WHERE id = ?"
+        "SELECT id, name, api_keys, endpoints, models, rate_limit_rpm, rate_limit_tpm, failure_threshold, blacklist_minutes, concurrency, timeout_secs, custom_headers, enabled, created_at, updated_at FROM channels WHERE id = ?"
     )
     .bind(id)
     .fetch_optional(pool)
@@ -327,6 +333,7 @@ pub(crate) fn row_to_channel(row: ChannelRow) -> Result<Channel, String> {
         failure_threshold: row.failure_threshold,
         blacklist_minutes: row.blacklist_minutes,
         concurrency: row.concurrency,
+        timeout_secs: row.timeout_secs,
         custom_headers: decode_json_field("channels.custom_headers", &row.custom_headers)?,
         enabled: row.enabled,
         created_at: row.created_at,
@@ -347,6 +354,7 @@ fn row_to_channel_from_row(row: &sqlx::sqlite::SqliteRow) -> Result<Channel, Str
         failure_threshold: row.get("failure_threshold"),
         blacklist_minutes: row.get("blacklist_minutes"),
         concurrency: row.get("concurrency"),
+        timeout_secs: row.get("timeout_secs"),
         custom_headers: decode_json_field(
             "channels.custom_headers",
             &row.get::<String, _>("custom_headers"),
