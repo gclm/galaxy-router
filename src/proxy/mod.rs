@@ -722,6 +722,11 @@ pub async fn handle_proxy_request(
         return format_rate_limit_error(retry_after, "TPM", auth.rate_limit_tpm, error_format);
     }
 
+    // 预算检查（月/日额度）
+    if let Err(msg) = check_budget(&state.pool, &auth.key_id).await {
+        return format_budget_error(&msg, error_format);
+    }
+
     // 验证 API Key 是否有权访问目标模型
     if let Err(e) = validate_model_access(&state.pool, &auth.key_id, model).await {
         return format_proxy_error(e, error_format);
@@ -781,6 +786,72 @@ async fn validate_model_access(
     }
 
     Ok(())
+}
+
+/// 检查 API Key 的预算额度（月/日）
+async fn check_budget(pool: &SqlitePool, key_id: &str) -> Result<(), String> {
+    let limit: Option<(f64, f64)> = sqlx::query_as(
+        "SELECT monthly_limit_usd, daily_limit_usd FROM budget_limits WHERE api_key_id = ? AND enabled = 1",
+    )
+    .bind(key_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| format!("查询预算失败: {}", e))?;
+
+    let Some((monthly_limit, daily_limit)) = limit else {
+        return Ok(()); // 无预算限制
+    };
+
+    // 查询累计消费
+    let (monthly_cost, daily_cost): (f64, f64) = sqlx::query_as(
+        r#"SELECT
+            COALESCE(SUM(COALESCE(cost, 0)), 0),
+            COALESCE(SUM(CASE WHEN date(created_at) = date('now') THEN COALESCE(cost, 0) ELSE 0 END), 0)
+        FROM usage_logs WHERE api_key_id = ?"#,
+    )
+    .bind(key_id)
+    .fetch_one(pool)
+    .await
+    .map_err(|e| format!("查询消费失败: {}", e))?;
+
+    if daily_limit > 0.0 && daily_cost >= daily_limit {
+        return Err(format!(
+            "日预算已耗尽: ${:.2}/${:.2}",
+            daily_cost, daily_limit
+        ));
+    }
+    if monthly_limit > 0.0 && monthly_cost >= monthly_limit {
+        return Err(format!(
+            "月预算已耗尽: ${:.2}/${:.2}",
+            monthly_cost, monthly_limit
+        ));
+    }
+
+    Ok(())
+}
+
+/// 格式化 402 预算超限错误
+fn format_budget_error(
+    msg: &str,
+    error_format: &ErrorFormat,
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+
+    let body = match error_format {
+        ErrorFormat::OpenAi => serde_json::json!({
+            "error": {
+                "message": msg,
+                "type": "insufficient_quota",
+                "code": "budget_exceeded"
+            }
+        }),
+        ErrorFormat::Anthropic => serde_json::json!({
+            "type": "error",
+            "error": { "type": "insufficient_quota", "message": msg }
+        }),
+    };
+
+    (StatusCode::PAYMENT_REQUIRED, axum::Json(body)).into_response()
 }
 
 /// 格式化代理错误为 HTTP 响应

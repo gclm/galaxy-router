@@ -3,7 +3,8 @@ use axum::{
     extract::{Query, State},
     http::StatusCode,
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
+use sqlx::SqlitePool;
 
 use crate::api::{ApiError, ApiResponse};
 use crate::stats::StatsState;
@@ -193,4 +194,113 @@ pub async fn latency(
         "p95_latency_ms": p95,
         "p99_latency_ms": p99,
     }))))
+}
+
+// === 预算限制管理 ===
+
+/// 预算限制
+#[derive(Debug, Serialize, Deserialize, sqlx::FromRow)]
+pub struct BudgetLimit {
+    pub id: String,
+    pub api_key_id: String,
+    pub monthly_limit_usd: f64,
+    pub daily_limit_usd: f64,
+    pub enabled: bool,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+/// 设置预算限制请求
+#[derive(Debug, Deserialize)]
+pub struct SetBudgetRequest {
+    pub api_key_id: String,
+    pub monthly_limit_usd: Option<f64>,
+    pub daily_limit_usd: Option<f64>,
+    pub enabled: Option<bool>,
+}
+
+/// 设置/更新预算限制（upsert）
+pub async fn set_budget(
+    State(state): State<StatsApiState>,
+    Json(req): Json<SetBudgetRequest>,
+) -> Result<Json<ApiResponse<BudgetLimit>>, (StatusCode, Json<ApiError>)> {
+    let monthly = req.monthly_limit_usd.unwrap_or(0.0);
+    let daily = req.daily_limit_usd.unwrap_or(0.0);
+    let enabled = req.enabled.unwrap_or(true);
+
+    // 验证 API Key 存在
+    let exists: bool = sqlx::query_scalar::<_, i32>(
+        "SELECT COUNT(*) FROM api_keys WHERE id = ?",
+    )
+    .bind(&req.api_key_id)
+    .fetch_one(&state.stats.pool)
+    .await
+    .map_err(|e| ApiError::internal_error(e.to_string()))
+    .map(|c| c > 0)?;
+
+    if !exists {
+        return Err(ApiError::not_found("API Key 不存在"));
+    }
+
+    let id = crate::api::response::generate_id();
+    sqlx::query(
+        r#"INSERT INTO budget_limits (id, api_key_id, monthly_limit_usd, daily_limit_usd, enabled)
+           VALUES (?, ?, ?, ?, ?)
+           ON CONFLICT(api_key_id) DO UPDATE SET
+               monthly_limit_usd = excluded.monthly_limit_usd,
+               daily_limit_usd = excluded.daily_limit_usd,
+               enabled = excluded.enabled,
+               updated_at = datetime('now')"#,
+    )
+    .bind(&id)
+    .bind(&req.api_key_id)
+    .bind(monthly)
+    .bind(daily)
+    .bind(enabled)
+    .execute(&state.stats.pool)
+    .await
+    .map_err(|e| ApiError::internal_error(e.to_string()))?;
+
+    // 查询返回
+    let row = sqlx::query_as::<_, BudgetLimit>(
+        "SELECT id, api_key_id, monthly_limit_usd, daily_limit_usd, enabled, created_at, updated_at FROM budget_limits WHERE api_key_id = ?",
+    )
+    .bind(&req.api_key_id)
+    .fetch_one(&state.stats.pool)
+    .await
+    .map_err(|e| ApiError::internal_error(e.to_string()))?;
+
+    Ok(Json(ApiResponse::success(row)))
+}
+
+/// 获取所有预算限制
+pub async fn list_budgets(
+    State(state): State<StatsApiState>,
+) -> Result<Json<ApiResponse<Vec<BudgetLimit>>>, (StatusCode, Json<ApiError>)> {
+    let rows = sqlx::query_as::<_, BudgetLimit>(
+        "SELECT id, api_key_id, monthly_limit_usd, daily_limit_usd, enabled, created_at, updated_at FROM budget_limits ORDER BY created_at DESC",
+    )
+    .fetch_all(&state.stats.pool)
+    .await
+    .map_err(|e| ApiError::internal_error(e.to_string()))?;
+
+    Ok(Json(ApiResponse::success(rows)))
+}
+
+/// 删除预算限制
+pub async fn delete_budget(
+    State(state): State<StatsApiState>,
+    axum::extract::Path(id): axum::extract::Path<String>,
+) -> Result<Json<ApiResponse<()>>, (StatusCode, Json<ApiError>)> {
+    let result = sqlx::query("DELETE FROM budget_limits WHERE id = ?")
+        .bind(&id)
+        .execute(&state.stats.pool)
+        .await
+        .map_err(|e| ApiError::internal_error(e.to_string()))?;
+
+    if result.rows_affected() == 0 {
+        return Err(ApiError::not_found("预算限制不存在"));
+    }
+
+    Ok(Json(crate::api::response::success_empty()))
 }
