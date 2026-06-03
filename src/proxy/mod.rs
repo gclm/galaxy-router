@@ -727,8 +727,8 @@ pub async fn handle_proxy_request(
         return format_budget_error(&msg, error_format);
     }
 
-    // 验证 API Key 是否有权访问目标模型
-    if let Err(e) = validate_model_access(&state.pool, &auth.key_id, model).await {
+    // 验证 API Key 是否有权访问目标模型（三段式：403→404→503）
+    if let Err(e) = validate_model_access(&state.pool, &auth.key_id, model, &auth.allowed_groups).await {
         return format_proxy_error(e, error_format);
     }
 
@@ -759,32 +759,71 @@ pub async fn handle_proxy_request(
     }
 }
 
-/// 验证 API Key 是否有权访问目标模型
+/// 验证 API Key 是否有权访问目标模型（三段式：403→404→503）
 async fn validate_model_access(
     pool: &SqlitePool,
     key_id: &str,
     model: &str,
+    allowed_groups: &str,
 ) -> Result<(), ProxyError> {
-    let supported = sqlx::query_scalar::<_, String>(
-        "SELECT supported_models FROM api_keys WHERE id = ? AND enabled = 1",
-    )
-    .bind(key_id)
-    .fetch_optional(pool)
-    .await
-    .map_err(|e| ProxyError::DatabaseError(e.to_string()))?;
-
-    if let Some(models_str) = supported
-        && !models_str.is_empty()
-    {
-        let allowed = crate::api::handlers::admin::api_keys::parse_supported_models(&models_str);
-        if !allowed.iter().any(|m| m == model) {
-            return Err(ProxyError::NoAvailableChannel(format!(
+    // === 第一关：检查 allowed_groups / supported_models ===
+    // allowed_groups 非空时，检查请求的 model 是否在允许的分组列表中
+    if !allowed_groups.is_empty() {
+        let allowed: Vec<&str> = allowed_groups.split(',')
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
+            .collect();
+        if !allowed.is_empty() && !allowed.iter().any(|g| *g == model) {
+            return Err(ProxyError::ModelNotSupported(format!(
                 "API Key 无权访问模型: {}",
+                model
+            )));
+        }
+    } else {
+        // allowed_groups 为空时回退到 supported_models（兼容旧逻辑）
+        let supported = sqlx::query_scalar::<_, String>(
+            "SELECT supported_models FROM api_keys WHERE id = ? AND enabled = 1",
+        )
+        .bind(key_id)
+        .fetch_optional(pool)
+        .await
+        .map_err(|e| ProxyError::DatabaseError(e.to_string()))?;
+
+        if let Some(models_str) = supported
+            && !models_str.is_empty()
+        {
+            let allowed = crate::api::handlers::admin::api_keys::parse_supported_models(&models_str);
+            if !allowed.iter().any(|m| m == model) {
+                return Err(ProxyError::ModelNotSupported(format!(
+                    "API Key 无权访问模型: {}",
+                    model
+                )));
+            }
+        }
+    }
+
+    // === 第二关：检查分组是否存在 ===
+    // 仅在 allowed_groups 非空时严格检查（Octopus 策略：明确指定了分组才校验）
+    // allowed_groups 为空时跳过，由后续 select_group_item 检查渠道可用性
+    if !allowed_groups.is_empty() {
+        let group_exists: bool = sqlx::query_scalar::<_, i32>(
+            "SELECT COUNT(*) FROM groups WHERE name = ? AND enabled = 1",
+        )
+        .bind(model)
+        .fetch_one(pool)
+        .await
+        .map(|c| c > 0)
+        .map_err(|e| ProxyError::DatabaseError(e.to_string()))?;
+
+        if !group_exists {
+            return Err(ProxyError::ModelNotFound(format!(
+                "模型不存在: {}",
                 model
             )));
         }
     }
 
+    // === 第三关：分组内是否有可用渠道（延迟到 select_group_item 时检查）===
     Ok(())
 }
 
@@ -913,6 +952,8 @@ fn format_rate_limit_error(
 fn render_status_and_message(e: &ProxyError) -> (StatusCode, String) {
     match e {
         ProxyError::NoAvailableChannel(msg) => (StatusCode::SERVICE_UNAVAILABLE, msg.clone()),
+        ProxyError::ModelNotSupported(msg) => (StatusCode::BAD_REQUEST, msg.clone()),
+        ProxyError::ModelNotFound(msg) => (StatusCode::NOT_FOUND, msg.clone()),
         ProxyError::UpstreamError { status, body } => (*status, sanitize_upstream_error(body)),
         _ => (StatusCode::BAD_GATEWAY, e.to_string()),
     }
@@ -1048,6 +1089,12 @@ pub enum ProxyError {
     #[error("没有可用渠道: {0}")]
     NoAvailableChannel(String),
 
+    #[error("模型不支持: {0}")]
+    ModelNotSupported(String),
+
+    #[error("模型不存在: {0}")]
+    ModelNotFound(String),
+
     #[error("请求失败: {0}")]
     RequestError(String),
 
@@ -1079,6 +1126,7 @@ impl ProxyError {
             ProxyError::NoAvailableChannel(_) | ProxyError::RequestError(_) => {
                 ErrorClass::UpstreamRetryable
             }
+            ProxyError::ModelNotSupported(_) | ProxyError::ModelNotFound(_) => ErrorClass::Client,
             ProxyError::TransformError(_) => ErrorClass::Internal,
             ProxyError::UpstreamError { status, body } => classify_upstream(*status, body),
         }

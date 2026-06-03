@@ -19,6 +19,7 @@ pub struct ApiKey {
     pub supported_models: Option<String>,
     pub rate_limit_rpm: i32,
     pub rate_limit_tpm: i32,
+    pub allowed_groups: Option<String>,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -30,6 +31,7 @@ pub struct CreateApiKeyRequest {
     pub supported_models: Option<String>,
     pub rate_limit_rpm: Option<i32>,
     pub rate_limit_tpm: Option<i32>,
+    pub allowed_groups: Option<String>,
 }
 
 /// 更新 API Key 请求
@@ -40,6 +42,7 @@ pub struct UpdateApiKeyRequest {
     pub supported_models: Option<String>,
     pub rate_limit_rpm: Option<i32>,
     pub rate_limit_tpm: Option<i32>,
+    pub allowed_groups: Option<String>,
 }
 
 /// API Key 状态
@@ -67,8 +70,8 @@ pub fn parse_supported_models(models_str: &str) -> Vec<String> {
 pub async fn list(
     State(state): State<ApiKeyState>,
 ) -> Result<Json<ApiResponse<Vec<ApiKey>>>, (StatusCode, Json<ApiError>)> {
-    let keys = sqlx::query_as::<_, (String, String, String, bool, String, i32, i32, String, String)>(
-        "SELECT id, name, api_key, enabled, supported_models, COALESCE(rate_limit_rpm, 0), COALESCE(rate_limit_tpm, 0), created_at, updated_at FROM api_keys ORDER BY created_at DESC"
+    let keys = sqlx::query_as::<_, (String, String, String, bool, String, i32, i32, String, String, String)>(
+        "SELECT id, name, api_key, enabled, supported_models, COALESCE(rate_limit_rpm, 0), COALESCE(rate_limit_tpm, 0), COALESCE(allowed_groups, ''), created_at, updated_at FROM api_keys ORDER BY created_at DESC"
     )
     .fetch_all(&state.pool)
     .await
@@ -77,7 +80,7 @@ pub async fn list(
     let result: Vec<ApiKey> = keys
         .into_iter()
         .map(
-            |(id, name, api_key, enabled, supported_models, rate_limit_rpm, rate_limit_tpm, created_at, updated_at)| ApiKey {
+            |(id, name, api_key, enabled, supported_models, rate_limit_rpm, rate_limit_tpm, allowed_groups, created_at, updated_at)| ApiKey {
                 id,
                 name,
                 api_key,
@@ -85,6 +88,7 @@ pub async fn list(
                 supported_models: empty_to_none(supported_models),
                 rate_limit_rpm,
                 rate_limit_tpm,
+                allowed_groups: empty_to_none(allowed_groups),
                 created_at,
                 updated_at,
             },
@@ -109,12 +113,13 @@ pub async fn create(
     let supported_models = req.supported_models.unwrap_or_default();
     let rate_limit_rpm = req.rate_limit_rpm.unwrap_or(0);
     let rate_limit_tpm = req.rate_limit_tpm.unwrap_or(0);
+    let allowed_groups = req.allowed_groups.unwrap_or_default();
 
     // 插入 API Key
     sqlx::query(
         r#"
-        INSERT INTO api_keys (id, name, api_key, enabled, supported_models, rate_limit_rpm, rate_limit_tpm)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO api_keys (id, name, api_key, enabled, supported_models, rate_limit_rpm, rate_limit_tpm, allowed_groups)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         "#,
     )
     .bind(&id)
@@ -124,6 +129,7 @@ pub async fn create(
     .bind(&supported_models)
     .bind(rate_limit_rpm)
     .bind(rate_limit_tpm)
+    .bind(&allowed_groups)
     .execute(&state.pool)
     .await
     .map_err(|e| ApiError::internal_error(e.to_string()))?;
@@ -140,6 +146,11 @@ pub async fn create(
         },
         rate_limit_rpm,
         rate_limit_tpm,
+        allowed_groups: if allowed_groups.is_empty() {
+            None
+        } else {
+            Some(allowed_groups)
+        },
         created_at: chrono::Utc::now().to_rfc3339(),
         updated_at: chrono::Utc::now().to_rfc3339(),
     };
@@ -152,15 +163,15 @@ pub async fn get(
     State(state): State<ApiKeyState>,
     Path(id): Path<String>,
 ) -> Result<Json<ApiResponse<ApiKey>>, (StatusCode, Json<ApiError>)> {
-    let result = sqlx::query_as::<_, (String, String, String, bool, String, i32, i32, String, String)>(
-        "SELECT id, name, api_key, enabled, supported_models, COALESCE(rate_limit_rpm, 0), COALESCE(rate_limit_tpm, 0), created_at, updated_at FROM api_keys WHERE id = ?",
+    let result = sqlx::query_as::<_, (String, String, String, bool, String, i32, i32, String, String, String)>(
+        "SELECT id, name, api_key, enabled, supported_models, COALESCE(rate_limit_rpm, 0), COALESCE(rate_limit_tpm, 0), COALESCE(allowed_groups, ''), created_at, updated_at FROM api_keys WHERE id = ?",
     )
     .bind(&id)
     .fetch_optional(&state.pool)
     .await
     .map_err(|e| ApiError::internal_error(e.to_string()))?;
 
-    let (id, name, api_key, enabled, supported_models, rate_limit_rpm, rate_limit_tpm, created_at, updated_at) =
+    let (id, name, api_key, enabled, supported_models, rate_limit_rpm, rate_limit_tpm, allowed_groups, created_at, updated_at) =
         result.ok_or_else(|| ApiError::not_found("API Key 不存在"))?;
 
     Ok(Json(ApiResponse::success(ApiKey {
@@ -168,13 +179,10 @@ pub async fn get(
         name,
         api_key,
         enabled,
-        supported_models: if supported_models.is_empty() {
-            None
-        } else {
-            Some(supported_models)
-        },
+        supported_models: empty_to_none(supported_models),
         rate_limit_rpm,
         rate_limit_tpm,
+        allowed_groups: empty_to_none(allowed_groups),
         created_at,
         updated_at,
     })))
@@ -223,6 +231,11 @@ pub async fn update(
     if let Some(tpm) = req.rate_limit_tpm {
         separated.push("rate_limit_tpm = ");
         separated.push_bind_unseparated(tpm);
+        has_update = true;
+    }
+    if let Some(ref allowed_groups) = req.allowed_groups {
+        separated.push("allowed_groups = ");
+        separated.push_bind_unseparated(allowed_groups);
         has_update = true;
     }
 
