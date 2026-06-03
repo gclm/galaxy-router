@@ -16,7 +16,7 @@ pub use queue::RequestQueue;
 pub use ratelimit::RateLimiter;
 pub use selection::{GroupInfo, GroupItemInfo, SelectionResult};
 
-use self::state::LoadBalancerState;
+use self::state::{ChannelLoadInfo, LoadBalancerState};
 use crate::api::handlers::admin::channels::{
     CustomHeader, EndpointConfig, EndpointType, UpstreamApiKey, parse_api_keys,
 };
@@ -304,24 +304,144 @@ impl ProxyState {
             ));
         }
 
-        // 按优先级分组（priority 数值越小优先级越高）
+        // 过滤掉排除的渠道和不可用渠道
+        let mut available: Vec<&GroupItemInfo> = Vec::new();
+        for item in &group.items {
+            if exclude_ids.contains(&item.channel_id) {
+                continue;
+            }
+            // 检查渠道可用性（熔断器）
+            if !self.lb_state.is_channel_available(&item.channel_id).await {
+                continue;
+            }
+            // 确保渠道状态已初始化
+            let channel = self.get_channel(&item.channel_id).await?;
+            self.lb_state.ensure_channel_status(&item.channel_id, channel.max_concurrency).await;
+            available.push(item);
+        }
+
+        if available.is_empty() {
+            return Err(ProxyError::NoAvailableChannel(
+                "所有渠道不可用或被排除".to_string(),
+            ));
+        }
+
+        // === 分层过滤选择（sub2api 策略）===
+        // 检查是否有任何渠道配置了 max_concurrency
+        let mut has_concurrency_config = false;
+        for item in &available {
+            if let Some(info) = self.lb_state.get_channel_load_info(&item.channel_id).await {
+                if info.max_concurrency > 0 {
+                    has_concurrency_config = true;
+                    break;
+                }
+            }
+        }
+
+        if has_concurrency_config {
+            // 使用分层过滤：优先级 → 负载率 → LRU → 随机
+            self.select_by_layered_filtering(available).await
+        } else {
+            // 无并发配置时回退到加权随机（保持原有行为）
+            self.select_by_weighted_random(&available).await
+        }
+    }
+
+    /// 分层过滤选择：优先级 → 负载率 → LRU → 随机
+    async fn select_by_layered_filtering(
+        &self,
+        candidates: Vec<&GroupItemInfo>,
+    ) -> Result<GroupItemInfo, ProxyError> {
+        use rand::Rng;
+
+        // 第一层：过滤出最高优先级（priority 数值最小）
+        let min_priority = candidates.iter().map(|c| c.priority).min().unwrap_or(0);
+        let tier: Vec<&GroupItemInfo> = candidates.into_iter()
+            .filter(|c| c.priority == min_priority)
+            .collect();
+
+        // 收集负载信息
+        let load_infos: Vec<Option<ChannelLoadInfo>> = {
+            let mut infos = Vec::with_capacity(tier.len());
+            for c in &tier {
+                infos.push(self.lb_state.get_channel_load_info(&c.channel_id).await);
+            }
+            infos
+        };
+
+        // 第二层：过滤出最低负载率
+        // 找到配置了 max_concurrency 的候选中最低的负载率
+        let min_load_rate = tier.iter().enumerate()
+            .filter_map(|(i, _)| {
+                load_infos[i].as_ref()
+                    .filter(|info| info.max_concurrency > 0)
+                    .map(|info| info.load_rate)
+            })
+            .min()
+            .unwrap_or(0);
+
+        let filtered: Vec<usize> = tier.iter().enumerate()
+            .filter(|(i, _)| {
+                match &load_infos[*i] {
+                    Some(info) if info.max_concurrency > 0 => info.load_rate <= min_load_rate,
+                    _ => true, // 无并发限制的渠道始终保留
+                }
+            })
+            .map(|(i, _)| i)
+            .collect();
+
+        if filtered.is_empty() {
+            let item = tier.first().unwrap();
+            return Ok((*item).clone());
+        }
+
+        // 第三层：LRU（最久未使用）
+        let min_last_used = filtered.iter()
+            .filter_map(|&i| load_infos[i].as_ref().map(|info| info.last_used_at))
+            .min()
+            .unwrap_or(std::time::Instant::now());
+
+        let lru_indices: Vec<usize> = filtered.into_iter()
+            .filter(|&i| {
+                load_infos[i].as_ref()
+                    .map(|info| info.last_used_at <= min_last_used + std::time::Duration::from_millis(1))
+                    .unwrap_or(true)
+            })
+            .collect();
+
+        if lru_indices.is_empty() {
+            let mut rng = rand::rng();
+            let idx = rng.random_range(0..tier.len());
+            return Ok(tier[idx].clone());
+        }
+
+        // 第四层：随机打破平局
+        let mut rng = rand::rng();
+        let selected_idx = lru_indices[rng.random_range(0..lru_indices.len())];
+        Ok(tier[selected_idx].clone())
+    }
+
+    /// 加权随机选择（原有策略，无并发配置时使用）
+    async fn select_by_weighted_random(
+        &self,
+        candidates: &[&GroupItemInfo],
+    ) -> Result<GroupItemInfo, ProxyError> {
+        use rand::Rng;
+
+        // 按优先级分组
         let mut priority_tiers: std::collections::BTreeMap<i32, Vec<&GroupItemInfo>> =
             std::collections::BTreeMap::new();
-        for item in &group.items {
+        for item in candidates {
             priority_tiers
                 .entry(item.priority)
                 .or_default()
                 .push(item);
         }
 
-        // 逐级尝试：先选最高优先级的可用渠道，全部不可用时降级到下一优先级
         for (_priority, tier_items) in &priority_tiers {
             let mut scored_items: Vec<(f64, &GroupItemInfo)> = Vec::new();
 
             for item in tier_items {
-                if exclude_ids.contains(&item.channel_id) {
-                    continue;
-                }
                 let score = self
                     .lb_state
                     .calculate_score(&item.channel_id, item.weight)
@@ -332,7 +452,6 @@ impl ProxyState {
             }
 
             if scored_items.is_empty() {
-                // 当前优先级无可用渠道，尝试下一优先级
                 continue;
             }
 
@@ -343,13 +462,11 @@ impl ProxyState {
             let top_k = 3.min(scored_items.len());
             let top_items = &scored_items[..top_k];
 
-            // 加权随机选择
             let total_score: f64 = top_items.iter().map(|(score, _)| score).sum();
             if total_score <= 0.0 {
                 return Ok(top_items[0].1.clone());
             }
 
-            use rand::Rng;
             let mut rng = rand::rng();
             let mut random_value = rng.random_range(0.0..total_score);
 
@@ -376,15 +493,15 @@ impl ProxyState {
         }
 
         // 2. 缓存未命中，查询数据库
-        let result = sqlx::query_as::<_, (String, String, String, String, String, String, i32)>(
-            "SELECT id, name, api_keys, endpoints, models, custom_headers, COALESCE(timeout_secs, 300) FROM channels WHERE id = ? AND enabled = 1"
+        let result = sqlx::query_as::<_, (String, String, String, String, String, String, i32, i32)>(
+            "SELECT id, name, api_keys, endpoints, models, custom_headers, COALESCE(timeout_secs, 300), COALESCE(max_concurrency, 0) FROM channels WHERE id = ? AND enabled = 1"
         )
         .bind(channel_id)
         .fetch_optional(&self.pool)
         .await
         .map_err(|e| ProxyError::DatabaseError(e.to_string()))?;
 
-        let (id, name, api_keys_str, endpoints_str, models_str, custom_headers_str, timeout_secs) =
+        let (id, name, api_keys_str, endpoints_str, models_str, custom_headers_str, timeout_secs, max_concurrency) =
             result.ok_or_else(|| ProxyError::ChannelNotFound("渠道不存在或已禁用".to_string()))?;
 
         let api_keys: Vec<UpstreamApiKey> = parse_api_keys(&api_keys_str);
@@ -402,6 +519,7 @@ impl ProxyState {
             models,
             custom_headers,
             timeout_secs: timeout_secs as u64,
+            max_concurrency: max_concurrency as u32,
         };
 
         // 3. 写入缓存
@@ -433,14 +551,14 @@ impl ProxyState {
         }
 
         // 2. 回退到数据库全表扫描（冷启动或缓存未命中）
-        let channels = sqlx::query_as::<_, (String, String, String, String, String, String, i32)>(
-            "SELECT id, name, api_keys, endpoints, models, custom_headers, COALESCE(timeout_secs, 300) FROM channels WHERE enabled = 1",
+        let channels = sqlx::query_as::<_, (String, String, String, String, String, String, i32, i32)>(
+            "SELECT id, name, api_keys, endpoints, models, custom_headers, COALESCE(timeout_secs, 300), COALESCE(max_concurrency, 0) FROM channels WHERE enabled = 1",
         )
         .fetch_all(&self.pool)
         .await
         .map_err(|e| ProxyError::DatabaseError(e.to_string()))?;
 
-        for (id, name, api_keys_str, endpoints_str, models_str, custom_headers_str, timeout_secs) in channels {
+        for (id, name, api_keys_str, endpoints_str, models_str, custom_headers_str, timeout_secs, max_concurrency) in channels {
             if exclude_ids.contains(&id) {
                 continue;
             }
@@ -469,6 +587,7 @@ impl ProxyState {
                 models,
                 custom_headers,
                 timeout_secs: timeout_secs as u64,
+                max_concurrency: max_concurrency as u32,
             };
 
             if !endpoint_filter(&channel) {

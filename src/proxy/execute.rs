@@ -31,6 +31,43 @@ pub(super) struct AttemptStats {
     upstream_key_hint: String,
 }
 
+/// RAII guard：确保函数退出时自动递减活跃请求数
+struct ActiveRequestGuard {
+    state: ProxyState,
+    channel_id: String,
+}
+
+impl Drop for ActiveRequestGuard {
+    fn drop(&mut self) {
+        let state = self.state.clone();
+        let channel_id = self.channel_id.clone();
+        // spawn 一个任务来执行 async decrement，避免在 Drop 中 await
+        tokio::spawn(async move {
+            state.lb_state.decrement_active(&channel_id).await;
+        });
+    }
+}
+
+/// 仅在未被 decrement 过时执行一次 decrement（用于流式请求的错误路径）
+fn decrement_active_once(
+    state: &ProxyState,
+    channel_id: &str,
+    done: &std::sync::Arc<std::sync::atomic::AtomicBool>,
+) {
+    if done.compare_exchange(
+        false,
+        true,
+        std::sync::atomic::Ordering::Relaxed,
+        std::sync::atomic::Ordering::Relaxed,
+    ).is_ok() {
+        let state = state.clone();
+        let channel_id = channel_id.to_string();
+        tokio::spawn(async move {
+            state.lb_state.decrement_active(&channel_id).await;
+        });
+    }
+}
+
 impl crate::stats::recorder::RequestRecord {
     /// 从最后一次尝试构造完整记录
     #[allow(clippy::too_many_arguments)]
@@ -203,6 +240,15 @@ pub(super) async fn execute_proxy_request(
     selection: &SelectionResult,
     attempts: &mut Vec<AttemptStats>,
 ) -> Result<ProxySuccess, ProxyError> {
+    // 追踪活跃请求数
+    let channel_id = selection.channel.id.clone();
+    state.lb_state.ensure_channel_status(&channel_id, selection.channel.max_concurrency).await;
+    state.lb_state.increment_active(&channel_id).await;
+    let _guard = ActiveRequestGuard {
+        state: state.clone(),
+        channel_id: channel_id.clone(),
+    };
+
     let prepared =
         prepare_proxy_request(headers, body, client_endpoint, selection, upstream_api_key).await?;
     let start_time = std::time::Instant::now();
@@ -514,6 +560,17 @@ pub(super) async fn execute_proxy_stream(
     ),
     ProxyError,
 > {
+    // 追踪活跃请求数
+    let channel_id = selection.channel.id.clone();
+    state.lb_state.ensure_channel_status(&channel_id, selection.channel.max_concurrency).await;
+    state.lb_state.increment_active(&channel_id).await;
+    // 流式请求的 guard 需要在 spawned task 中手动 decrement，因为流的生命周期超出本函数
+    // 但如果本函数在发送前就返回 Err，需要确保 decrement
+    let active_decremented = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let active_decremented_clone = active_decremented.clone();
+    let state_for_decrement = state.clone();
+    let channel_id_for_decrement = channel_id.clone();
+
     let prepared =
         prepare_proxy_request(headers, body, client_endpoint, selection, upstream_api_key).await?;
     let start_time = std::time::Instant::now();
@@ -526,7 +583,10 @@ pub(super) async fn execute_proxy_stream(
         .body(prepared.body)
         .send()
         .await
-        .map_err(|e| ProxyError::RequestError(e.to_string()))?;
+        .map_err(|e| {
+            decrement_active_once(&state_for_decrement, &channel_id_for_decrement, &active_decremented_clone);
+            ProxyError::RequestError(e.to_string())
+        })?;
 
     if !response.status().is_success() {
         let latency_ms = start_time.elapsed().as_millis() as i64;
@@ -549,6 +609,7 @@ pub(super) async fn execute_proxy_stream(
             upstream_key_hint: upstream_key_hint.clone(),
         });
 
+        decrement_active_once(&state_for_decrement, &channel_id_for_decrement, &active_decremented_clone);
         return Err(ProxyError::UpstreamError {
             status,
             body: response_body,
@@ -568,7 +629,10 @@ pub(super) async fn execute_proxy_stream(
                     break;
                 }
             }
-            Err(e) => return Err(ProxyError::RequestError(e.to_string())),
+            Err(e) => {
+                decrement_active_once(&state_for_decrement, &channel_id_for_decrement, &active_decremented_clone);
+                return Err(ProxyError::RequestError(e.to_string()));
+            }
         }
     }
 
@@ -595,6 +659,7 @@ pub(super) async fn execute_proxy_stream(
             upstream_key_hint: upstream_key_hint.clone(),
         });
 
+        decrement_active_once(&state_for_decrement, &channel_id_for_decrement, &active_decremented_clone);
         return Err(ProxyError::UpstreamError {
             status: StatusCode::BAD_GATEWAY,
             body: error,
@@ -661,6 +726,7 @@ pub(super) async fn execute_proxy_stream(
     }
 
     // 流处理 + 统计记录全在一个 spawned task 里
+    let active_decremented_spawn = active_decremented.clone();
     tokio::spawn(async move {
         // _permit 随任务生命周期存在，释放 semaphore 许可
         let _permit = _permit;
@@ -937,6 +1003,7 @@ pub(super) async fn execute_proxy_stream(
         });
 
         let rate_limit_key = sc_api_key_id.clone();
+        let decrement_channel_id = sc_channel_id.clone();
         let record = crate::stats::recorder::RequestRecord {
             request_id: Some(request_id_clone),
             api_key_id: sc_api_key_id,
@@ -971,6 +1038,12 @@ pub(super) async fn execute_proxy_stream(
             }
             Err(e) => tracing::warn!("Failed to save stream stats: {}", e),
         }
+
+        // 流结束，递减活跃请求数
+        if !active_decremented_spawn.load(std::sync::atomic::Ordering::Relaxed) {
+            active_decremented_spawn.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+        state_clone.lb_state.decrement_active(&decrement_channel_id).await;
     });
 
     // 将 mpsc Receiver 转换为 Stream 返回给 axum

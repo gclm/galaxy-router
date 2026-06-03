@@ -13,6 +13,8 @@ pub struct ChannelInfo {
     pub custom_headers: Vec<CustomHeader>,
     /// 单次请求超时（秒），默认 300
     pub timeout_secs: u64,
+    /// 最大并发请求数（0=不限制）
+    pub max_concurrency: u32,
 }
 
 impl ChannelInfo {
@@ -84,6 +86,7 @@ mod tests {
             models: vec!["gpt-4".into()],
             custom_headers: vec![],
             timeout_secs: 300,
+            max_concurrency: 0,
         }
     }
 

@@ -1,12 +1,14 @@
 use chrono::{DateTime, Utc};
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Instant;
 use tokio::sync::RwLock;
 
 use super::circuit::{CircuitBreaker, CircuitConfig};
 
 /// 渠道状态
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct ChannelStatus {
     pub channel_id: String,
     pub success_count: u64,
@@ -17,9 +19,33 @@ pub struct ChannelStatus {
     pub avg_latency_ms: f64,
     pub is_blacklisted: bool,
     pub blacklist_until: Option<DateTime<Utc>>,
+    /// 当前活跃请求数
+    pub active_requests: Arc<AtomicU64>,
+    /// 最后一次使用时间（用于 LRU 选择）
+    pub last_used_at: Arc<RwLock<Instant>>,
+    /// 最大并发数（0=不限制）
+    pub max_concurrency: u32,
 }
 
 impl ChannelStatus {
+    /// 创建新的渠道状态
+    pub fn new(channel_id: &str) -> Self {
+        Self {
+            channel_id: channel_id.to_string(),
+            success_count: 0,
+            failure_count: 0,
+            last_success: None,
+            last_failure: None,
+            last_health_check: None,
+            avg_latency_ms: 0.0,
+            is_blacklisted: false,
+            blacklist_until: None,
+            active_requests: Arc::new(AtomicU64::new(0)),
+            last_used_at: Arc::new(RwLock::new(Instant::now())),
+            max_concurrency: 0,
+        }
+    }
+
     /// 计算错误率
     pub fn error_rate(&self) -> f64 {
         let total = self.success_count + self.failure_count;
@@ -29,8 +55,27 @@ impl ChannelStatus {
         self.failure_count as f64 / total as f64
     }
 
+    /// 计算负载率 (0-100+)
+    pub fn load_rate(&self) -> u32 {
+        if self.max_concurrency == 0 {
+            return 0;
+        }
+        let active = self.active_requests.load(Ordering::Relaxed);
+        (active * 100 / self.max_concurrency as u64) as u32
+    }
+
+    /// 活跃请求 +1
+    pub fn increment_active(&self) {
+        self.active_requests.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// 活跃请求 -1
+    pub fn decrement_active(&self) {
+        self.active_requests.fetch_sub(1, Ordering::Relaxed);
+    }
+
     /// 记录成功
-    pub fn record_success(&mut self, latency_ms: f64) {
+    pub async fn record_success(&mut self, latency_ms: f64) {
         self.success_count += 1;
         self.last_success = Some(Utc::now());
 
@@ -49,6 +94,9 @@ impl ChannelStatus {
         } else {
             self.avg_latency_ms = 0.8 * self.avg_latency_ms + 0.2 * latency_ms;
         }
+
+        // 更新最后使用时间
+        *self.last_used_at.write().await = Instant::now();
     }
 
     /// 记录健康探测结果
@@ -91,6 +139,15 @@ impl ChannelStatus {
 pub struct StickySession {
     pub channel_id: String,
     pub expires_at: DateTime<Utc>,
+}
+
+/// 渠道负载信息（用于选择算法）
+#[derive(Clone)]
+pub struct ChannelLoadInfo {
+    pub active_requests: u64,
+    pub load_rate: u32,
+    pub last_used_at: Instant,
+    pub max_concurrency: u32,
 }
 
 /// 负载均衡状态
@@ -137,7 +194,7 @@ impl LoadBalancerState {
         {
             let mut states = self.channel_states.write().await;
             if let Some(status) = states.get_mut(channel_id) {
-                status.record_success(latency_ms);
+                status.record_success(latency_ms).await;
             }
         }
         // 通知熔断器（使用空的 key_hint，后续可扩展）
@@ -171,6 +228,61 @@ impl LoadBalancerState {
     pub async fn is_channel_available(&self, channel_id: &str) -> bool {
         let (tripped, _) = self.circuit_breaker.is_tripped(channel_id, "default").await;
         !tripped
+    }
+
+    /// 确保渠道状态存在（惰性初始化）
+    pub async fn ensure_channel_status(&self, channel_id: &str, max_concurrency: u32) {
+        let states = self.channel_states.read().await;
+        if states.contains_key(channel_id) {
+            // 更新 max_concurrency 如果已存在
+            drop(states);
+            let mut states = self.channel_states.write().await;
+            if let Some(status) = states.get_mut(channel_id) {
+                status.max_concurrency = max_concurrency;
+            }
+            return;
+        }
+        drop(states);
+        let mut states = self.channel_states.write().await;
+        // Double-check after acquiring write lock
+        if let Some(status) = states.get_mut(channel_id) {
+            status.max_concurrency = max_concurrency;
+            return;
+        }
+        let mut status = ChannelStatus::new(channel_id);
+        status.max_concurrency = max_concurrency;
+        states.insert(channel_id.to_string(), status);
+    }
+
+    /// 活跃请求 +1
+    pub async fn increment_active(&self, channel_id: &str) {
+        let states = self.channel_states.read().await;
+        if let Some(status) = states.get(channel_id) {
+            status.increment_active();
+        }
+    }
+
+    /// 活跃请求 -1
+    pub async fn decrement_active(&self, channel_id: &str) {
+        let states = self.channel_states.read().await;
+        if let Some(status) = states.get(channel_id) {
+            status.decrement_active();
+        }
+    }
+
+    /// 获取渠道的负载信息（负载率、活跃请求数、最后使用时间）
+    pub async fn get_channel_load_info(&self, channel_id: &str) -> Option<ChannelLoadInfo> {
+        let states = self.channel_states.read().await;
+        let status = states.get(channel_id)?;
+        let active = status.active_requests.load(Ordering::Relaxed);
+        let load_rate = status.load_rate();
+        let last_used = *status.last_used_at.read().await;
+        Some(ChannelLoadInfo {
+            active_requests: active,
+            load_rate,
+            last_used_at: last_used,
+            max_concurrency: status.max_concurrency,
+        })
     }
 
     /// 计算渠道评分
@@ -270,17 +382,7 @@ mod tests {
     use super::*;
 
     fn sample_status() -> ChannelStatus {
-        ChannelStatus {
-            channel_id: "ch-1".into(),
-            success_count: 0,
-            failure_count: 0,
-            last_success: None,
-            last_failure: None,
-            last_health_check: None,
-            avg_latency_ms: 0.0,
-            is_blacklisted: false,
-            blacklist_until: None,
-        }
+        ChannelStatus::new("ch-1")
     }
 
     #[test]
@@ -297,27 +399,27 @@ mod tests {
         assert!((s.error_rate() - 0.25).abs() < 1e-9);
     }
 
-    #[test]
-    fn record_success_halves_failure_count() {
+    #[tokio::test]
+    async fn record_success_halves_failure_count() {
         let mut s = sample_status();
         s.failure_count = 4;
-        s.record_success(100.0);
+        s.record_success(100.0).await;
         assert_eq!(s.failure_count, 2);
-        s.record_success(100.0);
+        s.record_success(100.0).await;
         assert_eq!(s.failure_count, 1);
-        s.record_success(100.0);
+        s.record_success(100.0).await;
         assert_eq!(s.failure_count, 0);
     }
 
-    #[test]
-    fn blacklist_unblocks_when_failures_decay_to_zero() {
+    #[tokio::test]
+    async fn blacklist_unblocks_when_failures_decay_to_zero() {
         let mut s = sample_status();
         s.failure_count = 2;
         s.blacklist(10);
         assert!(s.is_blacklisted);
         // 多次成功将失败计数衰减到 0 → 自动解封
         for _ in 0..5 {
-            s.record_success(50.0);
+            s.record_success(50.0).await;
         }
         assert!(!s.is_blacklisted);
         assert!(s.blacklist_until.is_none());
@@ -328,5 +430,32 @@ mod tests {
         let mut s = sample_status();
         s.blacklist(-1); // 立即过期
         assert!(s.is_available());
+    }
+
+    #[test]
+    fn load_rate_is_zero_when_no_max_concurrency() {
+        let s = sample_status();
+        assert_eq!(s.load_rate(), 0);
+    }
+
+    #[test]
+    fn load_rate_computes_percentage() {
+        let s = sample_status();
+        s.active_requests.store(5, Ordering::Relaxed);
+        // Need to set max_concurrency
+        let mut s = s;
+        s.max_concurrency = 10;
+        assert_eq!(s.load_rate(), 50);
+    }
+
+    #[test]
+    fn active_increment_decrement() {
+        let s = sample_status();
+        assert_eq!(s.active_requests.load(Ordering::Relaxed), 0);
+        s.increment_active();
+        s.increment_active();
+        assert_eq!(s.active_requests.load(Ordering::Relaxed), 2);
+        s.decrement_active();
+        assert_eq!(s.active_requests.load(Ordering::Relaxed), 1);
     }
 }
