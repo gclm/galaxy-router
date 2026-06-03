@@ -330,11 +330,11 @@ impl ProxyState {
         // 检查是否有任何渠道配置了 max_concurrency
         let mut has_concurrency_config = false;
         for item in &available {
-            if let Some(info) = self.lb_state.get_channel_load_info(&item.channel_id).await {
-                if info.max_concurrency > 0 {
-                    has_concurrency_config = true;
-                    break;
-                }
+            if let Some(info) = self.lb_state.get_channel_load_info(&item.channel_id).await
+                && info.max_concurrency > 0
+            {
+                has_concurrency_config = true;
+                break;
             }
         }
 
@@ -438,7 +438,7 @@ impl ProxyState {
                 .push(item);
         }
 
-        for (_priority, tier_items) in &priority_tiers {
+        for tier_items in priority_tiers.values() {
             let mut scored_items: Vec<(f64, &GroupItemInfo)> = Vec::new();
 
             for item in tier_items {
@@ -892,7 +892,7 @@ async fn validate_model_access(
             .map(|s| s.trim())
             .filter(|s| !s.is_empty())
             .collect();
-        if !allowed.is_empty() && !allowed.iter().any(|g| *g == model) {
+        if !allowed.is_empty() && !allowed.contains(&model) {
             return Err(ProxyError::ModelNotSupported(format!(
                 "API Key 无权访问模型: {}",
                 model

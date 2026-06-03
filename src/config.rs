@@ -43,6 +43,7 @@ pub struct LoggingConfig {
     pub rotation: String,
     /// 最大保留文件数（默认 30）
     #[serde(default = "default_max_files")]
+    #[allow(dead_code)]
     pub max_files: usize,
 }
 

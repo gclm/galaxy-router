@@ -770,13 +770,13 @@ pub(super) async fn execute_proxy_stream(
                                     is_error_event = true;
                                 }
                             if is_error_event {
-                                if let Some(error) = stream_error.as_deref() {
-                                    if !stream_send(&stream_tx, Bytes::from(format_stream_error_event(
+                                if let Some(error) = stream_error.as_deref()
+                                    && !stream_send(&stream_tx, Bytes::from(format_stream_error_event(
                                         error,
                                         &client_endpoint_clone,
-                                    ))).await {
-                                        break;
-                                    }
+                                    ))).await
+                                {
+                                    break;
                                 }
                                 continue;
                             }
@@ -997,7 +997,7 @@ pub(super) async fn execute_proxy_stream(
             channel_id: sc_channel_id.clone(),
             channel_name: None,
             status: if (200..400).contains(&status_code) { "success".into() } else { "failed".into() },
-            duration_ms: latency_ms as i64,
+            duration_ms: latency_ms,
             error: error_message.clone(),
             upstream_key_hint: Some(sc_upstream_key_hint.clone()),
         });

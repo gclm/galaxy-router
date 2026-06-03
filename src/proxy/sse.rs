@@ -75,13 +75,12 @@ pub fn extract_usage_from_sse(text: &str, endpoint_type: &EndpointType) -> Optio
             }
             if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(data) {
                 // response.completed 事件：usage 在 parsed["response"]["usage"]
-                if event_type == "response.completed" {
-                    if let Some(usage) = parsed
+                if event_type == "response.completed"
+                    && let Some(usage) = parsed
                         .get("response")
                         .and_then(|r| r.get("usage"))
-                    {
-                        return Some(SseUsageSource::OpenAi(usage.clone()));
-                    }
+                {
+                    return Some(SseUsageSource::OpenAi(usage.clone()));
                 }
                 // 兼容：usage 也在顶层的情况
                 if parsed.get("usage").is_some() {

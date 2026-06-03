@@ -65,6 +65,7 @@ impl ApiKeyCache {
     }
 
     /// 设置 API Key 缓存
+    #[allow(clippy::too_many_arguments)]
     async fn set(&self, key: String, id: String, name: String, enabled: bool, rate_limit_rpm: u64, rate_limit_tpm: u64, allowed_groups: String) {
         let mut cache = self.keys.write().await;
         if cache.len() >= 1000 {

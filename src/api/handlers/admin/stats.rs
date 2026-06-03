@@ -4,7 +4,7 @@ use axum::{
     http::StatusCode,
 };
 use serde::{Deserialize, Serialize};
-use sqlx::SqlitePool;
+
 
 use crate::api::{ApiError, ApiResponse};
 use crate::stats::StatsState;

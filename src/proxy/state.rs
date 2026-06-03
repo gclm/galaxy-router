@@ -9,6 +9,7 @@ use super::circuit::{CircuitBreaker, CircuitConfig};
 
 /// 渠道状态
 #[derive(Debug)]
+#[allow(dead_code)]
 pub struct ChannelStatus {
     pub channel_id: String,
     pub success_count: u64,
@@ -100,6 +101,7 @@ impl ChannelStatus {
     }
 
     /// 记录健康探测结果
+    #[allow(dead_code)]
     pub fn record_health_check(&mut self, success: bool) {
         self.last_health_check = Some(Utc::now());
         if !success {
@@ -143,6 +145,7 @@ pub struct StickySession {
 
 /// 渠道负载信息（用于选择算法）
 #[derive(Clone)]
+#[allow(dead_code)]
 pub struct ChannelLoadInfo {
     pub active_requests: u64,
     pub load_rate: u32,

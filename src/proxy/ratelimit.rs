@@ -121,6 +121,7 @@ impl RateLimiter {
     }
 
     /// 获取某个键的当前用量（供管理端查看）
+    #[allow(dead_code)]
     pub async fn get_usage(&self, key_id: &str) -> Option<(u64, u64)> {
         let windows = self.windows.read().await;
         windows.get(key_id).map(|s| (s.request_count, s.token_count))
