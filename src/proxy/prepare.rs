@@ -24,10 +24,18 @@ pub(super) fn extract_usage(
 ) -> (i32, i32, i32, i32) {
     let usage = &body["usage"];
     match endpoint_type {
-        EndpointType::OpenAiChat | EndpointType::OpenAiResponse => {
+        EndpointType::OpenAiChat => {
             let input = usage["prompt_tokens"].as_i64().unwrap_or(0) as i32;
             let output = usage["completion_tokens"].as_i64().unwrap_or(0) as i32;
             let cache_read = usage["prompt_tokens_details"]["cached_tokens"]
+                .as_i64()
+                .unwrap_or(0) as i32;
+            (input, output, cache_read, 0)
+        }
+        EndpointType::OpenAiResponse => {
+            let input = usage["input_tokens"].as_i64().unwrap_or(0) as i32;
+            let output = usage["output_tokens"].as_i64().unwrap_or(0) as i32;
+            let cache_read = usage["input_tokens_details"]["cached_tokens"]
                 .as_i64()
                 .unwrap_or(0) as i32;
             (input, output, cache_read, 0)
@@ -64,13 +72,14 @@ pub(super) fn estimate_tokens_for_model(text: &str, model: &str) -> i32 {
     estimator.estimate_request_tokens(text, model)
 }
 
-/// 从请求体提取文本（兼容 OpenAI / Anthropic 格式）
+/// 从请求体提取文本（兼容 OpenAI Chat / Anthropic / OpenAI Responses 格式）
 pub(super) fn extract_request_text(body: &serde_json::Value) -> String {
     let mut text = String::new();
     if let Some(sys) = body["system"].as_str() {
         text.push_str(sys);
         text.push(' ');
     }
+    // OpenAI Chat / Anthropic: messages[]
     if let Some(messages) = body["messages"].as_array() {
         for msg in messages {
             if let Some(content) = msg["content"].as_str() {
@@ -86,12 +95,38 @@ pub(super) fn extract_request_text(body: &serde_json::Value) -> String {
             }
         }
     }
+    // OpenAI Responses: input (string or array)
+    if let Some(input) = body.get("input") {
+        if let Some(s) = input.as_str() {
+            text.push_str(s);
+            text.push(' ');
+        } else if let Some(input_array) = input.as_array() {
+            for item in input_array {
+                // 数组项可能是 { "role": "...", "content": "..." } 或纯文本
+                if let Some(content) = item["content"].as_str() {
+                    text.push_str(content);
+                    text.push(' ');
+                } else if let Some(parts) = item["content"].as_array() {
+                    for part in parts {
+                        if let Some(t) = part["text"].as_str() {
+                            text.push_str(t);
+                            text.push(' ');
+                        }
+                    }
+                } else if let Some(s) = item.as_str() {
+                    text.push_str(s);
+                    text.push(' ');
+                }
+            }
+        }
+    }
     text
 }
 
-/// 从非流式响应体提取文本（兼容 OpenAI / Anthropic 格式）
+/// 从非流式响应体提取文本（兼容 OpenAI Chat / Anthropic / OpenAI Responses 格式）
 pub(super) fn extract_response_text(body: &serde_json::Value) -> String {
     let mut text = String::new();
+    // OpenAI Chat: choices[].message.content
     if let Some(choices) = body["choices"].as_array() {
         for choice in choices {
             if let Some(content) = choice["message"]["content"].as_str() {
@@ -99,10 +134,23 @@ pub(super) fn extract_response_text(body: &serde_json::Value) -> String {
             }
         }
     }
+    // Anthropic: content[].text
     if let Some(content) = body["content"].as_array() {
         for block in content {
             if let Some(t) = block["text"].as_str() {
                 text.push_str(t);
+            }
+        }
+    }
+    // OpenAI Responses: output[].content[].text
+    if let Some(output) = body["output"].as_array() {
+        for item in output {
+            if let Some(content) = item["content"].as_array() {
+                for part in content {
+                    if let Some(t) = part["text"].as_str() {
+                        text.push_str(t);
+                    }
+                }
             }
         }
     }
@@ -345,6 +393,19 @@ mod tests {
     }
 
     #[test]
+    fn extract_usage_for_openai_response() {
+        let body = json!({
+            "usage": {
+                "input_tokens": 15,
+                "output_tokens": 25,
+                "input_tokens_details": { "cached_tokens": 7 }
+            }
+        });
+        let (i, o, cr, cc) = extract_usage(&body, &EndpointType::OpenAiResponse);
+        assert_eq!((i, o, cr, cc), (15, 25, 7, 0));
+    }
+
+    #[test]
     fn extract_usage_for_anthropic_includes_cache_creation() {
         let body = json!({
             "usage": {
@@ -381,6 +442,30 @@ mod tests {
     }
 
     #[test]
+    fn extract_request_text_reads_responses_input_string() {
+        let body = json!({
+            "model": "gpt-4o",
+            "input": "Hello world"
+        });
+        let text = extract_request_text(&body);
+        assert!(text.contains("Hello world"));
+    }
+
+    #[test]
+    fn extract_request_text_reads_responses_input_array() {
+        let body = json!({
+            "model": "gpt-4o",
+            "input": [
+                { "role": "user", "content": [{ "type": "input_text", "text": "Hi there" }] },
+                { "role": "user", "content": "plain text" }
+            ]
+        });
+        let text = extract_request_text(&body);
+        assert!(text.contains("Hi there"));
+        assert!(text.contains("plain text"));
+    }
+
+    #[test]
     fn extract_response_text_reads_openai_choices() {
         let body = json!({
             "choices": [
@@ -402,5 +487,28 @@ mod tests {
         });
         let text = extract_response_text(&body);
         assert_eq!(text, "alphabeta");
+    }
+
+    #[test]
+    fn extract_response_text_reads_openai_response_output() {
+        let body = json!({
+            "output": [
+                {
+                    "type": "message",
+                    "content": [
+                        { "type": "output_text", "text": "Hello" },
+                        { "type": "output_text", "text": " World" }
+                    ]
+                },
+                {
+                    "type": "message",
+                    "content": [
+                        { "type": "output_text", "text": "!" }
+                    ]
+                }
+            ]
+        });
+        let text = extract_response_text(&body);
+        assert_eq!(text, "Hello World!");
     }
 }

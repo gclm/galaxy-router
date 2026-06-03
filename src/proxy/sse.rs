@@ -50,12 +50,41 @@ pub fn apply_sse_usage(
 /// 从 SSE 事件中提取 usage 数据（需要完整事件，由 find_sse_boundary 分割）
 pub fn extract_usage_from_sse(text: &str, endpoint_type: &EndpointType) -> Option<SseUsageSource> {
     match endpoint_type {
-        EndpointType::OpenAiChat | EndpointType::OpenAiResponse => {
+        EndpointType::OpenAiChat => {
             for line in text.lines() {
                 if let Some(data) = sse_field(line, "data")
                     && let Ok(parsed) = serde_json::from_str::<serde_json::Value>(data)
                     && parsed.get("usage").is_some()
                 {
+                    return Some(SseUsageSource::OpenAi(parsed));
+                }
+            }
+            None
+        }
+        EndpointType::OpenAiResponse => {
+            // OpenAI Responses 流式事件中 usage 在 response.completed 事件的
+            // response.usage 路径下，而非顶层
+            let mut event_type = "";
+            let mut data = "";
+            for line in text.lines() {
+                if let Some(stripped) = sse_field(line, "event") {
+                    event_type = stripped;
+                } else if let Some(stripped) = sse_field(line, "data") {
+                    data = stripped;
+                }
+            }
+            if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(data) {
+                // response.completed 事件：usage 在 parsed["response"]["usage"]
+                if event_type == "response.completed" {
+                    if let Some(usage) = parsed
+                        .get("response")
+                        .and_then(|r| r.get("usage"))
+                    {
+                        return Some(SseUsageSource::OpenAi(usage.clone()));
+                    }
+                }
+                // 兼容：usage 也在顶层的情况
+                if parsed.get("usage").is_some() {
                     return Some(SseUsageSource::OpenAi(parsed));
                 }
             }
@@ -220,7 +249,7 @@ pub fn collect_sse_content(
     tool_calls: &mut Vec<serde_json::Value>,
 ) {
     match endpoint_type {
-        EndpointType::OpenAiChat | EndpointType::OpenAiResponse => {
+        EndpointType::OpenAiChat => {
             for line in text.lines() {
                 if let Some(data) = sse_field(line, "data") {
                     if data == "[DONE]" {
@@ -247,6 +276,50 @@ pub fn collect_sse_content(
                             }
                         }
                     }
+                }
+            }
+        }
+        EndpointType::OpenAiResponse => {
+            // OpenAI Responses 流式事件使用不同的格式：
+            // event: response.output_text.delta  → { "delta": "text", ... }
+            // event: response.reasoning.delta    → { "delta": "text", ... }
+            // event: response.function_call_arguments.delta → { "delta": "args", "call_id", "name" }
+            let mut event_type = "";
+            let mut data = "";
+            for line in text.lines() {
+                if let Some(stripped) = sse_field(line, "event") {
+                    event_type = stripped.trim();
+                } else if let Some(stripped) = sse_field(line, "data") {
+                    data = stripped.trim_start();
+                }
+            }
+            if data.is_empty() || data == "[DONE]" {
+                return;
+            }
+            if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(data) {
+                match event_type {
+                    "response.output_text.delta" => {
+                        if let Some(delta) = parsed["delta"].as_str()
+                            && !delta.is_empty()
+                        {
+                            output.push_str(delta);
+                        }
+                    }
+                    "response.reasoning.delta" => {
+                        if let Some(delta) = parsed["delta"].as_str()
+                            && !delta.is_empty()
+                        {
+                            reasoning.push_str(delta);
+                        }
+                    }
+                    "response.function_call_arguments.delta" => {
+                        tool_calls.push(serde_json::json!({
+                            "id": parsed["call_id"],
+                            "name": parsed["name"],
+                            "arguments": parsed["delta"],
+                        }));
+                    }
+                    _ => {}
                 }
             }
         }
@@ -327,5 +400,110 @@ data: {"type":"response.failed","response":{"status":"failed"},"error":{"message
         let message = sanitize_upstream_error(r#"{"error":"plain upstream error"}"#);
 
         assert_eq!(message, "plain upstream error");
+    }
+
+    #[test]
+    fn extract_usage_from_sse_openai_chat_finds_top_level_usage() {
+        let event = r#"data: {"choices":[],"usage":{"prompt_tokens":10,"completion_tokens":20}}"#;
+
+        let source = extract_usage_from_sse(event, &EndpointType::OpenAiChat).unwrap();
+
+        match source {
+            SseUsageSource::OpenAi(v) => {
+                assert_eq!(v["usage"]["prompt_tokens"], 10);
+                assert_eq!(v["usage"]["completion_tokens"], 20);
+            }
+            _ => panic!("expected OpenAi source"),
+        }
+    }
+
+    #[test]
+    fn extract_usage_from_sse_responses_completed_finds_nested_usage() {
+        let event = r#"event: response.completed
+data: {"type":"response.completed","response":{"id":"resp_123","status":"completed","usage":{"input_tokens":50,"output_tokens":30,"total_tokens":80}}}"#;
+
+        let source = extract_usage_from_sse(event, &EndpointType::OpenAiResponse).unwrap();
+
+        match source {
+            SseUsageSource::OpenAi(v) => {
+                assert_eq!(v["input_tokens"], 50);
+                assert_eq!(v["output_tokens"], 30);
+            }
+            _ => panic!("expected OpenAi source"),
+        }
+    }
+
+    #[test]
+    fn extract_usage_from_sse_responses_ignores_delta_event() {
+        let event = r#"event: response.output_text.delta
+data: {"type":"response.output_text.delta","delta":"hello"}"#;
+
+        let source = extract_usage_from_sse(event, &EndpointType::OpenAiResponse);
+        assert!(source.is_none());
+    }
+
+    #[test]
+    fn collect_sse_content_responses_text_delta() {
+        let event = r#"event: response.output_text.delta
+data: {"type":"response.output_text.delta","delta":"Hello world","output_index":0,"content_index":0}"#;
+
+        let mut output = String::new();
+        let mut reasoning = String::new();
+        let mut tool_calls = Vec::new();
+        collect_sse_content(
+            event,
+            &EndpointType::OpenAiResponse,
+            &mut output,
+            &mut reasoning,
+            &mut tool_calls,
+        );
+
+        assert_eq!(output, "Hello world");
+        assert!(reasoning.is_empty());
+        assert!(tool_calls.is_empty());
+    }
+
+    #[test]
+    fn collect_sse_content_responses_reasoning_delta() {
+        let event = r#"event: response.reasoning.delta
+data: {"type":"response.reasoning.delta","delta":"thinking...","output_index":0}"#;
+
+        let mut output = String::new();
+        let mut reasoning = String::new();
+        let mut tool_calls = Vec::new();
+        collect_sse_content(
+            event,
+            &EndpointType::OpenAiResponse,
+            &mut output,
+            &mut reasoning,
+            &mut tool_calls,
+        );
+
+        assert!(output.is_empty());
+        assert_eq!(reasoning, "thinking...");
+        assert!(tool_calls.is_empty());
+    }
+
+    #[test]
+    fn collect_sse_content_responses_tool_call_delta() {
+        let event = r#"event: response.function_call_arguments.delta
+data: {"type":"response.function_call_arguments.delta","call_id":"call_123","name":"get_weather","delta":"{\"city\":"}"#;
+
+        let mut output = String::new();
+        let mut reasoning = String::new();
+        let mut tool_calls = Vec::new();
+        collect_sse_content(
+            event,
+            &EndpointType::OpenAiResponse,
+            &mut output,
+            &mut reasoning,
+            &mut tool_calls,
+        );
+
+        assert!(output.is_empty());
+        assert!(reasoning.is_empty());
+        assert_eq!(tool_calls.len(), 1);
+        assert_eq!(tool_calls[0]["name"], "get_weather");
+        assert_eq!(tool_calls[0]["id"], "call_123");
     }
 }
