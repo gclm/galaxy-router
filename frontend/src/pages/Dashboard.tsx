@@ -191,7 +191,7 @@ export function Dashboard() {
         </div>
 
         {/* KPI 卡片 */}
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 px-5 pt-4">
+        <div className="grid grid-cols-2 md:grid-cols-5 gap-4 px-5 pt-4">
           <div className="rounded-xl bg-muted/40 p-3.5">
             <div className="flex items-center gap-2 mb-2">
               <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-gradient-to-br from-blue-500 to-blue-600 text-white shadow-sm">
@@ -244,6 +244,21 @@ export function Dashboard() {
             <p className="text-xl font-bold tracking-tight">{summary.successRate.toFixed(1)}%</p>
             <p className="text-[11px] text-muted-foreground/70 mt-0.5">
               {rangeLabel} · 累计 {fmt(total.requests)} 次
+            </p>
+          </div>
+
+          <div className="rounded-xl bg-muted/40 p-3.5">
+            <div className="flex items-center gap-2 mb-2">
+              <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-gradient-to-br from-rose-500 to-rose-600 text-white shadow-sm">
+                <Clock className="h-3.5 w-3.5" />
+              </div>
+              <span className="text-xs text-muted-foreground">延迟</span>
+            </div>
+            <p className="text-xl font-bold tracking-tight">
+              {overview?.latency_p50 != null ? `${overview.latency_p50.toFixed(0)}ms` : '-'}
+            </p>
+            <p className="text-[11px] text-muted-foreground/70 mt-0.5">
+              P50 {overview?.latency_p50 != null ? `${overview.latency_p50.toFixed(0)}` : '-'} · P95 {overview?.latency_p95 != null ? `${overview.latency_p95.toFixed(0)}` : '-'} · P99 {overview?.latency_p99 != null ? `${overview.latency_p99.toFixed(0)}` : '-'}
             </p>
           </div>
         </div>

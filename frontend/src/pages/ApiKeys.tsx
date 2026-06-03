@@ -38,7 +38,9 @@ export function ApiKeys() {
 
   // 分组列表（用于模型选择）
   const [availableGroups, setAvailableGroups] = useState<Group[]>([])
-  const [selectedModels, setSelectedModels] = useState<string[]>([])
+  const [rateLimitRpm, setRateLimitRpm] = useState('')
+  const [rateLimitTpm, setRateLimitTpm] = useState('')
+  const [selectedGroups, setSelectedGroups] = useState<string[]>([])
   const fetchRef = useRef<() => void>(() => {})
 
   useEffect(() => {
@@ -67,12 +69,19 @@ export function ApiKeys() {
     if (!newKeyName.trim()) return
     setCreating(true)
     try {
-      const supportedModels = selectedModels.length > 0 ? selectedModels.join(',') : undefined
-      const key = await apiKeysApi.create({ name: newKeyName.trim(), supported_models: supportedModels })
+      const allowedGroups = selectedGroups.length > 0 ? selectedGroups.join(',') : undefined
+      const key = await apiKeysApi.create({
+        name: newKeyName.trim(),
+        allowed_groups: allowedGroups,
+        rate_limit_rpm: rateLimitRpm ? parseInt(rateLimitRpm) : undefined,
+        rate_limit_tpm: rateLimitTpm ? parseInt(rateLimitTpm) : undefined,
+      })
       setNewKeyResult(key)
       setApiKeys(prev => [key, ...prev])
       setNewKeyName('')
-      setSelectedModels([])
+      setSelectedGroups([])
+      setRateLimitRpm('')
+      setRateLimitTpm('')
     } catch (error) {
       console.error('Failed to create API key:', error)
     } finally {
@@ -102,14 +111,16 @@ export function ApiKeys() {
     setCreateOpen(false)
     setNewKeyResult(null)
     setNewKeyName('')
-    setSelectedModels([])
+    setSelectedGroups([])
+    setRateLimitRpm('')
+    setRateLimitTpm('')
   }
 
-  const toggleModel = (model: string) => {
-    setSelectedModels(prev =>
-      prev.includes(model)
-        ? prev.filter(m => m !== model)
-        : [...prev, model]
+  const toggleGroup = (group: string) => {
+    setSelectedGroups(prev =>
+      prev.includes(group)
+        ? prev.filter(g => g !== group)
+        : [...prev, group]
     )
   }
 
@@ -166,7 +177,8 @@ export function ApiKeys() {
             <tr className="border-b bg-muted/50">
               <th className="text-left px-4 py-3 font-medium">名称</th>
               <th className="text-left px-4 py-3 font-medium">Key</th>
-              <th className="text-left px-4 py-3 font-medium">可用模型</th>
+              <th className="text-left px-4 py-3 font-medium">分组权限</th>
+              <th className="text-left px-4 py-3 font-medium">速率限制</th>
               <th className="text-center px-4 py-3 font-medium">状态</th>
               <th className="text-left px-4 py-3 font-medium">创建时间</th>
               <th className="text-center px-4 py-3 font-medium">操作</th>
@@ -175,11 +187,11 @@ export function ApiKeys() {
           <tbody>
             {loading ? (
               <tr>
-                <td colSpan={6} className="text-center py-12 text-muted-foreground">加载中...</td>
+                <td colSpan={7} className="text-center py-12 text-muted-foreground">加载中...</td>
               </tr>
             ) : filteredKeys.length === 0 ? (
               <tr>
-                <td colSpan={6} className="text-center py-12 text-muted-foreground">
+                <td colSpan={7} className="text-center py-12 text-muted-foreground">
                   {search ? '没有匹配的 API Key' : '暂无 API Key，点击上方按钮创建'}
                 </td>
               </tr>
@@ -208,7 +220,12 @@ export function ApiKeys() {
                     </div>
                   </td>
                   <td className="px-4 py-3 text-xs text-muted-foreground">
-                    {formatSupportedModels(apiKey.supported_models)}
+                    {apiKey.allowed_groups ? formatSupportedModels(apiKey.allowed_groups) : '全部'}
+                  </td>
+                  <td className="px-4 py-3 text-xs text-muted-foreground">
+                    {apiKey.rate_limit_rpm > 0 || apiKey.rate_limit_tpm > 0
+                      ? `${apiKey.rate_limit_rpm || '∞'} RPM / ${apiKey.rate_limit_tpm || '∞'} TPM`
+                      : '不限'}
                   </td>
                   <td className="px-4 py-3 text-center">
                     <StatusBadge enabled={apiKey.enabled} onClick={() => handleToggleEnabled(apiKey)} />
@@ -248,7 +265,7 @@ export function ApiKeys() {
                 />
               </div>
               <div>
-                <label className="block text-sm font-medium mb-2">可用模型（留空表示全部可用）</label>
+                <label className="block text-sm font-medium mb-2">允许访问的分组（留空表示全部）</label>
                 {availableGroups.length === 0 ? (
                   <p className="text-xs text-muted-foreground">暂无可用分组</p>
                 ) : (
@@ -260,8 +277,8 @@ export function ApiKeys() {
                       >
                         <input
                           type="checkbox"
-                          checked={selectedModels.includes(group.name)}
-                          onChange={() => toggleModel(group.name)}
+                          checked={selectedGroups.includes(group.name)}
+                          onChange={() => toggleGroup(group.name)}
                           className="rounded"
                         />
                         <span className="text-sm">{group.name}</span>
@@ -269,11 +286,36 @@ export function ApiKeys() {
                     ))}
                   </div>
                 )}
-                {selectedModels.length > 0 && (
+                {selectedGroups.length > 0 && (
                   <p className="text-xs text-muted-foreground mt-1">
-                    已选择 {selectedModels.length} 个模型
+                    已选择 {selectedGroups.length} 个分组
                   </p>
                 )}
+              </div>
+              <div>
+                <label className="block text-sm font-medium mb-2">速率限制</label>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-xs text-muted-foreground mb-1">RPM（请求/分钟）</label>
+                    <input
+                      type="number"
+                      value={rateLimitRpm}
+                      onChange={(e) => setRateLimitRpm(e.target.value)}
+                      className="input"
+                      placeholder="不限"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs text-muted-foreground mb-1">TPM（令牌/分钟）</label>
+                    <input
+                      type="number"
+                      value={rateLimitTpm}
+                      onChange={(e) => setRateLimitTpm(e.target.value)}
+                      className="input"
+                      placeholder="不限"
+                    />
+                  </div>
+                </div>
               </div>
               <div className="flex justify-end gap-2">
                 <Button variant="outline" onClick={closeCreateDialog}>取消</Button>

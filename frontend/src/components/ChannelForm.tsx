@@ -34,6 +34,8 @@ export function ChannelForm({ channel, onSubmit, onCancel }: ChannelFormProps) {
   const [failureThreshold, setFailureThreshold] = useState(channel?.failure_threshold?.toString() ?? '3')
   const [blacklistMinutes, setBlacklistMinutes] = useState(channel?.blacklist_minutes?.toString() ?? '5')
   const [concurrency, setConcurrency] = useState(channel?.concurrency?.toString() ?? '10')
+  const [timeoutSecs, setTimeoutSecs] = useState(channel?.timeout_secs?.toString() ?? '300')
+  const [maxConcurrency, setMaxConcurrency] = useState(channel?.max_concurrency?.toString() ?? '0')
   const [customHeaders, setCustomHeaders] = useState<CustomHeader[]>(channel?.custom_headers ?? [])
   const [enabled, setEnabled] = useState(channel?.enabled ?? true)
   const [submitting, setSubmitting] = useState(false)
@@ -91,6 +93,8 @@ export function ChannelForm({ channel, onSubmit, onCancel }: ChannelFormProps) {
         failure_threshold: parseInt(failureThreshold) || 3,
         blacklist_minutes: parseInt(blacklistMinutes) || 5,
         concurrency: parseInt(concurrency) || 10,
+        timeout_secs: parseInt(timeoutSecs) || 300,
+        max_concurrency: parseInt(maxConcurrency) || 0,
         custom_headers: customHeaders.filter((h) => h.key.trim()),
       }
 
@@ -305,6 +309,14 @@ export function ChannelForm({ channel, onSubmit, onCancel }: ChannelFormProps) {
           <div>
             <label className="block text-sm font-medium mb-1">并发数</label>
             <input type="number" value={concurrency} onChange={(e) => setConcurrency(e.target.value)} className="input" />
+          </div>
+          <div>
+            <label className="block text-sm font-medium mb-1">超时（秒）</label>
+            <input type="number" value={timeoutSecs} onChange={(e) => setTimeoutSecs(e.target.value)} className="input" />
+          </div>
+          <div>
+            <label className="block text-sm font-medium mb-1">最大并发</label>
+            <input type="number" value={maxConcurrency} onChange={(e) => setMaxConcurrency(e.target.value)} className="input" placeholder="0=不限" />
           </div>
         </div>
       </section>

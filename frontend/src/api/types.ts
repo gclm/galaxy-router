@@ -71,6 +71,8 @@ export interface Channel {
   failure_threshold: number
   blacklist_minutes: number
   concurrency: number
+  timeout_secs: number
+  max_concurrency: number
   custom_headers: CustomHeader[]
   enabled: boolean
   created_at: string
@@ -87,6 +89,8 @@ export interface CreateChannelRequest {
   failure_threshold?: number
   blacklist_minutes?: number
   concurrency?: number
+  timeout_secs?: number
+  max_concurrency?: number
   custom_headers?: CustomHeader[]
   enabled?: boolean
 }
@@ -101,6 +105,8 @@ export interface UpdateChannelRequest {
   failure_threshold?: number
   blacklist_minutes?: number
   concurrency?: number
+  timeout_secs?: number
+  max_concurrency?: number
   custom_headers?: CustomHeader[]
   enabled?: boolean
 }
@@ -192,6 +198,9 @@ export interface ApiKey {
   api_key: string
   enabled: boolean
   supported_models: string | null
+  rate_limit_rpm: number
+  rate_limit_tpm: number
+  allowed_groups: string | null
   created_at: string
   updated_at: string
 }
@@ -199,12 +208,18 @@ export interface ApiKey {
 export interface CreateApiKeyRequest {
   name: string
   supported_models?: string
+  rate_limit_rpm?: number
+  rate_limit_tpm?: number
+  allowed_groups?: string
 }
 
 export interface UpdateApiKeyRequest {
   name?: string
   enabled?: boolean
   supported_models?: string
+  rate_limit_rpm?: number
+  rate_limit_tpm?: number
+  allowed_groups?: string
 }
 
 // 分页响应
@@ -223,6 +238,24 @@ export interface StatsOverview {
   today_input_tokens: number
   today_output_tokens: number
   today_cost: number
+  latency_p50?: number
+  latency_p95?: number
+  latency_p99?: number
+}
+
+export interface LatencyStats {
+  latency_p50: number | null
+  latency_p95: number | null
+  latency_p99: number | null
+}
+
+export interface BudgetLimit {
+  id: string
+  api_key_id: string
+  api_key_name?: string
+  monthly_limit_usd: number
+  daily_limit_usd: number
+  enabled: boolean
 }
 
 export interface DailyStats {

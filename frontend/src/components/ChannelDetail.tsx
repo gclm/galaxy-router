@@ -149,6 +149,14 @@ export function ChannelDetail({ channel, open, onOpenChange, onEdit, onTest }: C
                 <span className="text-muted-foreground">TPM 限制</span>
                 <p className="font-medium">{channel.rate_limit_tpm ?? '无限制'}</p>
               </div>
+              <div>
+                <span className="text-muted-foreground">超时</span>
+                <p className="font-medium">{channel.timeout_secs ?? 300} 秒</p>
+              </div>
+              <div>
+                <span className="text-muted-foreground">最大并发</span>
+                <p className="font-medium">{channel.max_concurrency ? channel.max_concurrency : '不限'}</p>
+              </div>
             </div>
           </section>
 
