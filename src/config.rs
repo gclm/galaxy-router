@@ -38,6 +38,20 @@ pub struct LoggingConfig {
     pub format: String,
     pub file: bool,
     pub file_path: String,
+    /// 日志轮转策略: "daily", "hourly", "never"（默认 daily）
+    #[serde(default = "default_rotation")]
+    pub rotation: String,
+    /// 最大保留文件数（默认 30）
+    #[serde(default = "default_max_files")]
+    pub max_files: usize,
+}
+
+fn default_rotation() -> String {
+    "daily".to_string()
+}
+
+fn default_max_files() -> usize {
+    30
 }
 
 #[derive(Debug, Deserialize, Clone)]
