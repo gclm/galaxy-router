@@ -1,17 +1,19 @@
 use std::sync::Arc;
 use tokio::time::{Duration, interval};
 
+use super::ratelimit::RateLimiter;
 use super::state::LoadBalancerState;
 
 /// 定时任务调度器
 pub struct Scheduler {
     lb_state: LoadBalancerState,
+    rate_limiter: RateLimiter,
     pool: sqlx::SqlitePool,
 }
 
 impl Scheduler {
-    pub fn new(lb_state: LoadBalancerState, pool: sqlx::SqlitePool) -> Self {
-        Self { lb_state, pool }
+    pub fn new(lb_state: LoadBalancerState, rate_limiter: RateLimiter, pool: sqlx::SqlitePool) -> Self {
+        Self { lb_state, rate_limiter, pool }
     }
 
     /// 启动定时任务
@@ -36,6 +38,7 @@ impl Scheduler {
 
             self.lb_state.cleanup_expired_sessions().await;
             self.lb_state.cleanup_expired_blacklists().await;
+            self.rate_limiter.cleanup().await;
         }
     }
 

@@ -4,6 +4,7 @@ pub mod circuit;
 pub mod execute;
 pub mod prepare;
 pub mod queue;
+pub mod ratelimit;
 pub mod scheduler;
 pub mod selection;
 pub mod sse;
@@ -12,6 +13,7 @@ pub mod state;
 pub use cache::ProxyCache;
 pub use channel::ChannelInfo;
 pub use queue::RequestQueue;
+pub use ratelimit::RateLimiter;
 pub use selection::{GroupInfo, GroupItemInfo, SelectionResult};
 
 use self::state::LoadBalancerState;
@@ -40,6 +42,7 @@ pub struct ProxyState {
     pub stats_recorder: StatsRecorder,
     pub model_registry: ModelRegistry,
     pub cache: ProxyCache,
+    pub rate_limiter: RateLimiter,
     pub queue: Option<RequestQueue>,
     key_counter: Arc<AtomicU64>,
 }
@@ -99,6 +102,7 @@ impl ProxyState {
             stats_recorder: StatsRecorder::new(pool.clone()),
             model_registry,
             cache: ProxyCache::new(),
+            rate_limiter: RateLimiter::new(),
             queue: None,
             pool,
             http_client,
@@ -710,6 +714,14 @@ pub async fn handle_proxy_request(
     let is_stream = body["stream"].as_bool().unwrap_or(false);
     let api_key_id = Some(auth.key_id.as_str());
 
+    // 速率限制检查（RPM + TPM）
+    if let Err(retry_after) = state.rate_limiter.check_rpm(&auth.key_id, auth.rate_limit_rpm).await {
+        return format_rate_limit_error(retry_after, "RPM", auth.rate_limit_rpm, error_format);
+    }
+    if let Err(retry_after) = state.rate_limiter.check_tpm(&auth.key_id, auth.rate_limit_tpm).await {
+        return format_rate_limit_error(retry_after, "TPM", auth.rate_limit_tpm, error_format);
+    }
+
     // 验证 API Key 是否有权访问目标模型
     if let Err(e) = validate_model_access(&state.pool, &auth.key_id, model).await {
         return format_proxy_error(e, error_format);
@@ -786,6 +798,44 @@ pub fn format_proxy_error(e: ProxyError, format: &ErrorFormat) -> axum::response
         }),
     };
     (status, axum::Json(body)).into_response()
+}
+
+/// 格式化 429 速率限制错误
+fn format_rate_limit_error(
+    retry_after: f64,
+    limit_type: &str,
+    limit: u64,
+    error_format: &ErrorFormat,
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+
+    let message = format!(
+        "速率限制 exceeded: {} limit={}，请 {:.0} 秒后重试",
+        limit_type, limit, retry_after
+    );
+    let body = match error_format {
+        ErrorFormat::OpenAi => serde_json::json!({
+            "error": {
+                "message": message,
+                "type": "rate_limit_error",
+                "code": "rate_limit_exceeded"
+            }
+        }),
+        ErrorFormat::Anthropic => serde_json::json!({
+            "type": "error",
+            "error": { "type": "rate_limit_error", "message": message }
+        }),
+    };
+
+    (
+        StatusCode::TOO_MANY_REQUESTS,
+        [
+            ("Retry-After", format!("{:.0}", retry_after)),
+            ("X-RateLimit-Limit", limit.to_string()),
+        ],
+        axum::Json(body),
+    )
+        .into_response()
 }
 
 /// 提取 (HTTP 状态码, 客户端可见消息) — 与客户端格式无关

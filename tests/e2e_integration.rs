@@ -35,6 +35,8 @@ async fn build_test_app() -> axum::Router {
             format: "compact".into(),
             file: false,
             file_path: "/tmp/galaxy_e2e.log".into(),
+            rotation: "daily".into(),
+            max_files: 30,
         },
         auth: AuthConfig {
             jwt_secret: "test-e2e-secret".into(),
@@ -182,6 +184,8 @@ async fn build_test_app_with_key(enabled: bool) -> axum::Router {
             format: "compact".into(),
             file: false,
             file_path: "/tmp/galaxy_e2e.log".into(),
+            rotation: "daily".into(),
+            max_files: 30,
         },
         auth: AuthConfig {
             jwt_secret: "test-e2e-secret".into(),
@@ -394,6 +398,8 @@ async fn build_test_app_with_admin() -> (axum::Router, String) {
             format: "compact".into(),
             file: false,
             file_path: "/tmp/galaxy_e2e.log".into(),
+            rotation: "daily".into(),
+            max_files: 30,
         },
         auth: AuthConfig {
             jwt_secret: "test-e2e-secret".into(),

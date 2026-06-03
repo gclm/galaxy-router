@@ -36,6 +36,8 @@ struct ApiKeyEntry {
     id: String,
     name: String,
     enabled: bool,
+    rate_limit_rpm: u64,
+    rate_limit_tpm: u64,
     cached_at: Instant,
 }
 
@@ -53,16 +55,16 @@ impl ApiKeyCache {
     }
 
     /// 获取缓存的 API Key（过期返回 None）
-    async fn get(&self, key: &str) -> Option<(String, String, bool)> {
+    async fn get(&self, key: &str) -> Option<(String, String, bool, u64, u64)> {
         let cache = self.keys.read().await;
         cache
             .get(key)
             .filter(|e| e.cached_at.elapsed().as_secs() < CACHE_TTL_SECS)
-            .map(|e| (e.id.clone(), e.name.clone(), e.enabled))
+            .map(|e| (e.id.clone(), e.name.clone(), e.enabled, e.rate_limit_rpm, e.rate_limit_tpm))
     }
 
     /// 设置 API Key 缓存
-    async fn set(&self, key: String, id: String, name: String, enabled: bool) {
+    async fn set(&self, key: String, id: String, name: String, enabled: bool, rate_limit_rpm: u64, rate_limit_tpm: u64) {
         let mut cache = self.keys.write().await;
         if cache.len() >= 1000 {
             cache.retain(|_, e| e.cached_at.elapsed().as_secs() < CACHE_TTL_SECS);
@@ -73,6 +75,8 @@ impl ApiKeyCache {
                 id,
                 name,
                 enabled,
+                rate_limit_rpm,
+                rate_limit_tpm,
                 cached_at: Instant::now(),
             },
         );
@@ -116,6 +120,8 @@ impl<S: Send + Sync> FromRequestParts<S> for AuthClaims {
 /// API Key 认证结果（代理 API 认证）
 pub struct ApiKeyAuth {
     pub key_id: String,
+    pub rate_limit_rpm: u64,
+    pub rate_limit_tpm: u64,
 }
 
 impl<S: Send + Sync> FromRequestParts<S> for ApiKeyAuth {
@@ -144,7 +150,7 @@ impl<S: Send + Sync> FromRequestParts<S> for ApiKeyAuth {
 
         // 1. 检查缓存
         if let Some(cache) = parts.extensions.get::<ApiKeyCache>()
-            && let Some((id, _name, enabled)) = cache.get(&api_key).await
+            && let Some((id, _name, enabled, rpm, tpm)) = cache.get(&api_key).await
         {
             if !enabled {
                 return Err((
@@ -154,7 +160,7 @@ impl<S: Send + Sync> FromRequestParts<S> for ApiKeyAuth {
                     })),
                 ));
             }
-            return Ok(ApiKeyAuth { key_id: id });
+            return Ok(ApiKeyAuth { key_id: id, rate_limit_rpm: rpm, rate_limit_tpm: tpm });
         }
 
         // 2. 缓存未命中，查询数据库
@@ -167,8 +173,8 @@ impl<S: Send + Sync> FromRequestParts<S> for ApiKeyAuth {
             )
         })?;
 
-        let result = sqlx::query_as::<_, (String, String, bool)>(
-            "SELECT id, name, enabled FROM api_keys WHERE api_key = ?",
+        let result = sqlx::query_as::<_, (String, String, bool, i32, i32)>(
+            "SELECT id, name, enabled, COALESCE(rate_limit_rpm, 0), COALESCE(rate_limit_tpm, 0) FROM api_keys WHERE api_key = ?",
         )
         .bind(&api_key)
         .fetch_optional(pool)
@@ -183,9 +189,11 @@ impl<S: Send + Sync> FromRequestParts<S> for ApiKeyAuth {
         })?;
 
         match result {
-            Some((id, name, enabled)) => {
+            Some((id, name, enabled, rpm, tpm)) => {
+                let rpm = rpm as u64;
+                let tpm = tpm as u64;
                 if let Some(cache) = parts.extensions.get::<ApiKeyCache>() {
-                    cache.set(api_key, id.clone(), name.clone(), enabled).await;
+                    cache.set(api_key, id.clone(), name.clone(), enabled, rpm, tpm).await;
                 }
                 if !enabled {
                     return Err((
@@ -195,7 +203,7 @@ impl<S: Send + Sync> FromRequestParts<S> for ApiKeyAuth {
                         })),
                     ));
                 }
-                Ok(ApiKeyAuth { key_id: id })
+                Ok(ApiKeyAuth { key_id: id, rate_limit_rpm: rpm, rate_limit_tpm: tpm })
             }
             None => Err((
                 StatusCode::UNAUTHORIZED,

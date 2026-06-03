@@ -92,8 +92,10 @@ async fn main() -> Result<()> {
 
     // 启动后台调度器
     let lb_state = proxy::state::LoadBalancerState::new();
+    let rate_limiter = proxy::ratelimit::RateLimiter::new();
     let scheduler = Arc::new(proxy::scheduler::Scheduler::new(
         lb_state,
+        rate_limiter.clone(),
         database.pool().clone(),
     ));
     scheduler.start();
@@ -301,6 +303,8 @@ mod tests {
                 format: "compact".into(),
                 file: false,
                 file_path: "/tmp/galaxy_test_main.log".into(),
+                rotation: "daily".into(),
+                max_files: 30,
             },
             auth: config::AuthConfig {
                 jwt_secret: String::new(),

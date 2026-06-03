@@ -17,6 +17,8 @@ pub struct ApiKey {
     pub api_key: String,
     pub enabled: bool,
     pub supported_models: Option<String>,
+    pub rate_limit_rpm: i32,
+    pub rate_limit_tpm: i32,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -26,6 +28,8 @@ pub struct ApiKey {
 pub struct CreateApiKeyRequest {
     pub name: String,
     pub supported_models: Option<String>,
+    pub rate_limit_rpm: Option<i32>,
+    pub rate_limit_tpm: Option<i32>,
 }
 
 /// 更新 API Key 请求
@@ -34,6 +38,8 @@ pub struct UpdateApiKeyRequest {
     pub name: Option<String>,
     pub enabled: Option<bool>,
     pub supported_models: Option<String>,
+    pub rate_limit_rpm: Option<i32>,
+    pub rate_limit_tpm: Option<i32>,
 }
 
 /// API Key 状态
@@ -61,8 +67,8 @@ pub fn parse_supported_models(models_str: &str) -> Vec<String> {
 pub async fn list(
     State(state): State<ApiKeyState>,
 ) -> Result<Json<ApiResponse<Vec<ApiKey>>>, (StatusCode, Json<ApiError>)> {
-    let keys = sqlx::query_as::<_, (String, String, String, bool, String, String, String)>(
-        "SELECT id, name, api_key, enabled, supported_models, created_at, updated_at FROM api_keys ORDER BY created_at DESC"
+    let keys = sqlx::query_as::<_, (String, String, String, bool, String, i32, i32, String, String)>(
+        "SELECT id, name, api_key, enabled, supported_models, COALESCE(rate_limit_rpm, 0), COALESCE(rate_limit_tpm, 0), created_at, updated_at FROM api_keys ORDER BY created_at DESC"
     )
     .fetch_all(&state.pool)
     .await
@@ -71,12 +77,14 @@ pub async fn list(
     let result: Vec<ApiKey> = keys
         .into_iter()
         .map(
-            |(id, name, api_key, enabled, supported_models, created_at, updated_at)| ApiKey {
+            |(id, name, api_key, enabled, supported_models, rate_limit_rpm, rate_limit_tpm, created_at, updated_at)| ApiKey {
                 id,
                 name,
                 api_key,
                 enabled,
                 supported_models: empty_to_none(supported_models),
+                rate_limit_rpm,
+                rate_limit_tpm,
                 created_at,
                 updated_at,
             },
@@ -99,12 +107,14 @@ pub async fn create(
     let id = generate_id();
     let api_key = format!("gp-{}", generate_id());
     let supported_models = req.supported_models.unwrap_or_default();
+    let rate_limit_rpm = req.rate_limit_rpm.unwrap_or(0);
+    let rate_limit_tpm = req.rate_limit_tpm.unwrap_or(0);
 
     // 插入 API Key
     sqlx::query(
         r#"
-        INSERT INTO api_keys (id, name, api_key, enabled, supported_models)
-        VALUES (?, ?, ?, ?, ?)
+        INSERT INTO api_keys (id, name, api_key, enabled, supported_models, rate_limit_rpm, rate_limit_tpm)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
         "#,
     )
     .bind(&id)
@@ -112,6 +122,8 @@ pub async fn create(
     .bind(&api_key)
     .bind(true)
     .bind(&supported_models)
+    .bind(rate_limit_rpm)
+    .bind(rate_limit_tpm)
     .execute(&state.pool)
     .await
     .map_err(|e| ApiError::internal_error(e.to_string()))?;
@@ -126,6 +138,8 @@ pub async fn create(
         } else {
             Some(supported_models)
         },
+        rate_limit_rpm,
+        rate_limit_tpm,
         created_at: chrono::Utc::now().to_rfc3339(),
         updated_at: chrono::Utc::now().to_rfc3339(),
     };
@@ -138,15 +152,15 @@ pub async fn get(
     State(state): State<ApiKeyState>,
     Path(id): Path<String>,
 ) -> Result<Json<ApiResponse<ApiKey>>, (StatusCode, Json<ApiError>)> {
-    let result = sqlx::query_as::<_, (String, String, String, bool, String, String, String)>(
-        "SELECT id, name, api_key, enabled, supported_models, created_at, updated_at FROM api_keys WHERE id = ?",
+    let result = sqlx::query_as::<_, (String, String, String, bool, String, i32, i32, String, String)>(
+        "SELECT id, name, api_key, enabled, supported_models, COALESCE(rate_limit_rpm, 0), COALESCE(rate_limit_tpm, 0), created_at, updated_at FROM api_keys WHERE id = ?",
     )
     .bind(&id)
     .fetch_optional(&state.pool)
     .await
     .map_err(|e| ApiError::internal_error(e.to_string()))?;
 
-    let (id, name, api_key, enabled, supported_models, created_at, updated_at) =
+    let (id, name, api_key, enabled, supported_models, rate_limit_rpm, rate_limit_tpm, created_at, updated_at) =
         result.ok_or_else(|| ApiError::not_found("API Key 不存在"))?;
 
     Ok(Json(ApiResponse::success(ApiKey {
@@ -159,6 +173,8 @@ pub async fn get(
         } else {
             Some(supported_models)
         },
+        rate_limit_rpm,
+        rate_limit_tpm,
         created_at,
         updated_at,
     })))
@@ -197,6 +213,16 @@ pub async fn update(
     if let Some(ref supported_models) = req.supported_models {
         separated.push("supported_models = ");
         separated.push_bind_unseparated(supported_models);
+        has_update = true;
+    }
+    if let Some(rpm) = req.rate_limit_rpm {
+        separated.push("rate_limit_rpm = ");
+        separated.push_bind_unseparated(rpm);
+        has_update = true;
+    }
+    if let Some(tpm) = req.rate_limit_tpm {
+        separated.push("rate_limit_tpm = ");
+        separated.push_bind_unseparated(tpm);
         has_update = true;
     }
 

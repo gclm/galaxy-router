@@ -502,6 +502,7 @@ async fn test_channel_rejects_crlf_in_api_key() {
         enabled: true,
         created_at: "2026-01-01T00:00:00Z".into(),
         updated_at: "2026-01-01T00:00:00Z".into(),
+        timeout_secs: 300,
     };
     let serialized = serde_json::to_string(&ch).unwrap();
     let deserialized: Channel = serde_json::from_str(&serialized).unwrap();

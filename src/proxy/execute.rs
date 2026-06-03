@@ -179,6 +179,15 @@ pub(super) async fn save_request_record(
     };
 
     let _ = state.stats_recorder.record_request(record).await;
+
+    // 速率限制：更新 TPM 计数
+    if let Some(key_id) = api_key_id {
+        let total_input: i32 = attempts.iter().map(|a| a.input_tokens).sum();
+        let total_output: i32 = attempts.iter().map(|a| a.output_tokens).sum();
+        if total_input > 0 || total_output > 0 {
+            state.rate_limiter.record_tokens(key_id, total_input as u64, total_output as u64).await;
+        }
+    }
 }
 
 /// 执行单次代理请求
@@ -638,6 +647,7 @@ pub(super) async fn execute_proxy_stream(
         .map(|s| s.to_string());
 
     let stats_recorder = state.stats_recorder.clone();
+    let rate_limiter = state.rate_limiter.clone();
     let attempts_snapshot: Vec<crate::stats::recorder::ChannelAttempt> = attempts
         .iter()
         .map(|a| crate::stats::recorder::ChannelAttempt {
@@ -930,7 +940,7 @@ pub(super) async fn execute_proxy_stream(
 
     // 后台任务确保统计写入（即使流被 drop 也能通过 rx 检测到）
     tokio::spawn(async move {
-        let result = match stats_rx.await {
+        let result: Result<(), sqlx::Error> = match stats_rx.await {
             Ok((
                 status_code,
                 input_tokens,
@@ -956,6 +966,9 @@ pub(super) async fn execute_proxy_stream(
                     error: error_message.clone(),
                     upstream_key_hint: Some(sc_upstream_key_hint.clone()),
                 });
+
+                // 提前提取 key_id 用于速率限制记录（record 会 move sc_api_key_id）
+                let rate_limit_key = sc_api_key_id.clone();
 
                 let record = crate::stats::recorder::RequestRecord {
                     request_id: Some(request_id_clone),
@@ -986,7 +999,16 @@ pub(super) async fn execute_proxy_stream(
                     attempts: channel_attempts,
                     user_agent: sc_user_agent,
                 };
-                stats_recorder.record_request(record).await
+                match stats_recorder.record_request(record).await {
+                    Ok(()) => {
+                        // 速率限制：更新 TPM 计数
+                        if let Some(ref key_id) = rate_limit_key && (input_tokens > 0 || output_tokens > 0) {
+                            rate_limiter.record_tokens(key_id, input_tokens as u64, output_tokens as u64).await;
+                        }
+                    }
+                    Err(e) => tracing::warn!("Failed to save stream stats: {}", e),
+                }
+                Ok(())
             }
             Err(_) => {
                 tracing::warn!("Stream dropped before completion, stats may be partial");
