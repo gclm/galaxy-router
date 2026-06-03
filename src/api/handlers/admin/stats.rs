@@ -160,3 +160,18 @@ pub async fn log_models(
 
     Ok(Json(ApiResponse::success(serde_json::json!(models))))
 }
+
+/// 获取按 API Key 聚合统计
+pub async fn api_keys(
+    State(state): State<StatsApiState>,
+    Query(query): Query<StatsQuery>,
+) -> Result<Json<ApiResponse<serde_json::Value>>, (StatusCode, Json<ApiError>)> {
+    let days = query.days.unwrap_or(30);
+    let stats = state
+        .stats
+        .get_api_key_stats(days)
+        .await
+        .map_err(|e: sqlx::Error| ApiError::internal_error(e.to_string()))?;
+
+    Ok(Json(ApiResponse::success(serde_json::json!(stats))))
+}

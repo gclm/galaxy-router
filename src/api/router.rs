@@ -153,6 +153,7 @@ pub async fn create_router(
                 .route("/models", get(stats::models))
                 .route("/channels", get(stats::channels))
                 .route("/daily", get(stats::daily))
+                .route("/api-keys", get(stats::api_keys))
                 .route("/logs", get(stats::logs))
                 .route("/logs/models", get(stats::log_models))
                 .route("/logs/{id}", get(stats::log_detail))

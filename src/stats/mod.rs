@@ -102,6 +102,20 @@ pub struct DailyStats {
     pub total_cost: f64,
 }
 
+/// 按 API Key 统计
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ApiKeyStats {
+    pub api_key_id: String,
+    pub api_key_name: Option<String>,
+    pub request_count: i32,
+    pub success_count: i32,
+    pub failure_count: i32,
+    pub input_tokens: i32,
+    pub output_tokens: i32,
+    pub total_cost: f64,
+    pub avg_latency_ms: f64,
+}
+
 /// 请求日志筛选条件
 pub struct LogsFilter {
     pub offset: u32,
@@ -612,6 +626,52 @@ impl StatsState {
         .await?;
 
         Ok(models)
+    }
+
+    /// 按 API Key 聚合统计
+    pub async fn get_api_key_stats(&self, days: i32) -> Result<Vec<ApiKeyStats>, sqlx::Error> {
+        let cutoff = self.now_local() - chrono::Duration::days(days as i64);
+        let cutoff_str = cutoff.format("%Y-%m-%d %H:%M:%S").to_string();
+
+        let rows = sqlx::query_as::<_, (String, Option<String>, i32, i32, i32, i32, i32, f64, f64)>(
+            r#"
+            SELECT
+                ul.api_key_id,
+                ak.name AS api_key_name,
+                COUNT(*) AS request_count,
+                SUM(CASE WHEN ul.status_code >= 200 AND ul.status_code < 400 THEN 1 ELSE 0 END) AS success_count,
+                SUM(CASE WHEN ul.status_code IS NULL OR ul.status_code < 200 OR ul.status_code >= 400 THEN 1 ELSE 0 END) AS failure_count,
+                COALESCE(SUM(ul.input_tokens), 0) AS input_tokens,
+                COALESCE(SUM(ul.output_tokens), 0) AS output_tokens,
+                COALESCE(SUM(ul.cost), 0.0) AS total_cost,
+                COALESCE(AVG(CAST(ul.latency_ms AS REAL)), 0.0) AS avg_latency_ms
+            FROM usage_logs ul
+            LEFT JOIN api_keys ak ON ul.api_key_id = ak.id
+            WHERE ul.api_key_id IS NOT NULL AND ul.created_at >= ?
+            GROUP BY ul.api_key_id
+            ORDER BY total_cost DESC
+            "#,
+        )
+        .bind(&cutoff_str)
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(rows
+            .into_iter()
+            .map(|(api_key_id, api_key_name, request_count, success_count, failure_count, input_tokens, output_tokens, total_cost, avg_latency_ms)| {
+                ApiKeyStats {
+                    api_key_id,
+                    api_key_name,
+                    request_count,
+                    success_count,
+                    failure_count,
+                    input_tokens,
+                    output_tokens,
+                    total_cost,
+                    avg_latency_ms,
+                }
+            })
+            .collect())
     }
 
     /// 将小时级结果补齐到完整 24 小时（00:00 ~ 23:00）
