@@ -619,20 +619,7 @@ pub(super) async fn execute_proxy_stream(
     let req_text_for_estimation = extract_request_text(body);
     let request_id_clone = request_id;
 
-    let (stats_tx, stats_rx) = tokio::sync::oneshot::channel::<(
-        i32,            // status_code
-        i32,            // input_tokens
-        i32,            // output_tokens
-        i32,            // cache_read
-        i32,            // cache_creation
-        Option<f64>,    // cost
-        i32,            // latency_ms
-        Option<String>, // error_message
-        Option<String>, // response_content
-        Option<i32>,    // ttft_ms
-    )>();
-
-    // 提前 clone 给 spawn 任务使用（async_stream 会 move 原值）
+    // 提前 clone 给 spawn 任务使用
     let sc_channel_id = channel_id_clone.clone();
     let sc_model = model_clone.clone();
     let sc_target_model = target_model_clone.clone();
@@ -664,8 +651,18 @@ pub(super) async fn execute_proxy_stream(
         })
         .collect();
 
-    let response_stream = async_stream::stream! {
-        // _permit 随 stream 生命周期存在，stream drop 时释放 semaphore 许可
+    // === SSE 流式背压：使用有界 mpsc channel 替代 async_stream ===
+    const STREAM_BUFFER_SIZE: usize = 16;
+    let (stream_tx, stream_rx) = tokio::sync::mpsc::channel::<Result<Bytes, std::convert::Infallible>>(STREAM_BUFFER_SIZE);
+
+    // 辅助：发送数据，客户端断开时返回 false
+    async fn stream_send(tx: &tokio::sync::mpsc::Sender<Result<Bytes, std::convert::Infallible>>, data: Bytes) -> bool {
+        tx.send(Ok(data)).await.is_ok()
+    }
+
+    // 流处理 + 统计记录全在一个 spawned task 里
+    tokio::spawn(async move {
+        // _permit 随任务生命周期存在，释放 semaphore 许可
         let _permit = _permit;
         let mut stream = std::pin::pin!(upstream_stream);
         let mut last_usage: Option<serde_json::Value> = None;
@@ -708,10 +705,12 @@ pub(super) async fn execute_proxy_stream(
                                 }
                             if is_error_event {
                                 if let Some(error) = stream_error.as_deref() {
-                                    yield Ok::<_, std::convert::Infallible>(Bytes::from(format_stream_error_event(
+                                    if !stream_send(&stream_tx, Bytes::from(format_stream_error_event(
                                         error,
                                         &client_endpoint_clone,
-                                    )));
+                                    ))).await {
+                                        break;
+                                    }
                                 }
                                 continue;
                             }
@@ -743,7 +742,9 @@ pub(super) async fn execute_proxy_stream(
                                     }
                                     match inbound.transform_stream_event(&llm_stream) {
                                         Ok(converted) => {
-                                            yield Ok::<_, std::convert::Infallible>(Bytes::from(converted));
+                                            if !stream_send(&stream_tx, Bytes::from(converted)).await {
+                                                break;
+                                            }
                                         }
                                         Err(e) => {
                                             tracing::error!("Stream inbound conversion error: {}", e);
@@ -779,13 +780,13 @@ pub(super) async fn execute_proxy_stream(
                 if !is_error_event {
                     if let Ok(Some(llm_stream)) = outbound.transform_stream_event(&buffer)
                         && let Ok(converted) = inbound.transform_stream_event(&llm_stream) {
-                            yield Ok(Bytes::from(converted));
+                            stream_send(&stream_tx, Bytes::from(converted)).await;
                         }
                 } else if let Some(error) = stream_error.as_deref() {
-                    yield Ok(Bytes::from(format_stream_error_event(
+                    stream_send(&stream_tx, Bytes::from(format_stream_error_event(
                         error,
                         &client_endpoint_clone,
-                    )));
+                    ))).await;
                 }
             }
         } else {
@@ -818,7 +819,9 @@ pub(super) async fn execute_proxy_stream(
                             ttft_ms = Some(start_time.elapsed().as_millis() as i32);
                             first_token_seen = true;
                         }
-                        yield Ok::<_, std::convert::Infallible>(bytes);
+                        if !stream_send(&stream_tx, bytes).await {
+                            break;
+                        }
                     }
                     Err(e) => {
                         tracing::error!("Stream error: {}", e);
@@ -841,7 +844,9 @@ pub(super) async fn execute_proxy_stream(
                 }
         }
 
-        // 流结束后发送统计到 oneshot
+        // === 流结束：统计记录（即使客户端断开也会执行） ===
+        drop(stream_tx); // 关闭 channel，通知 ReceiverStream 结束
+
         let latency_ms = start_time.elapsed().as_millis() as i64;
         let (mut input_tokens, mut output_tokens, cache_read, cache_creation) = match &upstream_endpoint_clone {
             EndpointType::Anthropic => {
@@ -872,7 +877,7 @@ pub(super) async fn execute_proxy_stream(
             }
         };
 
-        // 兜底估算：上游不返回 usage 时从内容长度推算
+        // 兜底估算
         if input_tokens == 0 && output_tokens == 0 {
             input_tokens = estimate_tokens(&req_text_for_estimation);
             output_tokens = estimate_tokens(&collected_text);
@@ -892,11 +897,7 @@ pub(super) async fn execute_proxy_stream(
 
         let (status_code, error_message, response_content) = if let Some(error) = stream_error {
             state_clone.lb_state.record_failure(&channel_id_clone, false).await;
-            (
-                502i32,
-                Some(sanitize_upstream_error(&error)),
-                Some(error),
-            )
+            (502i32, Some(sanitize_upstream_error(&error)), Some(error))
         } else {
             state_clone.lb_state.record_success(&channel_id_clone, latency_ms as f64).await;
             let resp = if collected_text.is_empty() && collected_reasoning.is_empty()
@@ -924,100 +925,57 @@ pub(super) async fn execute_proxy_stream(
             (200i32, None, resp)
         };
 
-        let _ = stats_tx.send((
-            status_code,
+        // 直接写入统计（不再需要 stats_tx/stats_rx）
+        let mut channel_attempts = attempts_snapshot;
+        channel_attempts.push(crate::stats::recorder::ChannelAttempt {
+            channel_id: sc_channel_id.clone(),
+            channel_name: None,
+            status: if (200..400).contains(&status_code) { "success".into() } else { "failed".into() },
+            duration_ms: latency_ms as i64,
+            error: error_message.clone(),
+            upstream_key_hint: Some(sc_upstream_key_hint.clone()),
+        });
+
+        let rate_limit_key = sc_api_key_id.clone();
+        let record = crate::stats::recorder::RequestRecord {
+            request_id: Some(request_id_clone),
+            api_key_id: sc_api_key_id,
+            channel_id: Some(sc_channel_id),
+            group_id,
+            requested_model: sc_model,
+            actual_model: Some(sc_target_model),
             input_tokens,
             output_tokens,
-            cache_read,
-            cache_creation,
+            cache_read_tokens: cache_read,
+            cache_creation_tokens: cache_creation,
             cost,
-            latency_ms as i32,
-            error_message,
-            response_content,
+            latency_ms: Some(latency_ms as i32),
             ttft_ms,
-        ));
-    };
-
-    // 后台任务确保统计写入（即使流被 drop 也能通过 rx 检测到）
-    tokio::spawn(async move {
-        let result: Result<(), sqlx::Error> = match stats_rx.await {
-            Ok((
-                status_code,
-                input_tokens,
-                output_tokens,
-                cache_read,
-                cache_creation,
-                cost,
-                latency_ms,
-                error_message,
-                response_content,
-                ttft_ms,
-            )) => {
-                let mut channel_attempts = attempts_snapshot;
-                channel_attempts.push(crate::stats::recorder::ChannelAttempt {
-                    channel_id: sc_channel_id.clone(),
-                    channel_name: None,
-                    status: if (200..400).contains(&status_code) {
-                        "success".to_string()
-                    } else {
-                        "failed".to_string()
-                    },
-                    duration_ms: latency_ms as i64,
-                    error: error_message.clone(),
-                    upstream_key_hint: Some(sc_upstream_key_hint.clone()),
-                });
-
-                // 提前提取 key_id 用于速率限制记录（record 会 move sc_api_key_id）
-                let rate_limit_key = sc_api_key_id.clone();
-
-                let record = crate::stats::recorder::RequestRecord {
-                    request_id: Some(request_id_clone),
-                    api_key_id: sc_api_key_id,
-                    channel_id: Some(sc_channel_id),
-                    group_id,
-                    requested_model: sc_model,
-                    actual_model: Some(sc_target_model),
-                    input_tokens,
-                    output_tokens,
-                    cache_read_tokens: cache_read,
-                    cache_creation_tokens: cache_creation,
-                    cost,
-                    latency_ms: Some(latency_ms),
-                    ttft_ms,
-                    status_code: Some(status_code),
-                    error_message,
-                    endpoint_type: Some(sc_client_endpoint.as_str().to_string()),
-                    request_type: if sc_needs_conversion {
-                        "conversion".to_string()
-                    } else {
-                        "passthrough".to_string()
-                    },
-                    request_content: sc_request_content,
-                    response_content,
-                    is_stream: true,
-                    upstream_key_hint: Some(sc_upstream_key_hint),
-                    attempts: channel_attempts,
-                    user_agent: sc_user_agent,
-                };
-                match stats_recorder.record_request(record).await {
-                    Ok(()) => {
-                        // 速率限制：更新 TPM 计数
-                        if let Some(ref key_id) = rate_limit_key && (input_tokens > 0 || output_tokens > 0) {
-                            rate_limiter.record_tokens(key_id, input_tokens as u64, output_tokens as u64).await;
-                        }
-                    }
-                    Err(e) => tracing::warn!("Failed to save stream stats: {}", e),
-                }
-                Ok(())
-            }
-            Err(_) => {
-                tracing::warn!("Stream dropped before completion, stats may be partial");
-                Ok(())
-            }
+            status_code: Some(status_code),
+            error_message,
+            endpoint_type: Some(sc_client_endpoint.as_str().to_string()),
+            request_type: if sc_needs_conversion { "conversion".into() } else { "passthrough".into() },
+            request_content: sc_request_content,
+            response_content,
+            is_stream: true,
+            upstream_key_hint: Some(sc_upstream_key_hint),
+            attempts: channel_attempts,
+            user_agent: sc_user_agent,
         };
-        if let Err(e) = result {
-            tracing::warn!("Failed to save stream stats: {}", e);
+
+        match stats_recorder.record_request(record).await {
+            Ok(()) => {
+                if let Some(ref key_id) = rate_limit_key && (input_tokens > 0 || output_tokens > 0) {
+                    rate_limiter.record_tokens(key_id, input_tokens as u64, output_tokens as u64).await;
+                }
+            }
+            Err(e) => tracing::warn!("Failed to save stream stats: {}", e),
         }
+    });
+
+    // 将 mpsc Receiver 转换为 Stream 返回给 axum
+    let response_stream = futures::stream::unfold(stream_rx, |mut rx| async move {
+        rx.recv().await.map(|item| (item, rx))
     });
 
     Ok((
