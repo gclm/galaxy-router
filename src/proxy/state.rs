@@ -13,6 +13,7 @@ pub struct ChannelStatus {
     pub failure_count: u64,
     pub last_success: Option<DateTime<Utc>>,
     pub last_failure: Option<DateTime<Utc>>,
+    pub last_health_check: Option<DateTime<Utc>>,
     pub avg_latency_ms: f64,
     pub is_blacklisted: bool,
     pub blacklist_until: Option<DateTime<Utc>>,
@@ -47,6 +48,14 @@ impl ChannelStatus {
             self.avg_latency_ms = latency_ms;
         } else {
             self.avg_latency_ms = 0.8 * self.avg_latency_ms + 0.2 * latency_ms;
+        }
+    }
+
+    /// 记录健康探测结果
+    pub fn record_health_check(&mut self, success: bool) {
+        self.last_health_check = Some(Utc::now());
+        if !success {
+            self.record_failure();
         }
     }
 
@@ -267,6 +276,7 @@ mod tests {
             failure_count: 0,
             last_success: None,
             last_failure: None,
+            last_health_check: None,
             avg_latency_ms: 0.0,
             is_blacklisted: false,
             blacklist_until: None,
