@@ -48,8 +48,8 @@
 ### 其他
 
 - ID 规范: 所有实体 ID 使用 UUID v7，TEXT 类型
-- 数据库迁移: 版本号递增，不可回滚，追加到 `get_migrations()` 函数
+- 数据库迁移: SQL 文件放在 `src/db/migrations/`，文件名 `{version}_{name}.sql`，version > 0；不可回滚、不可修改已发布版本（由 `sqlx::migrate!()` 编译期管理）
 - 代理 API (`/v1/*`) 保持原生协议格式，不用统一响应包装
 - 管理 API (`/api/v1/admin/*`) 使用统一 JSON 响应格式
-- 渠道 `models` 字段结构: `{"available_models": [], "model_maps": {}}`
+- 渠道 `models` 字段结构: JSON 字符串数组，例 `["gpt-4o", "claude-3-5-sonnet"]`（`parse_models` 解析为 `Vec<String>`）
 - 获取上游模型: `POST /api/v1/admin/fetch-models`（支持 OpenAI/Anthropic/Gemini）

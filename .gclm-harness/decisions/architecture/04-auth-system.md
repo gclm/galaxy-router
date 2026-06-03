@@ -34,21 +34,27 @@
 
 ## 登录流程
 
-**路由**: `/admin/login`
+**前端页面**: `/admin/login`（SPA 路由）
 
 **认证方式**: JWT Token
 
 ```
-POST /admin/api/auth/login
+POST /api/v1/admin/auth/login
+Content-Type: application/json
+
 {
   "username": "admin",
   "password": "xxx"
 }
 
-Response:
+Response（统一管理 API 格式）:
 {
-  "token": "eyJ...",
-  "expires_in": 86400
+  "code": 0,
+  "message": "success",
+  "data": {
+    "token": "eyJ...",
+    "expires_in": 86400
+  }
 }
 ```
 
@@ -71,7 +77,7 @@ Response:
 
 ```sql
 CREATE TABLE users (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    id TEXT PRIMARY KEY,               -- UUID v7
     username TEXT NOT NULL UNIQUE,
     password_hash TEXT NOT NULL,       -- argon2id 哈希
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -98,11 +104,12 @@ token_expiry_hours = 24
 
 | 端点 | 方法 | 说明 | 认证 |
 |------|------|------|------|
-| `/api/v1/admin/auth/setup` | POST | 初始化管理员 | 无（仅首次） |
+| `/api/v1/init` | POST | 初始化管理员（`InitRequest{username,password,site_title?}`） | 无（仅首次） |
 | `/api/v1/admin/auth/login` | POST | 登录 | 无 |
-| `/api/v1/admin/auth/logout` | POST | 登出 | JWT |
 | `/api/v1/admin/auth/me` | GET | 当前用户信息 | JWT |
 | `/api/v1/admin/auth/password` | PUT | 修改密码 | JWT |
+
+> **注**：当前实现无 logout 端点（JWT 自身无状态，前端清除 localStorage 即可）。未来若要主动失效 token 需引入 token 黑名单，建议按需追加。
 
 ## 中间件
 
@@ -147,26 +154,28 @@ function ProtectedRoute({ children }) {
 | 密码存储 | argon2id 哈希（Rust: `argon2` crate） |
 | JWT 密钥 | 首次运行时随机生成，存储在 TOML 配置文件 |
 | Token 过期 | 默认 24 小时，可配置 |
-| 暴力破解 | 登录失败延迟（1s, 2s, 4s...），可选 IP 限流 |
+| 暴力破解 | **未实现**（单用户模式，文档早期规划） |
 | HTTPS | 生产环境建议反向代理 + TLS |
 
 ## 配置扩展
 
-TOML 配置中增加认证相关配置：
+当前实现中 `AppConfig.auth` 仅支持：
 
 ```toml
 [auth]
+jwt_secret = ""                # 首次运行自动生成
 token_expiry_hours = 24        # JWT Token 过期时间
-max_login_attempts = 5         # 最大登录失败次数
-lockout_minutes = 15           # 锁定时间
 ```
 
-## CLI 初始化命令（可选）
+文档早期规划中的 `max_login_attempts` / `lockout_minutes` 暂未落地（单用户模式，登录保护优先级低）。
 
-```bash
-# 命令行初始化（不用 Web）
-galaxy-router init --username admin --password xxx
+## CLI 命令（未实现）
 
-# 重置密码
-galaxy-router reset-password --username admin --password new-xxx
-```
+文档早期版本规划的 `galaxy-router init` / `reset-password` 子命令当前**未实现**。当前 CLI 参数仅支持：
+
+- `--config <path>`：配置文件路径（默认 `config.toml`）
+- `--port <u16>`：覆盖 `[server] port`
+- `--host <ip>`：覆盖 `[server] host`
+- `--log-level <level>`：覆盖 `[logging] level`
+
+如需 CLI 初始化/重置密码，请走 Web 端 `/api/v1/init` 或在数据库上手动更新 `users.password_hash`。

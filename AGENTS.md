@@ -1,103 +1,103 @@
-# Galaxy Router 开发规范
+# AGENTS.md
 
-## 项目概述
+> AI 协议互转代理网关 · 内部协作入口
+>
+> 这是一张地图，不是说明书。详细规范在各专项文档中。
 
-AI 协议互转代理网关，支持 OpenAI Chat Completions、OpenAI Responses、Anthropic Messages 三种协议互转。
+---
 
-## 技术栈
+## 约束（不能违反）
 
-- 语言: Rust 2024
-- Web 框架: axum 0.8
-- 数据库: SQLite (sqlx 0.9)
-- 异步运行时: tokio 1.x
+这些是硬性规则，违反会导致架构漂移或系统不可用：
 
-## API 设计规范
+| # | 约束 | 原因 |
+|---|------|------|
+| 1 | 所有实体 ID 使用 UUID v7，TEXT 类型 | 全局唯一 + 时序可排序 |
+| 2 | 管理 API (`/api/v1/admin/*`) 使用统一 JSON 格式：`{code, message, data}` | 与代理 API 分离，客户端 SDK 不受影响 |
+| 3 | 代理 API (`/v1/*`) **保持原生协议格式**，不用统一响应包装 | 透传上游响应，确保 SDK 兼容 |
+| 4 | 渠道 `models` 字段固定为 JSON 字符串数组：`["gpt-4o", "claude-3-5-sonnet"]` | 多处代码依赖此结构（`parse_models` / `Channel.models: Vec<String>`） |
+| 5 | 数据库迁移：SQL 文件放在 `src/db/migrations/`，文件名 `{version}_{name}.sql` 且 version > 0；不可回滚、不可修改已发布版本 | 由 `sqlx::migrate!()` 在编译期管理，版本号即文件名 |
+| 6 | 业务配置（channels / groups / api_keys / model_info）变更后，必须同步失效对应 `ProxyCache`（`invalidate_channel` / `invalidate_all_channels`） | 缓存与数据库一致性 |
 
-### 响应格式分层
+**踩坑警告**：
 
-**管理 API** (`/api/v1/admin/*`): 统一 JSON 格式
+- 不要把错误处理统一到 `error.rs`（不存在），错误类型在各模块内定义
+- `protocol/inbound/` 和 `protocol/outbound/` 是**空目录**待重构，不要往里放文件
+- `scheduler/` 已合并到 `proxy/scheduler.rs`，不要新建独立目录
 
-```json
-{ "code": 0, "message": "success", "data": { ... } }   // 成功
-{ "code": 0, "message": "success", "data": null }       // 成功（无数据）
-{ "code": 400, "message": "错误描述" }                   // 错误
+---
+
+## 文档地图
+
+按需深入，不要一次性读全部。
+
+```
+.gclm-harness/
+├── decisions/           # 决策层 — "为什么这样设计"
+│   ├── architecture/    # 架构决策（模块划分、配置、认证）
+│   ├── requirements/    # 需求愿景（做什么 / 不做什么）
+│   ├── attention.md     # 项目注意事项
+│   └── conventions.md   # 文档体系规范
+│
+├── solutions/           # 方案层 — "怎么实现"
+│   ├── features/        # 功能方案（含实施清单）
+│   ├── optimizations/   # 优化方案
+│   └── roadmap.md       # 开发计划
+│
+├── operations/          # 运维层 — "出了问题怎么办"
+│   ├── sop/             # 排查手册
+│   └── issues/          # 问题复盘
+│
+└── reference/           # 参考层 — 静态资料
+    ├── analyses/        # 竞品分析
+    └── conventions/     # 格式规范
 ```
 
-**代理 API** (`/v1/*`): 保持原生协议格式，直接透传上游响应，确保客户端 SDK 兼容。
+| 我要... | 去哪里 |
+|---------|--------|
+| 了解架构为什么这样设计 | `decisions/architecture/` |
+| 知道项目边界和不做的事 | `decisions/requirements/` |
+| 实现一个新功能 | `solutions/features/` 找相似方案 |
+| 排查问题 | `operations/sop/` |
+| 查格式规范（备份、ID 等） | `reference/conventions/` |
+| 写新文档 | `decisions/conventions.md` |
 
-### ID 规范
+---
 
-- UUID v7，TEXT 类型，格式: `xxxxxxxx-xxxx-7xxx-xxxx-xxxxxxxxxxxx`
+## 快速参考
 
-### 错误处理
+| 项 | 值 |
+|----|----|
+| 语言 | Rust 2024 |
+| Web 框架 | axum 0.8 |
+| 数据库 | SQLite (sqlx 0.9) |
+| 异步运行时 | tokio 1.x |
+| 前端 | React + pnpm |
+| 测试数据库 | `/tmp/galaxy_test_*` |
 
-```rust
-ApiError::bad_request("参数错误")      // 400
-ApiError::unauthorized("未授权")       // 401
-ApiError::forbidden("禁止访问")        // 403
-ApiError::not_found("资源不存在")      // 404
-ApiError::conflict("资源冲突")         // 409
-ApiError::internal_error("服务器错误") // 500
-```
-
-### 认证架构
-
-| 层级 | 机制 | 保护范围 |
-|------|------|----------|
-| `require_admin_auth` 中间件 | JWT Bearer Token | `/api/v1/admin/*`（排除 init、login） |
-| `ApiKeyAuth` 提取器 | API Key（Bearer 或 x-api-key） | `/v1/*` 代理端点 |
-
-JWT 过期时间从 `config.toml` 的 `auth.token_expiry_hours` 读取，默认 24 小时。
-
-## 数据库规范
-
-- 所有表 ID 为 TEXT (UUID v7)，时间字段 TIMESTAMP 默认 CURRENT_TIMESTAMP
-- 迁移使用内置系统，版本号递增不可回滚，追加到 `get_migrations()`
-
-## 代码规范
-
-### 模块职责
-
-| 模块 | 职责 |
+| 命令 | 作用 |
 |------|------|
-| `api/` | HTTP 路由、请求处理 |
-| `api/handlers/admin/` | 管理 API 处理器 |
-| `api/handlers/proxy/` | 代理 API 处理器（统一走 `handle_proxy_request`） |
-| `auth/` | 密码哈希、JWT |
-| `proxy/` | 代理核心（缓存、模型索引、渠道选择、协议转换） |
-| `stats/` | 统计聚合（用量/成本）+ 模型定价 + 请求日志 |
+| `make build` | 构建项目（含前端） |
+| `make run` | 启动服务 |
+| `make test` | 运行测试 |
+| `make check` | 代码检查 |
+| `make watch` | 监听自动构建 |
 
-### 命名规范
+---
 
-- 文件名/函数/变量: snake_case，结构体: PascalCase，常量: SCREAMING_SNAKE_CASE
+## 写文档时
 
-### 测试
+1. 先判断是 **决策** 还是 **方案**（决策=不变的事实，方案=待实施的工作）
+2. 用 `decisions/conventions.md` 中的模板
+3. 存放到对应目录，更新 README 索引
+4. AGENTS.md **不重复**任何文档内容，需要时用链接引用
 
-- 单元测试: `#[test]` / `#[tokio::test]`
-- 集成测试: `tests/integration_test.rs`
-- 测试数据库: `/tmp/galaxy_test_*`
+---
 
-## 架构要点
-
-- **代理统一入口**: 所有代理 handler 统一调用 `handle_proxy_request`
-- **缓存共享**: `ProxyCache` 被 admin handler 和 proxy 层共享，写操作后自动失效
-- **模型反向索引**: `ProxyCache.model_index` 维护 model→channel_id 映射
-- **API Key 轮询**: `AtomicU64` 无锁 round-robin；key 级 401/402/429 在同渠道内重试其他 key；渠道级失败排除整个 channel
-- **上游错误脱敏**: `sanitize_upstream_error` 截断并提取关键信息
-- **模型访问控制**: API Key 的 `supported_models` 字段控制模型范围，空=允许所有
-- **SSE 格式兼容**: `sse_field()` 统一处理 `field:value` 和 `field: value` 两种格式
-- **Token 兜底**: 上游不返回 usage 时，`estimate_tokens()` 从内容长度估算（~3 字节/token）
-
-## Git 规范
+## Git 提交
 
 ```
 <type>: <description>
 ```
 
-Type: `feat` / `fix` / `refactor` / `test` / `docs` / `chore`
-
-## 排查 SOP
-
-- [Homebrew 部署与排查](.gclm-harness/sop/homebrew-deploy.md) — 服务路径、日志时间对齐、流式错误记录规则、部署流程
-- [Token 统计缺失排查](.gclm-harness/sop/token-stats-debug.md) — 诊断 SQL、上游 curl 验证、提取函数定位、修复策略
-- [CI 失败排查](.gclm-harness/sop/ci-failure.md) — gh run 日志获取、clippy/test 错误定位、本地复现与修复流程
+`feat` / `fix` / `refactor` / `test` / `docs` / `chore`

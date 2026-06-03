@@ -15,7 +15,7 @@ AI 协议互转代理网关，支持 OpenAI Chat Completions、OpenAI Responses�
 - **协议转换**: 请求/响应在不同 AI API 协议间互转
 - **模型配置 (Models Config)**: 渠道的可用模型列表和模型映射配置
   - `available_models`: 从上游获取或手动添加的模型列表
-  - `model_maps`: 请求模型名到实际上游模型名的映射
+  - `models`: 渠道支持的模型名列表（JSON 字符串数组，例 `["gpt-4o", "claude-3-5-sonnet"]`），模型映射通过 `group_items.model_name` 在分组层实现
 
 ## 3. 子系统 / 模块索引
 

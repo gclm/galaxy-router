@@ -64,17 +64,17 @@ CREATE TABLE settings (
 
 ```sql
 CREATE TABLE channels (
-    id TEXT PRIMARY KEY,
+    id TEXT PRIMARY KEY,                          -- UUID v7
     name TEXT NOT NULL UNIQUE,
-    base_url TEXT NOT NULL,                      -- 基础 URL
-    api_keys TEXT NOT NULL DEFAULT '[]',        -- JSON 数组，如 ["sk-xxx", "sk-yyy"]
-    supported_types TEXT NOT NULL DEFAULT '[]', -- JSON 数组，支持的协议类型
-    model_maps TEXT NOT NULL DEFAULT '{}',       -- JSON 对象，如 {"claude-*": "claude-sonnet-4-20250514"}
+    api_keys TEXT NOT NULL DEFAULT '[]',        -- JSON 数组（UpstreamApiKey[]），如 [{"key":"sk-xxx","note":"","enabled":true}]
+    endpoints TEXT NOT NULL DEFAULT '[]',       -- JSON 数组（EndpointConfig[]），含 type/base_url/enabled
+    models TEXT NOT NULL DEFAULT '[]',          -- JSON 字符串数组，如 ["gpt-4o","claude-3-5-sonnet"]
     rate_limit_rpm INTEGER,
     rate_limit_tpm INTEGER,
     failure_threshold INTEGER NOT NULL DEFAULT 3,
     blacklist_minutes INTEGER NOT NULL DEFAULT 10,
     concurrency INTEGER NOT NULL DEFAULT 10,
+    custom_headers TEXT NOT NULL DEFAULT '[]',  -- JSON 数组（CustomHeader[]），如 [{"key":"X-Trace-Id","value":"..."}]
     enabled BOOLEAN NOT NULL DEFAULT TRUE,
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -82,41 +82,46 @@ CREATE TABLE channels (
 ```
 
 **字段说明**:
-- `api_keys`: 多 Key 时使用轮询选择
-- `supported_types`: 支持的协议类型，如 `["openai_chat", "anthropic"]`
-- `model_maps`: key 是源模型（支持通配符），value 是目标模型
+- `api_keys`: 多 Key 时按 `AtomicU64` 轮询（`api_key_attempts`）；元素为 `UpstreamApiKey { key, note, enabled }`
+- `endpoints`: 端点配置数组；元素为 `EndpointConfig { type, base_url, enabled }`，`type` 取值见下表
+- `models`: 渠道支持的模型名列表；模型映射在分组层 `group_items.model_name` 实现，channel 层不做改写
 
-**端点路径映射**（按协议类型自动拼接）:
+**端点类型与路径映射**（`EndpointType::path()`）:
 
-| 协议类型 | 端点路径 |
-|---------|---------|
-| `openai_chat` | `{base_url}/v1/chat/completions` |
-| `openai_response` | `{base_url}/v1/responses` |
-| `anthropic` | `{base_url}/v1/messages` |
-| `embedding` | `{base_url}/v1/embeddings` |
-| `images` | `{base_url}/v1/images/generations` |
+| `type` | 端点路径 |
+|--------|---------|
+| `openai_chat` | `{base_url}/chat/completions` |
+| `openai_response` | `{base_url}/responses` |
+| `anthropic` | `{base_url}/messages` |
+| `gemini` | `{base_url}/models/{model}:generateContent` |
+| `openai_embedding` | `{base_url}/embeddings` |
+| `openai_images` | `{base_url}/images/generations` |
 
 ### api_keys 表（客户端侧 Key，用于访问 Proxy）
 
 ```sql
 CREATE TABLE api_keys (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    name TEXT NOT NULL,                     -- Key 名称（便于识别）
-    api_key TEXT NOT NULL UNIQUE,           -- 客户端使用的 Key
+    id TEXT PRIMARY KEY,                    -- UUID v7
+    name TEXT NOT NULL,
+    api_key TEXT NOT NULL UNIQUE,           -- 客户端使用的 Key，格式 `gp-<uuid v7>`
     enabled BOOLEAN NOT NULL DEFAULT TRUE,
+    supported_models TEXT NOT NULL DEFAULT '',  -- 逗号分隔的分组/模型白名单，空字符串=不限制
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 ```
 
+**说明**:
+- `supported_models` 由 `parse_supported_models` 解析；为空表示该 Key 可访问所有模型
+- 写入 `enabled` / `name` / `supported_models` 变更需同步调用 `ApiKeyCache::invalidate(api_key_value)`
+
 ### groups 表
 
 ```sql
 CREATE TABLE groups (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    name TEXT NOT NULL UNIQUE,       -- 对外暴露的模型名
-    mode TEXT NOT NULL CHECK (mode IN ('round_robin', 'random', 'failover', 'weighted')),
-    match_regex TEXT,                -- 可选：正则匹配
+    id TEXT PRIMARY KEY,              -- UUID v7
+    name TEXT NOT NULL UNIQUE,        -- 对外暴露的模型名（请求 model 精确匹配 / 正则匹配）
+    match_regex TEXT,                 -- 可选：正则匹配（命中后映射到该分组）
     retry_enabled BOOLEAN NOT NULL DEFAULT TRUE,
     max_retries INTEGER NOT NULL DEFAULT 3,
     first_token_timeout_secs INTEGER NOT NULL DEFAULT 30,
@@ -126,14 +131,19 @@ CREATE TABLE groups (
 );
 ```
 
+**说明**:
+- 无 `mode` 字段；分组内渠道选择走 `select_group_item`（Top-K=3 加权随机 + `lb_state` 评分）
+- `match_regex` 为可空正则，命中时该分组生效
+- 缓存：命中通过 `ProxyCache.set_group`；删除/更新走 `invalidate_all_groups`
+
 ### group_items 表
 
 ```sql
 CREATE TABLE group_items (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    group_id INTEGER NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
-    channel_id INTEGER NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
-    model_name TEXT NOT NULL,        -- 上游实际模型名
+    id TEXT PRIMARY KEY,                        -- UUID v7
+    group_id TEXT NOT NULL,
+    channel_id TEXT NOT NULL,
+    model_name TEXT NOT NULL,                   -- 转发到上游时实际使用的模型名（= 渠道支持模型的别名/精确名）
     priority INTEGER NOT NULL DEFAULT 1,
     weight INTEGER NOT NULL DEFAULT 100,
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -141,20 +151,40 @@ CREATE TABLE group_items (
 );
 ```
 
-### model_pricing 表
+**说明**:
+- 无外键约束（sqlx-cli 模式不依赖外键）；删除渠道/分组由应用层显式处理
+- 唯一约束保证 `(group, channel, model_name)` 不重复
+
+### model_info 表
 
 ```sql
-CREATE TABLE model_pricing (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
+CREATE TABLE model_info (
+    id TEXT PRIMARY KEY,                          -- UUID v7
     model TEXT NOT NULL UNIQUE,
-    input_per_million REAL NOT NULL,
-    output_per_million REAL NOT NULL,
-    cache_read_per_million REAL,
-    cache_creation_per_million REAL,
-    source TEXT NOT NULL DEFAULT 'manual',  -- 'models.dev' | 'manual'
+    provider TEXT NOT NULL DEFAULT '',
+    mode TEXT NOT NULL DEFAULT 'chat',           -- chat | embedding | image 等
+    input_price REAL,
+    output_price REAL,
+    cache_read_price REAL,
+    cache_creation_price REAL,
+    max_input_tokens INTEGER,
+    max_output_tokens INTEGER,
+    supports_function_calling BOOLEAN,
+    supports_reasoning BOOLEAN,
+    supports_vision BOOLEAN,
+    supports_pdf_input BOOLEAN,
+    supports_prompt_caching BOOLEAN,
+    supports_system_messages BOOLEAN,
+    supports_tool_choice BOOLEAN,
+    source TEXT NOT NULL DEFAULT 'remote',       -- remote（models.dev）| manual
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 ```
+
+**说明**:
+- 替代旧文档中的 `model_pricing`；含定价 + 模型能力元数据
+- 远程刷新由 `ModelRegistry` + `PricingRefresher` 处理，写入 `source = "remote"`
 
 ## API 端点设计
 
@@ -249,16 +279,16 @@ let app = Router::new()
 
 ## 模型匹配优先级
 
-请求的 `model` 字段匹配分组的规则：
+请求的 `model` 字段匹配分组的规则（见 `ProxyState::select_channel_inner`）：
 
-1. **精确匹配优先**: `groups.name` == model → 直接使用该分组
-2. **正则匹配**: 按 `groups.match_regex` 匹配，多个匹配时取第一个定义的
-3. **通配符匹配**: `channel_model_maps.source_model` 支持 `*`（任意长度）和 `?`（单字符）
-4. **匹配顺序**: 精确 > 正则 > 通配符
+1. **精确匹配优先**：`groups.name` == model → 直接使用该分组
+2. **正则匹配**：按 `groups.match_regex` 匹配，多个匹配时取第一个
+3. **匹配顺序**：精确 > 正则
 
 **示例**:
 - 请求 `model = "claude-sonnet-4-20250514"`
-- 匹配顺序：`groups.name = "claude-sonnet-4-20250514"` > `groups.match_regex = "^claude-.*"` > `channel_model_maps.source = "claude-*"`
+- 匹配顺序：`groups.name = "claude-sonnet-4-20250514"` > `groups.match_regex = "^claude-.*"`
+- 命中分组后，由 `group_items.model_name` 决定实际转发到上游的模型名（渠道层不做模型名改写）
 
 ## 渠道多 Key 选择策略
 
