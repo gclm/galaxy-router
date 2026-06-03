@@ -22,7 +22,7 @@ AI 协议互转代理网关，支持 OpenAI Chat Completions、OpenAI Responses�
 | 模块 | 说明 | 详情 |
 |------|------|------|
 | api/ | HTTP 路由、请求处理 | [模块划分](02-module-design.md) |
-| api/handlers/admin/fetch_models.rs | 模型获取服务 | 支持 OpenAI/Anthropic/Gemini |
+| api/handlers/admin/fetch_models.rs | 模型获取服务 | 支持 OpenAI/Anthropic；含 Gemini 管理侧探测能力 |
 | auth/ | 密码哈希、JWT | [认证系统](04-auth-system.md) |
 | config.rs | TOML 配置加载 | [配置格式](03-config-format.md) |
 | db/ | 数据库连接、迁移 | [配置格式](03-config-format.md) |
@@ -44,4 +44,4 @@ AI 协议互转代理网关，支持 OpenAI Chat Completions、OpenAI Responses�
 
 - 单用户模式（个人/小团队使用）
 - SQLite 单机部署
-- 仅支持 OpenAI 兼容上游
+- 正式代理路由仅支持 OpenAI Chat / OpenAI Responses / Anthropic Messages

@@ -87,7 +87,7 @@ export function ChannelDetail({ channel, open, onOpenChange, onEdit, onTest }: C
           {/* 端点 */}
           <section>
             <h3 className="text-sm font-semibold text-muted-foreground mb-2">
-              端点 ({channel.endpoints.length})
+              上游端点 ({channel.endpoints.length})
             </h3>
             <div className="space-y-1.5">
               {channel.endpoints.map((ep, i) => (

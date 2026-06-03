@@ -4,8 +4,8 @@
 
 | 层级 | 存储方式 | 内容 | 更新方式 |
 |------|---------|------|---------|
-| 基础配置 | TOML 文件 | 服务器、数据库、日志 | 重启生效 |
-| 业务配置 | SQLite 数据库 | 渠道、分组、定价、模型映射 | Web 面板实时生效 |
+| 基础配置 | TOML 文件 | 服务器、数据库、日志、认证、排队、定价刷新 | 重启生效 |
+| 业务配置 | SQLite 数据库 | 渠道、分组、客户端 API Key、运行时设置、模型信息 | Web 面板实时生效 |
 
 ## TOML 基础配置
 
@@ -28,6 +28,16 @@ file_path = "logs/galaxy.log"
 [auth]
 jwt_secret = ""             # 首次运行自动生成
 token_expiry_hours = 24
+
+[queuing]
+enabled = false
+max_queue_size = 100
+queue_timeout_secs = 30
+
+[pricing]
+cache_path = "data/pricing_cache.json"
+refresh_interval_hours = 24
+providers = []              # 空数组表示全部启用
 ```
 
 ## 数据库 settings 表
@@ -52,11 +62,14 @@ CREATE TABLE settings (
 | `scheduler.score_weights` | scheduler | `{"priority":1.0,...}` | 评分权重 |
 | `sticky_session.enabled` | sticky_session | `true` | 是否启用粘性会话 |
 | `sticky_session.ttl_seconds` | sticky_session | `3600` | 会话保持时间（秒） |
-| `stats.log_detail_mode` | stats | `failures_only` | 日志模式 |
-| `stats.cost.source` | stats | `models.dev` | 成本数据源 |
-| `stats.cost.refresh_interval_hours` | stats | `24` | 刷新间隔（小时） |
+| `proxy.enabled` | proxy | `false` | 是否启用上游 HTTP 代理 |
+| `proxy.url` | proxy | `""` | 上游代理地址 |
+| `cors.allow_origins` | cors | `*` | CORS 白名单，逗号分隔 |
 
-**前端按 category 分组显示设置项。**
+**说明**：
+- 前端按 `category` 分组显示设置项
+- 当前仅部分设置项允许通过管理 API 更新：`scheduler.*`、`sticky_session.*`、`proxy.*`
+- `cors.allow_origins` 已有设置页展示，但当前后端更新白名单未包含该项
 
 ## 数据库 Schema
 
@@ -93,7 +106,7 @@ CREATE TABLE channels (
 | `openai_chat` | `{base_url}/chat/completions` |
 | `openai_response` | `{base_url}/responses` |
 | `anthropic` | `{base_url}/messages` |
-| `gemini` | `{base_url}/models/{model}:generateContent` |
+| `gemini` | `{base_url}/models/{model}:generateContent`（仅管理侧探测使用） |
 | `openai_embedding` | `{base_url}/embeddings` |
 | `openai_images` | `{base_url}/images/generations` |
 
@@ -152,7 +165,7 @@ CREATE TABLE group_items (
 ```
 
 **说明**:
-- 无外键约束（sqlx-cli 模式不依赖外键）；删除渠道/分组由应用层显式处理
+- 当前 schema 未声明外键约束；删除渠道/分组由应用层显式处理
 - 唯一约束保证 `(group, channel, model_name)` 不重复
 
 ### model_info 表
@@ -183,8 +196,9 @@ CREATE TABLE model_info (
 ```
 
 **说明**:
-- 替代旧文档中的 `model_pricing`；含定价 + 模型能力元数据
-- 远程刷新由 `ModelRegistry` + `PricingRefresher` 处理，写入 `source = "remote"`
+- `model_info` 同时承载定价和模型能力元数据
+- 启动时先从数据库加载；为空时回退到本地缓存文件；随后后台异步远程刷新
+- 定时刷新由 `ModelRegistry` + `PricingRefresher` 处理，远程导入记录写入 `source = "remote"`
 
 ## API 端点设计
 
@@ -205,20 +219,36 @@ CREATE TABLE model_info (
 
 | 端点 | 方法 | 说明 |
 |------|------|------|
-| `/api/v1/admin/auth/setup` | POST | 初始化管理员 |
+| `/api/v1/init/` | POST | 初始化管理员 |
 | `/api/v1/admin/auth/login` | POST | 登录 |
+| `/api/v1/admin/auth/me` | GET | 获取当前用户信息 |
 | `/api/v1/admin/auth/password` | PUT | 修改密码 |
 | `/api/v1/admin/channels` | GET/POST | 渠道列表/创建 |
 | `/api/v1/admin/channels/:id` | GET/PUT/DELETE | 渠道详情/更新/删除 |
+| `/api/v1/admin/channels/:id/test` | POST | 测试渠道 |
 | `/api/v1/admin/groups` | GET/POST | 分组列表/创建 |
 | `/api/v1/admin/groups/:id` | GET/PUT/DELETE | 分组详情/更新/删除 |
 | `/api/v1/admin/groups/:id/items` | POST | 添加分组项 |
+| `/api/v1/admin/groups/:id/items/:item_id` | DELETE | 删除分组项 |
 | `/api/v1/admin/api-keys` | GET/POST | API Key 列表/创建 |
-| `/api/v1/admin/api-keys/:id` | DELETE | 删除 API Key |
+| `/api/v1/admin/api-keys/:id` | GET/PUT/DELETE | API Key 详情/更新/删除 |
 | `/api/v1/admin/stats/overview` | GET | 统计概览 |
 | `/api/v1/admin/stats/daily` | GET | 按天统计 |
 | `/api/v1/admin/stats/models` | GET | 按模型统计 |
-| `/api/v1/admin/pricing` | GET/PUT | 定价管理 |
+| `/api/v1/admin/stats/channels` | GET | 按渠道统计 |
+| `/api/v1/admin/stats/logs` | GET | 请求日志列表 |
+| `/api/v1/admin/stats/logs/:id` | GET | 请求日志详情 |
+| `/api/v1/admin/stats/logs/models` | GET | 日志模型筛选项 |
+| `/api/v1/admin/models/info` | GET/PUT | 模型信息列表/更新 |
+| `/api/v1/admin/models/info/:model` | GET | 单个模型信息 |
+| `/api/v1/admin/system-info` | GET | 系统信息 |
+| `/api/v1/admin/settings` | GET | 设置列表 |
+| `/api/v1/admin/settings/infra` | GET | TOML 基础配置只读视图 |
+| `/api/v1/admin/settings/:key` | PUT | 更新允许修改的设置项 |
+| `/api/v1/admin/backup/export` | GET | 导出配置 |
+| `/api/v1/admin/backup/import` | POST | 导入配置 |
+| `/api/v1/admin/backup/reset` | POST | 重置配置 |
+| `/api/v1/admin/fetch-models` | POST | 从上游抓取模型列表 |
 
 ## Web 前端技术栈
 
@@ -229,7 +259,6 @@ CREATE TABLE model_info (
 | Vite | 5+ | 构建工具 |
 | Tailwind CSS | 3+ | 样式 |
 | shadcn/ui | — | 组件库（参考 AxonHub） |
-| TanStack Query | — | 数据获取 |
 | React Router | — | 路由 |
 
 ## 前端目录结构
@@ -243,7 +272,9 @@ frontend/
 │   │   ├── channels.ts
 │   │   ├── groups.ts
 │   │   ├── stats.ts
-│   │   └── pricing.ts
+│   │   ├── settings.ts
+│   │   ├── model-info.ts
+│   │   └── backup.ts
 │   ├── components/             # 通用组件
 │   │   ├── ui/                 # shadcn/ui 组件
 │   │   └── layout/             # 布局组件
@@ -251,30 +282,28 @@ frontend/
 │   │   ├── Dashboard.tsx       # 统计概览
 │   │   ├── Channels.tsx        # 渠道管理
 │   │   ├── Groups.tsx          # 分组管理
-│   │   └── Settings.tsx        # 设置
-│   └── types/                  # TypeScript 类型
-│       └── index.ts
+│   │   ├── ApiKeys.tsx         # 客户端 API Key 管理
+│   │   ├── Logs.tsx            # 请求日志
+│   │   ├── Models.tsx          # 模型信息
+│   │   ├── Playground.tsx      # 多协议调试台
+│   │   ├── Settings.tsx        # 设置
+│   │   └── Login.tsx           # 登录 / 初始化
+│   ├── lib/                    # hooks / utils
+│   └── stores/                 # 前端状态
 ├── index.html
 ├── package.json
 ├── tsconfig.json
-├── tailwind.config.js
 └── vite.config.ts
 ```
 
 ## 嵌入式部署
 
-前端构建产物嵌入到 Rust 二进制中：
+前端构建产物嵌入到 Rust 二进制中，由 `static_assets.rs` 提供 SPA fallback：
 
 ```rust
-// 使用 rust-embed 或 include_dir
-#[derive(RustEmbed)]
-#[folder = "frontend/dist"]
-struct Frontend;
-
-// axum 路由
 let app = Router::new()
-    .nest("/admin/api", admin_api_routes)
-    .fallback(serve_frontend);
+    .nest("/api/v1/admin", protected_admin)
+    .fallback(static_assets::serve);
 ```
 
 ## 模型匹配优先级
@@ -282,7 +311,7 @@ let app = Router::new()
 请求的 `model` 字段匹配分组的规则（见 `ProxyState::select_channel_inner`）：
 
 1. **精确匹配优先**：`groups.name` == model → 直接使用该分组
-2. **正则匹配**：按 `groups.match_regex` 匹配，多个匹配时取第一个
+2. **正则匹配**：按 `groups.match_regex` 匹配，命中后使用该分组
 3. **匹配顺序**：精确 > 正则
 
 **示例**:
@@ -292,32 +321,23 @@ let app = Router::new()
 
 ## 渠道多 Key 选择策略
 
-当一个渠道有多个 Key 时，使用**轮询（Round Robin）**选择，避免单个 Key 触发速率限制。
+当一个渠道有多个 Key 时，使用 `AtomicU64` 计数器做轮询（Round Robin）选择，避免单个 Key 触发速率限制。
 
 ## 配置热更新机制
 
-Web 面板写入 SQLite 后，内存缓存通过**写穿透**方式更新：
+Web 面板写入 SQLite 后，相关内存缓存通过**失效后重建**方式更新：
 
 1. Web API 写入 SQLite
-2. 写入成功后，更新内存缓存（Mutex/RwLock 保护的 HashMap）
-3. 下次请求立即使用新配置
+2. 写入成功后，调用对应 `ProxyCache` / `ApiKeyCache` 失效方法
+3. 下次请求按需重新加载并写回缓存
 
 **注意**: TOML 基础配置需要重启才能生效。
-
-## 健康探测策略（P2）
-
-| 项目 | 说明 |
-|------|------|
-| 探测端点 | `/v1/models`（轻量级，不消耗 Token） |
-| 探测间隔 | 默认 60 秒 |
-| 判断标准 | HTTP 状态码 + 响应时间 |
-| 失败阈值 | 连续 3 次失败标记为不健康 |
-| 恢复条件 | 连续 2 次成功恢复为健康 |
 
 ## 成本计算降级策略
 
 | 场景 | 行为 |
 |------|------|
-| 启动时 models.dev 不可达 | 使用本地 `model_pricing` 表，日志警告 |
+| 启动时数据库无模型信息 | 尝试加载本地 `pricing_cache.json` |
+| 启动时远程刷新失败 | 保留当前 DB / 缓存数据并记录警告 |
 | 运行时刷新失败 | 继续使用上次成功拉取的数据 |
-| 本地覆盖优先级 | `source = 'manual'` 的记录优先于 `source = 'models.dev'` |
+| 本地覆盖优先级 | `source = 'manual'` 的记录优先于远程同步记录 |

@@ -144,7 +144,10 @@ export function ChannelForm({ channel, onSubmit, onCancel }: ChannelFormProps) {
       {/* 端点配置 */}
       <section className="space-y-3">
         <div className="flex items-center justify-between">
-          <h3 className="text-sm font-medium text-muted-foreground">端点配置 *</h3>
+          <div>
+            <h3 className="text-sm font-medium text-muted-foreground">上游端点配置 *</h3>
+            <p className="text-xs text-muted-foreground mt-1">Gemini 仅用于管理侧模型探测，不属于正式代理协议。</p>
+          </div>
           <Button type="button" variant="outline" size="sm" onClick={addEndpoint}>
             <Plus className="h-4 w-4 mr-1" /> 添加
           </Button>

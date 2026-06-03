@@ -38,7 +38,7 @@ export const ENDPOINT_LABELS: Record<EndpointType, string> = {
   openai_chat: 'OpenAI Chat',
   openai_response: 'OpenAI Responses',
   anthropic: 'Anthropic',
-  gemini: 'Gemini',
+  gemini: 'Gemini（仅探测）',
   openai_embedding: 'OpenAI Embedding',
   openai_images: 'OpenAI Images',
 }

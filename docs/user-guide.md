@@ -6,7 +6,7 @@ Galaxy Router 是一个 AI 协议互转代理网关，让不同协议的 AI 客�
 
 | 概念 | 说明 |
 |---|---|
-| **渠道（Channel）** | 上游 AI 服务提供商的接入配置，包含 API Key、端点地址和协议类型 |
+| **渠道（Channel）** | 上游 AI 服务提供商的接入配置，包含 API Key、端点地址和上游协议类型 |
 | **分组（Group）** | 将多个渠道的同一模型聚合为虚拟模型，支持负载均衡和故障转移 |
 | **API Key** | 分发给客户端使用的密钥，客户端通过此密钥访问代理 |
 | **模型信息** | 各模型的能力描述和定价数据，用于统计成本 |
@@ -50,7 +50,7 @@ Galaxy Router 是一个 AI 协议互转代理网关，让不同协议的 AI 客�
 | 故障阈值 | 连续失败次数达到后自动熔断 |
 | 熔断时间 | 熔断后等待恢复的分钟数 |
 
-### 支持的协议类型
+### 支持的上游端点类型
 
 | 协议 | 端点路径 | 说明 |
 |---|---|---|
@@ -59,6 +59,7 @@ Galaxy Router 是一个 AI 协议互转代理网关，让不同协议的 AI 客�
 | `anthropic` | `/messages` | Anthropic Messages API |
 | `openai_embedding` | `/embeddings` | OpenAI Embeddings API |
 | `openai_images` | `/images/generations` | OpenAI Images API |
+| `gemini` | `/models/{model}:generateContent` | 管理侧模型探测用途，不是正式代理协议 |
 
 ### 模型测试
 
@@ -181,11 +182,11 @@ response = client.chat.completions.create(
 
 ## 操练场
 
-操练场（Playground）是一个内置的聊天测试界面，可以直接在管理面板中测试模型调用，无需外部工具。
+操练场（Playground）是一个内置的多协议调试界面，可以直接在管理面板中测试代理路由，无需外部工具。
 
 ![操练场](images/playground.png)
 
-选择模型后直接发送消息，系统会使用已配置的渠道和分组进行路由，方便验证配置是否正确。
+选择模型后直接发送请求，系统会按所选协议、API Key、模型和分组进行路由，方便验证配置是否正确。
 
 ## 模型信息
 

@@ -192,7 +192,7 @@ export function Channels() {
                     {sortBy === 'name' && <ArrowUpDown className="h-3 w-3" />}
                   </button>
                 </th>
-                <th className="text-left px-4 py-3 font-medium">端点</th>
+                <th className="text-left px-4 py-3 font-medium">上游端点</th>
                 <th className="text-center px-4 py-3 font-medium">状态</th>
                 <th className="text-center px-4 py-3 font-medium">模型</th>
                 <th className="text-center px-4 py-3 font-medium">Keys</th>
