@@ -175,3 +175,22 @@ pub async fn api_keys(
 
     Ok(Json(ApiResponse::success(serde_json::json!(stats))))
 }
+
+/// 获取延迟百分位统计
+pub async fn latency(
+    State(state): State<StatsApiState>,
+    Query(query): Query<StatsQuery>,
+) -> Result<Json<ApiResponse<serde_json::Value>>, (StatusCode, Json<ApiError>)> {
+    let days = query.days.unwrap_or(30);
+    let (p50, p95, p99) = state
+        .stats
+        .get_latency_percentiles(days)
+        .await
+        .map_err(|e: sqlx::Error| ApiError::internal_error(e.to_string()))?;
+
+    Ok(Json(ApiResponse::success(serde_json::json!({
+        "p50_latency_ms": p50,
+        "p95_latency_ms": p95,
+        "p99_latency_ms": p99,
+    }))))
+}

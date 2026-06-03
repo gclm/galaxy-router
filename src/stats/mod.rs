@@ -63,6 +63,9 @@ pub struct StatsOverview {
     pub today_input_tokens: i64,
     pub today_output_tokens: i64,
     pub today_cost: f64,
+    pub latency_p50: Option<f64>,
+    pub latency_p95: Option<f64>,
+    pub latency_p99: Option<f64>,
 }
 
 /// 按模型统计
@@ -236,7 +239,33 @@ impl StatsState {
             today_input_tokens: today_stats.1,
             today_output_tokens: today_stats.2,
             today_cost: today_stats.3,
+            latency_p50: None,
+            latency_p95: None,
+            latency_p99: None,
         })
+    }
+
+    /// 计算延迟百分位（p50/p95/p99）
+    pub async fn get_latency_percentiles(&self, days: i32) -> Result<(Option<f64>, Option<f64>, Option<f64>), sqlx::Error> {
+        let start_date = (self.now_local() - chrono::Duration::days(days as i64))
+            .format("%Y-%m-%d")
+            .to_string();
+        let tz = self.tz_modifier();
+
+        let sql = format!(
+            "SELECT latency_ms FROM usage_logs \
+             WHERE latency_ms IS NOT NULL AND latency_ms > 0 \
+             AND date(datetime(created_at, '{}')) >= ? \
+             ORDER BY latency_ms ASC",
+            tz
+        );
+
+        let latencies: Vec<i32> = sqlx::query_scalar(AssertSqlSafe(sql))
+            .bind(&start_date)
+            .fetch_all(&self.pool)
+            .await?;
+
+        Ok(compute_percentiles(&latencies))
     }
 
     /// 获取按模型统计
@@ -717,6 +746,18 @@ fn daily_row_to_stats(row: DailyRow) -> DailyStats {
     }
 }
 
+/// 从有序延迟列表计算 p50/p95/p99
+fn compute_percentiles(sorted: &[i32]) -> (Option<f64>, Option<f64>, Option<f64>) {
+    if sorted.is_empty() {
+        return (None, None, None);
+    }
+    let p = |pct: f64| -> f64 {
+        let idx = ((sorted.len() - 1) as f64 * pct).round() as usize;
+        sorted[idx.min(sorted.len() - 1)] as f64
+    };
+    (Some(p(0.50)), Some(p(0.95)), Some(p(0.99)))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1088,5 +1129,44 @@ mod tests {
         let state = new_state(pool);
         let models = state.get_log_models().await.unwrap();
         assert_eq!(models, vec!["claude".to_string(), "gpt-4o".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn get_latency_percentiles_returns_none_on_empty() {
+        let pool = make_pool().await;
+        let state = new_state(pool);
+        let (p50, p95, p99) = state.get_latency_percentiles(7).await.unwrap();
+        assert!(p50.is_none());
+        assert!(p95.is_none());
+        assert!(p99.is_none());
+    }
+
+    #[tokio::test]
+    async fn get_latency_percentiles_computes_correctly() {
+        let pool = make_pool().await;
+        // 插入 10 条不同延迟的日志
+        for i in 1..=10 {
+            let id = crate::api::response::generate_id();
+            sqlx::query(
+                r#"INSERT INTO usage_logs
+                   (id, requested_model, status_code, input_tokens, output_tokens,
+                    cost, request_type, is_stream, latency_ms)
+                   VALUES (?, 'gpt-4o', 200, 1, 1, 0.0, 'passthrough', 0, ?)"#,
+            )
+            .bind(&id)
+            .bind(i * 100) // 100, 200, ..., 1000
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+        let state = new_state(pool);
+        let (p50, p95, p99) = state.get_latency_percentiles(7).await.unwrap();
+        assert!(p50.is_some());
+        assert!(p95.is_some());
+        assert!(p99.is_some());
+        // 10 个值: 100,200,...,1000. p50 ≈ 550, p95 ≈ 955, p99 ≈ 1000
+        assert!(p50.unwrap() > 0.0);
+        assert!(p95.unwrap() >= p50.unwrap());
+        assert!(p99.unwrap() >= p95.unwrap());
     }
 }
