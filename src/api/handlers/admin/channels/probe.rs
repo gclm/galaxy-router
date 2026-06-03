@@ -310,7 +310,11 @@ fn extract_usage(
             usage["prompt_tokens"].as_u64(),
             usage["completion_tokens"].as_u64(),
         ),
-        EndpointType::OpenAiResponse | EndpointType::Anthropic => (
+        EndpointType::OpenAiResponse => (
+            usage["input_tokens"].as_u64(),
+            usage["output_tokens"].as_u64(),
+        ),
+        EndpointType::Anthropic => (
             usage["input_tokens"].as_u64(),
             usage["output_tokens"].as_u64(),
         ),
@@ -423,7 +427,13 @@ async fn send_streaming_test(
     let mut prompt_tokens: Option<u64> = None;
     let mut completion_tokens: Option<u64> = None;
 
+    let mut event_type = "";
     for line in text.lines() {
+        // 解析 event: 行（OpenAI Responses 流式事件需要区分事件类型）
+        if let Some(stripped) = line.strip_prefix("event: ") {
+            event_type = stripped.trim();
+            continue;
+        }
         if let Some(data) = line.strip_prefix("data: ") {
             let data = data.trim();
             if data == "[DONE]" {
@@ -433,24 +443,52 @@ async fn send_streaming_test(
                 first_token_ms = Some(start.elapsed().as_millis() as u64);
             }
             if let Ok(json) = serde_json::from_str::<serde_json::Value>(data) {
+                // --- Usage 提取（兼容多种格式）---
+                // OpenAI Chat: usage 在 data 顶层
                 if let Some(v) = json["usage"]["prompt_tokens"].as_u64() {
                     prompt_tokens = Some(v);
                 }
                 if let Some(v) = json["usage"]["completion_tokens"].as_u64() {
                     completion_tokens = Some(v);
                 }
+                // OpenAI Responses / Anthropic: input_tokens / output_tokens
                 if let Some(v) = json["usage"]["input_tokens"].as_u64() {
                     prompt_tokens = Some(v);
                 }
                 if let Some(v) = json["usage"]["output_tokens"].as_u64() {
                     completion_tokens = Some(v);
                 }
+                // OpenAI Responses: response.completed 事件中 usage 嵌套在 response 下
+                if let Some(v) = json["response"]["usage"]["input_tokens"].as_u64() {
+                    prompt_tokens = Some(v);
+                }
+                if let Some(v) = json["response"]["usage"]["output_tokens"].as_u64() {
+                    completion_tokens = Some(v);
+                }
+                // Anthropic: message_start 事件中 usage 嵌套在 message 下
                 if let Some(v) = json["message"]["usage"]["input_tokens"].as_u64() {
                     prompt_tokens = Some(v);
                 }
+                if let Some(v) = json["message"]["usage"]["output_tokens"].as_u64() {
+                    completion_tokens = Some(v);
+                }
+
+                // --- Delta 内容提取（按端点类型分别处理）---
                 let delta = match endpoint_type {
-                    EndpointType::OpenAiChat => json["choices"][0]["delta"]["content"].as_str(),
-                    EndpointType::Anthropic => json["delta"]["text"].as_str(),
+                    EndpointType::OpenAiChat => {
+                        json["choices"][0]["delta"]["content"].as_str()
+                    }
+                    EndpointType::OpenAiResponse => {
+                        // 只处理 output_text.delta 事件，其他事件没有文本内容
+                        if event_type == "response.output_text.delta" {
+                            json["delta"].as_str()
+                        } else {
+                            None
+                        }
+                    }
+                    EndpointType::Anthropic => {
+                        json["delta"]["text"].as_str()
+                    }
                     _ => json["delta"]
                         .as_str()
                         .or_else(|| json["choices"][0]["delta"]["content"].as_str()),
