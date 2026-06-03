@@ -268,7 +268,7 @@ impl ProxyState {
     /// 获取分组项
     async fn get_group_items(&self, group_id: &str) -> Result<Vec<GroupItemInfo>, ProxyError> {
         let items = sqlx::query_as::<_, (String, String, i32, i32)>(
-            "SELECT channel_id, model_name, priority, weight FROM group_items WHERE group_id = ? ORDER BY priority DESC, weight DESC"
+            "SELECT channel_id, model_name, priority, weight FROM group_items WHERE group_id = ? ORDER BY priority ASC, weight DESC"
         )
         .bind(group_id)
         .fetch_all(&self.pool)
@@ -278,16 +278,17 @@ impl ProxyState {
         Ok(items
             .into_iter()
             .map(
-                |(channel_id, model_name, _priority, weight)| GroupItemInfo {
+                |(channel_id, model_name, priority, weight)| GroupItemInfo {
                     channel_id,
                     model_name,
+                    priority,
                     weight,
                 },
             )
             .collect())
     }
 
-    /// 从分组中选择一个渠道项（自适应负载均衡，支持排除）
+    /// 从分组中选择一个渠道项（优先级分层 + 自适应负载均衡，支持排除）
     async fn select_group_item(
         &self,
         group: &GroupInfo,
@@ -299,53 +300,68 @@ impl ProxyState {
             ));
         }
 
-        // 计算每个渠道的评分（排除已失败渠道）
-        let mut scored_items: Vec<(f64, &GroupItemInfo)> = Vec::new();
-
+        // 按优先级分组（priority 数值越小优先级越高）
+        let mut priority_tiers: std::collections::BTreeMap<i32, Vec<&GroupItemInfo>> =
+            std::collections::BTreeMap::new();
         for item in &group.items {
-            if exclude_ids.contains(&item.channel_id) {
+            priority_tiers
+                .entry(item.priority)
+                .or_default()
+                .push(item);
+        }
+
+        // 逐级尝试：先选最高优先级的可用渠道，全部不可用时降级到下一优先级
+        for (_priority, tier_items) in &priority_tiers {
+            let mut scored_items: Vec<(f64, &GroupItemInfo)> = Vec::new();
+
+            for item in tier_items {
+                if exclude_ids.contains(&item.channel_id) {
+                    continue;
+                }
+                let score = self
+                    .lb_state
+                    .calculate_score(&item.channel_id, item.weight)
+                    .await;
+                if score > 0.0 {
+                    scored_items.push((score, item));
+                }
+            }
+
+            if scored_items.is_empty() {
+                // 当前优先级无可用渠道，尝试下一优先级
                 continue;
             }
-            let score = self
-                .lb_state
-                .calculate_score(&item.channel_id, item.weight)
-                .await;
-            if score > 0.0 {
-                scored_items.push((score, item));
+
+            // 按评分排序
+            scored_items.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+
+            // Top-K 加权随机选择（K=3）
+            let top_k = 3.min(scored_items.len());
+            let top_items = &scored_items[..top_k];
+
+            // 加权随机选择
+            let total_score: f64 = top_items.iter().map(|(score, _)| score).sum();
+            if total_score <= 0.0 {
+                return Ok(top_items[0].1.clone());
             }
-        }
 
-        if scored_items.is_empty() {
-            return Err(ProxyError::NoAvailableChannel(
-                "所有渠道都不可用".to_string(),
-            ));
-        }
+            use rand::Rng;
+            let mut rng = rand::rng();
+            let mut random_value = rng.random_range(0.0..total_score);
 
-        // 按评分排序
-        scored_items.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+            for (score, item) in top_items {
+                random_value -= score;
+                if random_value <= 0.0 {
+                    return Ok((*item).clone());
+                }
+            }
 
-        // Top-K 加权随机选择（K=3）
-        let top_k = 3.min(scored_items.len());
-        let top_items = &scored_items[..top_k];
-
-        // 加权随机选择
-        let total_score: f64 = top_items.iter().map(|(score, _)| score).sum();
-        if total_score <= 0.0 {
             return Ok(top_items[0].1.clone());
         }
 
-        use rand::Rng;
-        let mut rng = rand::rng();
-        let mut random_value = rng.random_range(0.0..total_score);
-
-        for (score, item) in top_items {
-            random_value -= score;
-            if random_value <= 0.0 {
-                return Ok((*item).clone());
-            }
-        }
-
-        Ok(top_items[0].1.clone())
+        Err(ProxyError::NoAvailableChannel(
+            "所有优先级的渠道都不可用".to_string(),
+        ))
     }
 
     /// 获取渠道信息（带缓存）

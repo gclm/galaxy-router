@@ -15,6 +15,7 @@ pub struct GroupInfo {
 pub struct GroupItemInfo {
     pub channel_id: String,
     pub model_name: String,
+    pub priority: i32,
     pub weight: i32,
 }
 
