@@ -36,6 +36,7 @@ impl crate::stats::recorder::RequestRecord {
     #[allow(clippy::too_many_arguments)]
     fn from_last_attempt(
         last: &AttemptStats,
+        request_id: Option<String>,
         api_key_id: Option<&str>,
         group_id: Option<&str>,
         model: &str,
@@ -47,6 +48,7 @@ impl crate::stats::recorder::RequestRecord {
         user_agent: Option<String>,
     ) -> Self {
         Self {
+            request_id,
             api_key_id: api_key_id.map(str::to_string),
             channel_id: Some(last.channel_id.clone()),
             group_id: group_id.map(str::to_string),
@@ -79,6 +81,7 @@ impl crate::stats::recorder::RequestRecord {
     /// 构造选择阶段失败时的最小记录（503 + "请求未到达上游"）
     #[allow(clippy::too_many_arguments)]
     fn minimal_for_select_failure(
+        request_id: Option<String>,
         api_key_id: Option<&str>,
         group_id: Option<&str>,
         model: &str,
@@ -89,6 +92,7 @@ impl crate::stats::recorder::RequestRecord {
         user_agent: Option<String>,
     ) -> Self {
         Self {
+            request_id,
             api_key_id: api_key_id.map(str::to_string),
             channel_id: None,
             group_id: group_id.map(str::to_string),
@@ -119,6 +123,7 @@ impl crate::stats::recorder::RequestRecord {
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn save_request_record(
     state: &ProxyState,
+    request_id: Option<String>,
     api_key_id: Option<&str>,
     group_id: Option<&str>,
     model: &str,
@@ -149,6 +154,7 @@ pub(super) async fn save_request_record(
     let record = match attempts.last() {
         Some(last) => crate::stats::recorder::RequestRecord::from_last_attempt(
             last,
+            request_id,
             api_key_id,
             group_id,
             model,
@@ -160,6 +166,7 @@ pub(super) async fn save_request_record(
             user_agent,
         ),
         None => crate::stats::recorder::RequestRecord::minimal_for_select_failure(
+            request_id,
             api_key_id,
             group_id,
             model,
@@ -304,6 +311,7 @@ pub(super) async fn execute_proxy_request(
 /// 非流式代理请求（支持重试和排队）
 pub async fn proxy_request(
     state: &ProxyState,
+    request_id: &str,
     api_key_id: Option<&str>,
     headers: &HeaderMap,
     body: &serde_json::Value,
@@ -343,6 +351,7 @@ pub async fn proxy_request(
                     // 渠道选择失败时也记录日志
                     save_request_record(
                         state,
+                        Some(request_id.to_string()),
                         api_key_id,
                         None,
                         &model,
@@ -379,6 +388,7 @@ pub async fn proxy_request(
                 Ok(result) => {
                     save_request_record(
                         state,
+                        Some(request_id.to_string()),
                         api_key_id,
                         group_id.as_deref(),
                         &model,
@@ -428,6 +438,7 @@ pub async fn proxy_request(
                 Err(e) => {
                     save_request_record(
                         state,
+                        Some(request_id.to_string()),
                         api_key_id,
                         group_id.as_deref(),
                         &model,
@@ -448,6 +459,7 @@ pub async fn proxy_request(
     tracing::error!("所有重试耗尽, model={}", model);
     save_request_record(
         state,
+        Some(request_id.to_string()),
         api_key_id,
         None,
         &model,
@@ -467,6 +479,7 @@ pub async fn proxy_request(
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn execute_proxy_stream(
     state: &ProxyState,
+    request_id: String,
     api_key_id: Option<&str>,
     upstream_api_key: &str,
     upstream_key_hint: String,
@@ -595,6 +608,7 @@ pub(super) async fn execute_proxy_stream(
     let api_key_id_clone = api_key_id.map(|s| s.to_string());
     let request_content_clone = serde_json::to_string(&body).ok();
     let req_text_for_estimation = extract_request_text(body);
+    let request_id_clone = request_id;
 
     let (stats_tx, stats_rx) = tokio::sync::oneshot::channel::<(
         i32,            // status_code
@@ -944,6 +958,7 @@ pub(super) async fn execute_proxy_stream(
                 });
 
                 let record = crate::stats::recorder::RequestRecord {
+                    request_id: Some(request_id_clone),
                     api_key_id: sc_api_key_id,
                     channel_id: Some(sc_channel_id),
                     group_id,
@@ -1030,6 +1045,7 @@ mod tests {
         let last = sample_attempt(200);
         let record = RequestRecord::from_last_attempt(
             &last,
+            Some("req-1".into()),
             Some("key-1"),
             Some("grp-1"),
             "gpt-4o",
@@ -1069,6 +1085,7 @@ mod tests {
             &last,
             None,
             None,
+            None,
             "claude-sonnet",
             None,
             None,
@@ -1085,6 +1102,7 @@ mod tests {
         let last = sample_attempt(200);
         let record = RequestRecord::from_last_attempt(
             &last,
+            None,
             None,
             None,
             "gpt-4o",
@@ -1107,6 +1125,7 @@ mod tests {
             &last,
             None,
             None,
+            None,
             "gpt-4o",
             None,
             None,
@@ -1122,6 +1141,7 @@ mod tests {
     #[test]
     fn minimal_for_select_failure_fills_503_and_marker_text() {
         let record = RequestRecord::minimal_for_select_failure(
+            None,
             Some("key-1"),
             Some("grp-1"),
             "gpt-4o",
@@ -1260,6 +1280,7 @@ mod tests {
         let headers = axum::http::HeaderMap::new();
         let result = proxy_request(
             &state,
+            "test-request-id",
             Some("key-1"),
             &headers,
             &body,
@@ -1299,6 +1320,7 @@ mod tests {
         let headers = axum::http::HeaderMap::new();
         let result = proxy_request(
             &state,
+            "test-request-id",
             Some("key-1"),
             &headers,
             &body,

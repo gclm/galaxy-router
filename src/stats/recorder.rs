@@ -21,6 +21,7 @@ pub struct ChannelAttempt {
 /// 记录请求
 #[derive(Debug)]
 pub struct RequestRecord {
+    pub request_id: Option<String>,
     pub api_key_id: Option<String>,
     pub channel_id: Option<String>,
     pub group_id: Option<String>,
@@ -62,16 +63,17 @@ impl StatsRecorder {
         sqlx::query(
             r#"
             INSERT INTO usage_logs (
-                id, api_key_id, channel_id, group_id,
+                id, request_id, api_key_id, channel_id, group_id,
                 requested_model, actual_model,
                 input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens,
                 cost, latency_ms, ttft_ms, status_code, error_message,
                 endpoint_type, request_type, request_content, response_content, is_stream,
                 upstream_key_hint, attempts, user_agent
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             "#,
         )
         .bind(&id)
+        .bind(&record.request_id)
         .bind(&record.api_key_id)
         .bind(&record.channel_id)
         .bind(&record.group_id)
@@ -118,6 +120,7 @@ mod tests {
 
     fn base_record(attempts: Vec<ChannelAttempt>) -> RequestRecord {
         RequestRecord {
+            request_id: None,
             api_key_id: Some("k1".into()),
             channel_id: Some("c1".into()),
             group_id: None,

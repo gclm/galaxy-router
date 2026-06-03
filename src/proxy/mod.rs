@@ -526,6 +526,7 @@ pub fn get_outbound(endpoint_type: &EndpointType) -> &'static dyn Outbound {
 /// 流式代理请求（支持重试和排队）
 pub async fn proxy_stream(
     state: &ProxyState,
+    request_id: &str,
     api_key_id: Option<&str>,
     headers: &HeaderMap,
     body: &serde_json::Value,
@@ -576,6 +577,7 @@ pub async fn proxy_stream(
                     // 渠道选择失败时也记录日志
                     save_request_record(
                         state,
+                        Some(request_id.to_string()),
                         api_key_id,
                         None,
                         &model,
@@ -598,6 +600,7 @@ pub async fn proxy_stream(
             let key_hint = selection.channel.key_hint(upstream_api_key);
             match execute_proxy_stream(
                 state,
+                request_id.to_string(),
                 api_key_id,
                 upstream_api_key,
                 key_hint,
@@ -646,6 +649,7 @@ pub async fn proxy_stream(
                 Err(e) => {
                     save_request_record(
                         state,
+                        Some(request_id.to_string()),
                         api_key_id,
                         group_id.as_deref(),
                         &model,
@@ -666,6 +670,7 @@ pub async fn proxy_stream(
     tracing::error!("流式重试耗尽, model={}", model);
     save_request_record(
         state,
+        Some(request_id.to_string()),
         api_key_id,
         None,
         &model,
@@ -700,6 +705,7 @@ pub async fn handle_proxy_request(
 ) -> axum::response::Response {
     use axum::response::IntoResponse;
 
+    let request_id = crate::api::response::generate_id();
     let model = body["model"].as_str().unwrap_or("unknown");
     let is_stream = body["stream"].as_bool().unwrap_or(false);
     let api_key_id = Some(auth.key_id.as_str());
@@ -710,22 +716,24 @@ pub async fn handle_proxy_request(
     }
 
     if is_stream {
-        match proxy_stream(state, api_key_id, &headers, &body, client_endpoint).await {
+        match proxy_stream(state, &request_id, api_key_id, &headers, &body, client_endpoint).await {
             Ok((status, stream, content_type)) => axum::response::Response::builder()
                 .status(status)
                 .header("Content-Type", content_type)
                 .header("Cache-Control", "no-cache")
                 .header("Connection", "keep-alive")
+                .header("X-Request-ID", &request_id)
                 .body(axum::body::Body::from_stream(stream))
                 .expect("static headers + StatusCode from upstream are valid Response inputs")
                 .into_response(),
             Err(e) => format_proxy_error(e, error_format),
         }
     } else {
-        match proxy_request(state, api_key_id, &headers, &body, client_endpoint).await {
+        match proxy_request(state, &request_id, api_key_id, &headers, &body, client_endpoint).await {
             Ok(result) => axum::response::Response::builder()
                 .status(result.status)
                 .header("Content-Type", "application/json")
+                .header("X-Request-ID", &request_id)
                 .body(axum::body::Body::from(result.body))
                 .expect("static Content-Type + StatusCode are valid Response inputs")
                 .into_response(),
