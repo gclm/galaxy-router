@@ -1,64 +1,15 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" fill="none">
   <defs>
-    <linearGradient id="g1" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#7C3AED"/>
-      <stop offset="50%" stop-color="#4F46E5"/>
-      <stop offset="100%" stop-color="#06B6D4"/>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#2463EB"/>
+      <stop offset="100%" stop-color="#628EEE"/>
     </linearGradient>
-    <linearGradient id="g2" x1="0%" y1="0%" x2="100%" y2="0%">
-      <stop offset="0%" stop-color="#7C3AED" stop-opacity="0.7"/>
-      <stop offset="100%" stop-color="#06B6D4" stop-opacity="0.7"/>
-    </linearGradient>
-    <radialGradient id="glow" cx="50%" cy="50%" r="50%">
-      <stop offset="0%" stop-color="#818CF8" stop-opacity="0.2"/>
-      <stop offset="100%" stop-color="#818CF8" stop-opacity="0"/>
-    </radialGradient>
-    <radialGradient id="core-glow" cx="50%" cy="50%" r="50%">
-      <stop offset="0%" stop-color="#C4B5FD" stop-opacity="0.4"/>
-      <stop offset="100%" stop-color="#C4B5FD" stop-opacity="0"/>
-    </radialGradient>
   </defs>
 
-  <!-- 背景光晕 -->
-  <circle cx="256" cy="256" r="220" fill="url(#glow)"/>
+  <rect width="512" height="512" rx="96" fill="url(#bg)"/>
 
-  <!-- 外层轨道环（旋转 30°/90°/-30° 三个轨道面） -->
-  <ellipse cx="256" cy="256" rx="210" ry="72" stroke="url(#g2)" stroke-width="1.8" fill="none" transform="rotate(-30 256 256)" opacity="0.5"/>
-  <ellipse cx="256" cy="256" rx="210" ry="72" stroke="url(#g2)" stroke-width="1.8" fill="none" transform="rotate(30 256 256)" opacity="0.5"/>
-  <ellipse cx="256" cy="256" rx="210" ry="72" stroke="url(#g2)" stroke-width="1.8" fill="none" transform="rotate(90 256 256)" opacity="0.5"/>
-
-  <!-- 内层轨道环 -->
-  <ellipse cx="256" cy="256" rx="150" ry="52" stroke="url(#g2)" stroke-width="1.5" fill="none" transform="rotate(-30 256 256)" opacity="0.65"/>
-  <ellipse cx="256" cy="256" rx="150" ry="52" stroke="url(#g2)" stroke-width="1.5" fill="none" transform="rotate(30 256 256)" opacity="0.65"/>
-  <ellipse cx="256" cy="256" rx="150" ry="52" stroke="url(#g2)" stroke-width="1.5" fill="none" transform="rotate(90 256 256)" opacity="0.65"/>
-
-  <!-- 轨道上的小光点（替代原来的大圆节点） -->
-  <!-- 外层轨道上的点 -->
-  <circle cx="410" cy="196" r="5" fill="#C4B5FD" opacity="0.9"/>
-  <circle cx="102" cy="316" r="5" fill="#C4B5FD" opacity="0.9"/>
-  <circle cx="196" cy="102" r="5" fill="#C4B5FD" opacity="0.9"/>
-  <circle cx="316" cy="410" r="5" fill="#C4B5FD" opacity="0.9"/>
-  <circle cx="316" cy="102" r="5" fill="#06B6D4" opacity="0.8"/>
-  <circle cx="196" cy="410" r="5" fill="#06B6D4" opacity="0.8"/>
-  <circle cx="102" cy="196" r="5" fill="#818CF8" opacity="0.8"/>
-  <circle cx="410" cy="316" r="5" fill="#818CF8" opacity="0.8"/>
-
-  <!-- 内层轨道上的点 -->
-  <circle cx="360" cy="210" r="4" fill="#E0E7FF" opacity="0.7"/>
-  <circle cx="152" cy="302" r="4" fill="#E0E7FF" opacity="0.7"/>
-  <circle cx="302" cy="152" r="4" fill="#E0E7FF" opacity="0.7"/>
-  <circle cx="210" cy="360" r="4" fill="#E0E7FF" opacity="0.7"/>
-
-  <!-- 路由连线（细且带透明度，从中心辐射） -->
-  <line x1="256" y1="256" x2="410" y2="196" stroke="#818CF8" stroke-width="1" opacity="0.3"/>
-  <line x1="256" y1="256" x2="102" y2="316" stroke="#818CF8" stroke-width="1" opacity="0.3"/>
-  <line x1="256" y1="256" x2="196" y2="102" stroke="#818CF8" stroke-width="1" opacity="0.3"/>
-  <line x1="256" y1="256" x2="316" y2="410" stroke="#818CF8" stroke-width="1" opacity="0.3"/>
-  <line x1="256" y1="256" x2="316" y2="102" stroke="#06B6D4" stroke-width="1" opacity="0.3"/>
-  <line x1="256" y1="256" x2="196" y2="410" stroke="#06B6D4" stroke-width="1" opacity="0.3"/>
-
-  <!-- 中心核心（简化：光晕 + 实心核心点） -->
-  <circle cx="256" cy="256" r="50" fill="url(#core-glow)"/>
-  <circle cx="256" cy="256" r="16" fill="url(#g1)"/>
-  <circle cx="256" cy="256" r="8" fill="#E0E7FF" opacity="0.9"/>
+  <text x="256" y="256" text-anchor="middle" dominant-baseline="central"
+        font-family="system-ui, -apple-system, sans-serif"
+        font-size="220" font-weight="700" letter-spacing="-8"
+        fill="#FAFAFA">GR</text>
 </svg>

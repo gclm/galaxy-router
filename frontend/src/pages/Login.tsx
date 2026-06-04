@@ -31,6 +31,9 @@ export function Login() {
     <div className="flex min-h-screen items-center justify-center bg-background">
       <Card className="w-full max-w-md">
         <CardHeader className="text-center">
+          <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-br from-primary to-primary/70 text-primary-foreground text-xl font-bold shadow-md">
+            GR
+          </div>
           <CardTitle className="text-2xl">Galaxy Router</CardTitle>
           <p className="text-sm text-muted-foreground">登录管理面板</p>
         </CardHeader>

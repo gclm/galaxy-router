@@ -1,4 +1,7 @@
-# Galaxy Router
+<div align="center">
+  <img src="frontend/public/brand.svg" alt="Galaxy Router" width="120" />
+  <h1>Galaxy Router</h1>
+</div>
 
 AI 协议互转代理网关，支持 OpenAI Chat Completions、OpenAI Responses、Anthropic Messages 三种协议互转。
 
