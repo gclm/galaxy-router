@@ -744,6 +744,7 @@ pub(super) async fn execute_proxy_stream(
         if needs_conversion {
             let inbound = get_inbound(&client_endpoint_clone);
             let outbound = get_outbound(&upstream_endpoint_clone);
+            let mut converter = inbound.create_stream_converter();
 
             while let Some(chunk) = stream.next().await {
                 match chunk {
@@ -788,6 +789,7 @@ pub(super) async fn execute_proxy_stream(
 
                             match outbound.transform_stream_event(&event_bytes) {
                                 Ok(Some(llm_stream)) => {
+                                    // 收集内容用于统计
                                     if let Some(choice) = llm_stream.first_choice() {
                                         if let Some(crate::protocol::model::Content::Text(t)) = &choice.delta.content
                                             && !t.is_empty() {
@@ -806,14 +808,17 @@ pub(super) async fn execute_proxy_stream(
                                             }
                                         }
                                     }
-                                    match inbound.transform_stream_event(&llm_stream) {
-                                        Ok(converted) => {
-                                            if !stream_send(&stream_tx, Bytes::from(converted)).await {
-                                                break;
+                                    // 有状态转换：一个事件可能产生多个 SSE 输出
+                                    match converter.convert(&llm_stream) {
+                                        Ok(converted_events) => {
+                                            for converted in converted_events {
+                                                if !stream_send(&stream_tx, Bytes::from(converted)).await {
+                                                    break;
+                                                }
                                             }
                                         }
                                         Err(e) => {
-                                            tracing::error!("Stream inbound conversion error: {}", e);
+                                            tracing::error!("Stream conversion error: {}", e);
                                         }
                                     }
                                 }
@@ -844,15 +849,35 @@ pub(super) async fn execute_proxy_stream(
                         is_error_event = true;
                     }
                 if !is_error_event {
-                    if let Ok(Some(llm_stream)) = outbound.transform_stream_event(&buffer)
-                        && let Ok(converted) = inbound.transform_stream_event(&llm_stream) {
-                            stream_send(&stream_tx, Bytes::from(converted)).await;
+                    if let Ok(Some(llm_stream)) = outbound.transform_stream_event(&buffer) {
+                        match converter.convert(&llm_stream) {
+                            Ok(converted_events) => {
+                                for converted in converted_events {
+                                    stream_send(&stream_tx, Bytes::from(converted)).await;
+                                }
+                            }
+                            Err(e) => {
+                                tracing::error!("Stream conversion error (drain): {}", e);
+                            }
                         }
+                    }
                 } else if let Some(error) = stream_error.as_deref() {
                     stream_send(&stream_tx, Bytes::from(format_stream_error_event(
                         error,
                         &client_endpoint_clone,
                     ))).await;
+                }
+            }
+
+            // 发送流结束事件
+            match converter.finish() {
+                Ok(finish_events) => {
+                    for event_bytes in finish_events {
+                        stream_send(&stream_tx, Bytes::from(event_bytes)).await;
+                    }
+                }
+                Err(e) => {
+                    tracing::error!("Stream finish error: {}", e);
                 }
             }
         } else {
@@ -869,6 +894,12 @@ pub(super) async fn execute_proxy_stream(
                                 continue;
                             }
 
+                            // TTFT：在第一个有效 SSE 事件处记录（比"第一个 chunk"更精确）
+                            if !first_token_seen {
+                                ttft_ms = Some(start_time.elapsed().as_millis() as i32);
+                                first_token_seen = true;
+                            }
+
                             if let Ok(text) = std::str::from_utf8(&event_bytes) {
                                 if let Some(source) = extract_usage_from_sse(text, &upstream_endpoint_clone) {
                                     apply_sse_usage(source, &mut last_usage, &mut input_usage);
@@ -881,10 +912,6 @@ pub(super) async fn execute_proxy_stream(
                             }
                         }
 
-                        if !first_token_seen {
-                            ttft_ms = Some(start_time.elapsed().as_millis() as i32);
-                            first_token_seen = true;
-                        }
                         if !stream_send(&stream_tx, bytes).await {
                             break;
                         }

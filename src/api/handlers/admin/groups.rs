@@ -126,7 +126,7 @@ pub async fn list(
 
     let tz = tz_modifier(state.timezone_offset);
     let mut data_builder = sqlx::QueryBuilder::new(
-        &format!("SELECT id, name, match_regex, retry_enabled, max_retries, first_token_timeout_secs, enabled, datetime(created_at, '{}') as created_at, datetime(updated_at, '{}') as updated_at FROM groups", tz, tz),
+        format!("SELECT id, name, match_regex, retry_enabled, max_retries, first_token_timeout_secs, enabled, datetime(created_at, '{}') as created_at, datetime(updated_at, '{}') as updated_at FROM groups", tz, tz),
     );
     push_where(&mut data_builder, &query);
     data_builder.push(format!(" ORDER BY {} {} ", order_field, order_dir));

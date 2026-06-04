@@ -43,7 +43,7 @@ pub async fn list(
 
     let tz = tz_modifier(state.timezone_offset);
     let mut data_builder = sqlx::QueryBuilder::new(
-        &format!("SELECT id, name, api_keys, endpoints, models, rate_limit_rpm, rate_limit_tpm, failure_threshold, blacklist_minutes, concurrency, timeout_secs, max_concurrency, custom_headers, enabled, datetime(created_at, '{}') as created_at, datetime(updated_at, '{}') as updated_at FROM channels", tz, tz),
+        format!("SELECT id, name, api_keys, endpoints, models, rate_limit_rpm, rate_limit_tpm, failure_threshold, blacklist_minutes, concurrency, timeout_secs, max_concurrency, custom_headers, enabled, datetime(created_at, '{}') as created_at, datetime(updated_at, '{}') as updated_at FROM channels", tz, tz),
     );
     push_where(&mut data_builder, &query);
     data_builder.push(format!(" ORDER BY {} {} ", order_field, order_dir));

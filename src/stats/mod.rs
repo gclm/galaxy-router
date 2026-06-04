@@ -573,7 +573,7 @@ impl StatsState {
 
         let tz = self.tz_modifier();
         let mut data_builder = QueryBuilder::new(
-            &format!(r#"SELECT ul.id, ul.api_key_id, ak.name as api_key_name,
+            format!(r#"SELECT ul.id, ul.api_key_id, ak.name as api_key_name,
                       ul.channel_id, c.name as channel_name,
                       ul.group_id, ul.requested_model, ul.actual_model,
                       ul.input_tokens, ul.output_tokens,

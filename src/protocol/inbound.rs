@@ -2,6 +2,7 @@ use async_trait::async_trait;
 use axum::http::HeaderMap;
 
 use super::model::{LlmRequest, LlmResponse, LlmStreamResponse};
+use super::stream_converter::StreamConverter;
 
 /// 入站转换器 trait
 ///
@@ -18,8 +19,16 @@ pub trait Inbound: Send + Sync {
     /// 将统一响应转换为客户端响应
     fn transform_response(&self, response: &LlmResponse) -> Result<Vec<u8>, InboundError>;
 
-    /// 将统一流式响应转换为客户端流式事件
+    /// 将统一流式响应转换为客户端流式事件（无状态版本）
+    ///
+    /// 保留用于兼容性，新代码应使用 `create_stream_converter`。
+    #[allow(dead_code)]
     fn transform_stream_event(&self, event: &LlmStreamResponse) -> Result<Vec<u8>, InboundError>;
+
+    /// 创建有状态的流式转换器（每次请求创建一个实例）
+    ///
+    /// 需要状态机的协议（如 Responses API、Anthropic）应覆盖此方法。
+    fn create_stream_converter(&self) -> Box<dyn StreamConverter>;
 }
 
 /// 入站错误

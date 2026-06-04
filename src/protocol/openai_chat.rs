@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use super::inbound::{Inbound, InboundError};
 use super::model::*;
 use super::outbound::{Outbound, OutboundError};
+use super::stream_converter::{SimpleStreamConverter, StreamConverter};
 
 /// OpenAI Chat Completions 入站转换器
 pub struct OpenAiChatInbound;
@@ -199,6 +200,14 @@ impl Inbound for OpenAiChatInbound {
         let data = serde_json::to_string(event)
             .map_err(|e| InboundError::TransformError(format!("序列化流式事件失败: {}", e)))?;
         Ok(format!("data: {}\n\n", data).into_bytes())
+    }
+
+    fn create_stream_converter(&self) -> Box<dyn StreamConverter> {
+        Box::new(SimpleStreamConverter::new(|event: &LlmStreamResponse| {
+            let data = serde_json::to_string(event)
+                .map_err(|e| InboundError::TransformError(format!("序列化流式事件失败: {}", e)))?;
+            Ok(format!("data: {}\n\n", data).into_bytes())
+        }))
     }
 }
 
