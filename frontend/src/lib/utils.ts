@@ -33,3 +33,9 @@ export function maskKey(key: string): string {
   if (key.length <= 12) return key
   return key.substring(0, 8) + '...' + key.substring(key.length - 4)
 }
+
+export function fmtTokens(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`
+  return n.toLocaleString()
+}
