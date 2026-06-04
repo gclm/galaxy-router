@@ -7,6 +7,7 @@ import type { EndpointType, ChannelAttempt } from '@/api/types'
 import { Button } from '@/components/ui/button'
 import { Pagination } from '@/components/Pagination'
 import { EmptyState } from '@/components/common'
+import { PageHeader } from '@/components/common/PageHeader'
 import {
   Dialog,
   DialogContent,
@@ -124,9 +125,7 @@ export function Logs() {
 
   return (
     <div className="space-y-4">
-      <div>
-        <p className="text-sm text-muted-foreground">查看每次 API 请求的详细记录</p>
-      </div>
+      <PageHeader subtitle="查看每次 API 请求的详细记录" />
 
       {/* 筛选栏 */}
       <div className="flex items-center gap-3 flex-wrap">
@@ -194,6 +193,8 @@ export function Logs() {
               <EmptyState
                 loading={isLoading}
                 isEmpty={!isLoading && logs.length === 0}
+                loadingText="加载中..."
+                emptyText="暂无请求记录"
                 colSpan={11}
               />
               {!isLoading && logs.length > 0 && logs.map((log) => (

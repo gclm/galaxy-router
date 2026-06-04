@@ -147,6 +147,7 @@ export interface GroupItem {
 export interface Group {
   id: string
   name: string
+  provider: string
   match_regex: string | null
   retry_enabled: boolean
   max_retries: number
@@ -159,6 +160,7 @@ export interface Group {
 
 export interface CreateGroupRequest {
   name: string
+  provider?: string
   match_regex?: string
   retry_enabled?: boolean
   max_retries?: number
@@ -176,6 +178,7 @@ export interface CreateGroupItemRequest {
 
 export interface UpdateGroupRequest {
   name?: string
+  provider?: string
   match_regex?: string
   retry_enabled?: boolean
   max_retries?: number

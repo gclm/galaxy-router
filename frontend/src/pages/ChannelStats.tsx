@@ -1,23 +1,39 @@
-import { useState } from 'react'
-import { useStatsApiKeys } from '@/api/query-hooks'
+import { useState, useMemo } from 'react'
+import { useStatsChannels } from '@/api/query-hooks'
 import { PageHeader } from '@/components/common/PageHeader'
 import { FilterBar } from '@/components/common/FilterBar'
 import { EmptyState } from '@/components/common/EmptyState'
 import { formatNumber, formatCost } from '@/lib/utils'
+import { ArrowUpDown } from 'lucide-react'
 
-export function ApiKeyStats() {
+type SortField = 'request_count' | 'total_cost' | 'success_rate' | 'input_tokens' | 'output_tokens'
+
+export function ChannelStats() {
   const [search, setSearch] = useState('')
   const [days, setDays] = useState(7)
+  const [sortBy, setSortBy] = useState<SortField>('request_count')
+  const [sortOrder, setSortOrder] = useState<'desc' | 'asc'>('desc')
 
-  const { data, isLoading } = useStatsApiKeys(days)
+  const { data, isLoading } = useStatsChannels({ days })
   const stats = data ?? []
 
   const filtered = search
-    ? stats.filter((s) =>
-        s.api_key_name.toLowerCase().includes(search.toLowerCase()) ||
-        s.api_key_id.toLowerCase().includes(search.toLowerCase()),
-      )
+    ? stats.filter((s) => s.channel_name.toLowerCase().includes(search.toLowerCase()))
     : stats
+
+  const sorted = useMemo(() => {
+    const items = [...filtered]
+    items.sort((a, b) => {
+      const av = sortBy === 'success_rate'
+        ? (a.request_count > 0 ? a.success_count / a.request_count : 0)
+        : a[sortBy]
+      const bv = sortBy === 'success_rate'
+        ? (b.request_count > 0 ? b.success_count / b.request_count : 0)
+        : b[sortBy]
+      return sortOrder === 'desc' ? (av > bv ? -1 : 1) : (av < bv ? -1 : 1)
+    })
+    return items
+  }, [filtered, sortBy, sortOrder])
 
   const totals = filtered.reduce(
     (acc, s) => ({
@@ -35,11 +51,30 @@ export function ApiKeyStats() {
     ? ((totals.success / totals.requests) * 100).toFixed(1)
     : '-'
 
+  const handleSort = (col: SortField) => {
+    if (sortBy === col) {
+      setSortOrder((o) => (o === 'desc' ? 'asc' : 'desc'))
+    } else {
+      setSortBy(col)
+      setSortOrder('desc')
+    }
+  }
+
+  const SortButton = ({ col, label }: { col: SortField; label: string }) => (
+    <button
+      className="inline-flex items-center gap-1 hover:text-foreground"
+      onClick={() => handleSort(col)}
+    >
+      {label}
+      {sortBy === col && <ArrowUpDown className="h-3 w-3" />}
+    </button>
+  )
+
   return (
     <div className="space-y-4">
       <PageHeader
-        title="Key 用量统计"
-        subtitle="查看每个 API Key 的请求量、Token 消耗和成本"
+        title="渠道统计"
+        subtitle="查看每个渠道的请求量、成功率和成本"
       />
 
       {/* 汇总卡片 */}
@@ -54,7 +89,7 @@ export function ApiKeyStats() {
       <FilterBar
         searchValue={search}
         onSearchChange={setSearch}
-        searchPlaceholder="搜索 Key 名称..."
+        searchPlaceholder="搜索渠道名称..."
         onRefresh={() => {}}
         loading={isLoading}
         extra={
@@ -77,43 +112,36 @@ export function ApiKeyStats() {
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b bg-muted/50">
-                <th className="text-left px-4 py-3 font-medium">Key 名称</th>
-                <th className="text-right px-4 py-3 font-medium">请求量</th>
+                <th className="text-left px-4 py-3 font-medium">渠道</th>
+                <th className="text-right px-4 py-3 font-medium"><SortButton col="request_count" label="请求量" /></th>
                 <th className="text-right px-4 py-3 font-medium">成功</th>
                 <th className="text-right px-4 py-3 font-medium">失败</th>
-                <th className="text-right px-4 py-3 font-medium">成功率</th>
-                <th className="text-right px-4 py-3 font-medium">输入 Token</th>
-                <th className="text-right px-4 py-3 font-medium">输出 Token</th>
-                <th className="text-right px-4 py-3 font-medium">成本</th>
+                <th className="text-right px-4 py-3 font-medium"><SortButton col="success_rate" label="成功率" /></th>
+                <th className="text-right px-4 py-3 font-medium"><SortButton col="total_cost" label="成本" /></th>
               </tr>
             </thead>
             <tbody>
               <EmptyState
                 loading={isLoading}
-                isEmpty={!isLoading && filtered.length === 0}
+                isEmpty={!isLoading && sorted.length === 0}
                 loadingText="加载中..."
-                emptyText={search ? '没有匹配的 Key' : '暂无统计数据'}
-                colSpan={8}
+                emptyText={search ? '没有匹配的渠道' : '暂无统计数据'}
+                colSpan={6}
               />
-              {!isLoading && filtered.map((row) => {
+              {!isLoading && sorted.map((row) => {
                 const rate = row.request_count > 0
                   ? ((row.success_count / row.request_count) * 100).toFixed(1)
                   : '-'
                 return (
                   <tr
-                    key={row.api_key_id}
+                    key={row.channel_id}
                     className="border-b last:border-0 hover:bg-muted/30 transition-colors"
                   >
-                    <td className="px-4 py-3">
-                      <p className="font-medium">{row.api_key_name || '未知'}</p>
-                      <p className="text-xs text-muted-foreground font-mono">{row.api_key_id.slice(0, 12)}...</p>
-                    </td>
+                    <td className="px-4 py-3 font-medium">{row.channel_name || '未知'}</td>
                     <td className="px-4 py-3 text-right tabular-nums">{formatNumber(row.request_count)}</td>
                     <td className="px-4 py-3 text-right tabular-nums text-green-600">{formatNumber(row.success_count)}</td>
                     <td className="px-4 py-3 text-right tabular-nums text-destructive">{formatNumber(row.failure_count)}</td>
                     <td className="px-4 py-3 text-right tabular-nums">{rate}%</td>
-                    <td className="px-4 py-3 text-right tabular-nums text-muted-foreground">{formatNumber(row.input_tokens)}</td>
-                    <td className="px-4 py-3 text-right tabular-nums text-muted-foreground">{formatNumber(row.output_tokens)}</td>
                     <td className="px-4 py-3 text-right tabular-nums">{formatCost(row.total_cost)}</td>
                   </tr>
                 )

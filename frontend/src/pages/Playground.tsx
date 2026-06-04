@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { apiKeysApi } from '@/api/api-keys'
 import { statsApi } from '@/api/stats'
+import { PageHeader } from '@/components/common/PageHeader'
 import type { ApiKey, RequestLog, EndpointType } from '@/api/types'
 import { ENDPOINT_LABELS } from '@/api/types'
 import { Card, CardContent } from '@/components/ui/card'
@@ -433,11 +434,7 @@ export function Playground() {
 
   return (
     <div className="space-y-4">
-      <div>
-        <p className="text-sm text-muted-foreground">
-          用真实客户端请求测试代理管线：认证 → 路由 → 转换 → 上游
-        </p>
-      </div>
+      <PageHeader subtitle="用真实客户端请求测试代理管线：认证 → 路由 → 转换 → 上游" />
 
       <div className="grid grid-cols-1 lg:grid-cols-[360px_1fr] gap-6">
         {/* 配置面板 */}

@@ -4,6 +4,7 @@ import type { ApiKey, CreateApiKeyRequest } from '@/api/types'
 import { Button } from '@/components/ui/button'
 import { StatusBadge } from '@/components/StatusBadge'
 import { ConfirmDeleteDialog } from '@/components/ConfirmDeleteDialog'
+import { Pagination } from '@/components/Pagination'
 import { FilterBar } from '@/components/common/FilterBar'
 import { PageHeader } from '@/components/common/PageHeader'
 import { EmptyState } from '@/components/common/EmptyState'
@@ -13,7 +14,11 @@ import {
   useUpdateApiKey,
   useDeleteApiKey,
   useGroups,
+  useBudgets,
+  useSetBudget,
+  useDeleteBudget,
 } from '@/api/query-hooks'
+import type { BudgetLimit } from '@/api/types'
 import { formatDate, maskKey } from '@/lib/utils'
 import { toast } from 'sonner'
 import {
@@ -90,7 +95,6 @@ export function ApiKeys() {
 
   // ─── Create form state ──────────────────────────────────
   const [newKeyName, setNewKeyName] = useState('')
-  const [newKeySupportedModels, setNewKeySupportedModels] = useState('')
   const [newKeyRateLimitRpm, setNewKeyRateLimitRpm] = useState('')
   const [newKeyRateLimitTpm, setNewKeyRateLimitTpm] = useState('')
   const [newKeySelectedGroups, setNewKeySelectedGroups] = useState<string[]>([])
@@ -98,14 +102,22 @@ export function ApiKeys() {
 
   // ─── Edit form state ────────────────────────────────────
   const [editName, setEditName] = useState('')
-  const [editSupportedModels, setEditSupportedModels] = useState('')
   const [editRateLimitRpm, setEditRateLimitRpm] = useState('')
   const [editRateLimitTpm, setEditRateLimitTpm] = useState('')
   const [editSelectedGroups, setEditSelectedGroups] = useState<string[]>([])
-
+  const [editBudgetMonthly, setEditBudgetMonthly] = useState('')
+  const [editBudgetDaily, setEditBudgetDaily] = useState('')
   // ─── Groups ─────────────────────────────────────────────
   const { data: groupsData } = useGroups()
   const availableGroups = groupsData?.items ?? []
+
+  // ─── Budgets ────────────────────────────────────────────
+  const { data: budgets } = useBudgets()
+  const setBudgetMutation = useSetBudget()
+  const deleteBudgetMutation = useDeleteBudget()
+
+  const getBudgetForKey = (keyId: string): BudgetLimit | undefined =>
+    budgets?.find((b) => b.api_key_id === keyId)
 
   // ─── Mutations ──────────────────────────────────────────
   const createMutation = useCreateApiKey()
@@ -144,7 +156,6 @@ export function ApiKeys() {
     if (!newKeyName.trim()) return
     const data: CreateApiKeyRequest = {
       name: newKeyName.trim(),
-      supported_models: newKeySupportedModels || undefined,
       rate_limit_rpm: newKeyRateLimitRpm ? parseInt(newKeyRateLimitRpm) : undefined,
       rate_limit_tpm: newKeyRateLimitTpm ? parseInt(newKeyRateLimitTpm) : undefined,
       allowed_groups: newKeySelectedGroups.length > 0 ? newKeySelectedGroups.join(',') : undefined,
@@ -164,7 +175,6 @@ export function ApiKeys() {
   const openEdit = (key: ApiKey) => {
     setEditingKey(key)
     setEditName(key.name)
-    setEditSupportedModels(key.supported_models || '')
     setEditRateLimitRpm(key.rate_limit_rpm > 0 ? String(key.rate_limit_rpm) : '')
     setEditRateLimitTpm(key.rate_limit_tpm > 0 ? String(key.rate_limit_tpm) : '')
     setEditSelectedGroups(
@@ -172,6 +182,9 @@ export function ApiKeys() {
         ? key.allowed_groups.split(',').map((s) => s.trim()).filter(Boolean)
         : [],
     )
+    const budget = getBudgetForKey(key.id)
+    setEditBudgetMonthly(budget?.monthly_limit_usd ? String(budget.monthly_limit_usd) : '')
+    setEditBudgetDaily(budget?.daily_limit_usd ? String(budget.daily_limit_usd) : '')
     setFormOpen(true)
   }
 
@@ -182,7 +195,6 @@ export function ApiKeys() {
         id: editingKey.id,
         data: {
           name: editName.trim(),
-          supported_models: editSupportedModels || undefined,
           rate_limit_rpm: editRateLimitRpm ? parseInt(editRateLimitRpm) : undefined,
           rate_limit_tpm: editRateLimitTpm ? parseInt(editRateLimitTpm) : undefined,
           allowed_groups: editSelectedGroups.length > 0 ? editSelectedGroups.join(',') : undefined,
@@ -190,6 +202,21 @@ export function ApiKeys() {
       },
       {
         onSuccess: () => {
+          // 保存预算设置
+          const monthly = editBudgetMonthly ? parseFloat(editBudgetMonthly) : 0
+          const daily = editBudgetDaily ? parseFloat(editBudgetDaily) : 0
+          if (monthly > 0 || daily > 0) {
+            setBudgetMutation.mutate({
+              api_key_id: editingKey.id,
+              monthly_limit_usd: monthly,
+              daily_limit_usd: daily,
+            })
+          } else {
+            const existingBudget = getBudgetForKey(editingKey.id)
+            if (existingBudget) {
+              deleteBudgetMutation.mutate(existingBudget.id)
+            }
+          }
           setEditingKey(null)
           setFormOpen(false)
           table.refresh()
@@ -238,7 +265,6 @@ export function ApiKeys() {
     setEditingKey(null)
     setNewKeyResult(null)
     setNewKeyName('')
-    setNewKeySupportedModels('')
     setNewKeyRateLimitRpm('')
     setNewKeyRateLimitTpm('')
     setNewKeySelectedGroups([])
@@ -250,7 +276,6 @@ export function ApiKeys() {
     setEditingKey(null)
     setNewKeyResult(null)
     setNewKeyName('')
-    setNewKeySupportedModels('')
     setNewKeyRateLimitRpm('')
     setNewKeyRateLimitTpm('')
     setNewKeySelectedGroups([])
@@ -337,6 +362,7 @@ export function ApiKeys() {
                 <th className="text-left px-4 py-3 font-medium">Key</th>
                 <th className="text-left px-4 py-3 font-medium">分组权限</th>
                 <th className="text-left px-4 py-3 font-medium">速率限制</th>
+                <th className="text-left px-4 py-3 font-medium">预算</th>
                 <th className="text-center px-4 py-3 font-medium">状态</th>
                 <th className="text-left px-4 py-3 font-medium">创建时间</th>
                 <th className="text-center px-4 py-3 font-medium">操作</th>
@@ -348,7 +374,7 @@ export function ApiKeys() {
                 isEmpty={!table.loading && displayData.items.length === 0}
                 loadingText="加载中..."
                 emptyText={isFiltered ? '没有匹配的 API Key' : '暂无 API Key，点击上方按钮创建'}
-                colSpan={7}
+                colSpan={8}
               />
               {!table.loading &&
                 displayData.items.map((apiKey) => (
@@ -387,6 +413,18 @@ export function ApiKeys() {
                         ? `${apiKey.rate_limit_rpm || '∞'} RPM / ${apiKey.rate_limit_tpm || '∞'} TPM`
                         : '不限'}
                     </td>
+                    <td className="px-4 py-3 text-xs text-muted-foreground">
+                      {(() => {
+                        const budget = getBudgetForKey(apiKey.id)
+                        if (!budget || (!budget.monthly_limit_usd && !budget.daily_limit_usd)) {
+                          return <span className="text-muted-foreground/50">—</span>
+                        }
+                        const parts: string[] = []
+                        if (budget.monthly_limit_usd > 0) parts.push(`月 $${budget.monthly_limit_usd}`)
+                        if (budget.daily_limit_usd > 0) parts.push(`日 $${budget.daily_limit_usd}`)
+                        return <span>{parts.join(' / ')}</span>
+                      })()}
+                    </td>
                     <td className="px-4 py-3 text-center">
                       <StatusBadge
                         enabled={apiKey.enabled}
@@ -423,6 +461,15 @@ export function ApiKeys() {
             </tbody>
           </table>
         </div>
+
+        <Pagination
+          total={displayData.total}
+          page={table.page}
+          pageSize={table.pageSize}
+          onPageChange={table.setPage}
+          onPageSizeChange={table.setPageSize}
+          pageSizeOptions={[20, 50, 100]}
+        />
       </div>
 
       {/* Create/Edit Dialog */}
@@ -487,18 +534,6 @@ export function ApiKeys() {
                   placeholder="例如：前端应用"
                 />
               </div>
-              <div>
-                <label className="block text-sm font-medium mb-1">
-                  支持的模型（逗号分隔，留空表示全部）
-                </label>
-                <input
-                  type="text"
-                  value={editSupportedModels}
-                  onChange={(e) => setEditSupportedModels(e.target.value)}
-                  className="input"
-                  placeholder="例如：gpt-4, claude-sonnet-4"
-                />
-              </div>
               <GroupSelector
                 selected={editSelectedGroups}
                 onToggle={(g) => toggleGroup(editSelectedGroups, setEditSelectedGroups, g)}
@@ -532,6 +567,36 @@ export function ApiKeys() {
                   </div>
                 </div>
               </div>
+              <div>
+                <label className="block text-sm font-medium mb-2">预算限制 (USD)</label>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-xs text-muted-foreground mb-1">月限额 ($)</label>
+                    <input
+                      type="number"
+                      value={editBudgetMonthly}
+                      onChange={(e) => setEditBudgetMonthly(e.target.value)}
+                      className="input"
+                      placeholder="不限"
+                      step="0.01"
+                      min="0"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs text-muted-foreground mb-1">日限额 ($)</label>
+                    <input
+                      type="number"
+                      value={editBudgetDaily}
+                      onChange={(e) => setEditBudgetDaily(e.target.value)}
+                      className="input"
+                      placeholder="不限"
+                      step="0.01"
+                      min="0"
+                    />
+                  </div>
+                </div>
+                <p className="text-xs text-muted-foreground mt-1">留空表示不限制，超出后请求将返回 402</p>
+              </div>
               <div className="flex justify-end gap-2">
                 <Button variant="outline" onClick={closeForm}>
                   取消
@@ -557,18 +622,6 @@ export function ApiKeys() {
                   className="input"
                   placeholder="例如：前端应用"
                   onKeyDown={(e) => e.key === 'Enter' && handleCreate()}
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium mb-1">
-                  支持的模型（逗号分隔，留空表示全部）
-                </label>
-                <input
-                  type="text"
-                  value={newKeySupportedModels}
-                  onChange={(e) => setNewKeySupportedModels(e.target.value)}
-                  className="input"
-                  placeholder="例如：gpt-4, claude-sonnet-4"
                 />
               </div>
               <GroupSelector

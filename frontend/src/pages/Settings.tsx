@@ -3,7 +3,6 @@ import type { SettingItem, InfraConfig } from '@/api/types'
 import type { ImportResult, ResetResult } from '@/api/backup'
 import { Button } from '@/components/ui/button'
 import { ToggleSwitch } from '@/components/ToggleSwitch'
-import { BudgetTab } from '@/components/BudgetTab'
 import { useAuthStore } from '@/stores/auth'
 import {
   useSettings,
@@ -15,14 +14,13 @@ import {
   useResetBackup,
 } from '@/api/query-hooks'
 import { toast } from 'sonner'
-import { User, Shield, TrendingUp, Sliders, Server, Database, Globe, DollarSign } from 'lucide-react'
+import { User, Shield, TrendingUp, Sliders, Server, Database, Globe } from 'lucide-react'
 
 const tabs = [
   { id: 'account', label: '账户安全', icon: Shield },
   { id: 'scheduler', label: '调度策略', icon: Sliders },
   { id: 'sticky-session', label: '粘性会话', icon: TrendingUp },
   { id: 'cors', label: '跨域设置', icon: Globe },
-  { id: 'budget', label: '预算限制', icon: DollarSign },
   { id: 'backup', label: '数据备份', icon: Database },
   { id: 'proxy', label: '上游代理', icon: Globe },
   { id: 'infra', label: '基础配置', icon: Server },
@@ -147,7 +145,6 @@ export function Settings() {
         {activeTab === 'cors' && (
           <CorsTab settingMap={settingMap} onUpdate={handleUpdate} />
         )}
-        {activeTab === 'budget' && <BudgetTab />}
         {activeTab === 'backup' && <BackupTab />}
         {activeTab === 'proxy' && (
           <FieldSetTab category="proxy" settingMap={settingMap} onUpdate={handleUpdate} />

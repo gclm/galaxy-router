@@ -23,6 +23,7 @@ function memberKey(channelId: string, modelName: string) {
 
 export function GroupForm({ group, channels, onSubmit, onCancel }: GroupFormProps) {
   const [name, setName] = useState(group?.name ?? '')
+  const [provider, setProvider] = useState(group?.provider ?? '')
   const [matchRegex, setMatchRegex] = useState(group?.match_regex ?? '')
   const [retryEnabled, setRetryEnabled] = useState(group?.retry_enabled ?? true)
   const [maxRetries, setMaxRetries] = useState(group?.max_retries?.toString() ?? '3')
@@ -115,6 +116,7 @@ export function GroupForm({ group, channels, onSubmit, onCancel }: GroupFormProp
     try {
       const data: CreateGroupRequest = {
         name,
+        provider: provider || undefined,
         match_regex: matchRegex || undefined,
         retry_enabled: retryEnabled,
         max_retries: parseInt(maxRetries) || 3,
@@ -134,7 +136,7 @@ export function GroupForm({ group, channels, onSubmit, onCancel }: GroupFormProp
     <form onSubmit={handleSubmit} className="flex flex-col h-full min-h-0 px-1">
       {/* 顶部：基本信息 */}
       <div className="space-y-3 mb-4">
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
           <div>
             <label className="block text-sm font-medium mb-1">分组名称 *</label>
             <input
@@ -145,6 +147,17 @@ export function GroupForm({ group, channels, onSubmit, onCancel }: GroupFormProp
               placeholder="例如：gpt-4o"
               required
             />
+          </div>
+          <div>
+            <label className="block text-sm font-medium mb-1">厂家 (Provider)</label>
+            <input
+              type="text"
+              value={provider}
+              onChange={(e) => setProvider(e.target.value)}
+              className="input"
+              placeholder="留空自动识别（如 openai）"
+            />
+            <p className="text-xs text-muted-foreground mt-1">根据分组名自动匹配模型信息中的厂家</p>
           </div>
           <div>
             <label className="block text-sm font-medium mb-1">匹配规则 (正则)</label>

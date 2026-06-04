@@ -9,54 +9,62 @@ import {
   FlaskConical,
   Box,
   Settings,
+  Cpu,
+  Activity,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
-const navItems = [
+interface NavItem {
+  title: string
+  href: string
+  icon: React.ComponentType<{ className?: string }>
+}
+
+interface NavSection {
+  label: string
+  items: NavItem[]
+}
+
+const navSections: NavSection[] = [
   {
-    title: '仪表盘',
-    href: '/',
-    icon: LayoutDashboard,
+    label: '',
+    items: [
+      { title: '仪表盘', href: '/', icon: LayoutDashboard },
+    ],
   },
   {
-    title: '渠道管理',
-    href: '/channels',
-    icon: Radio,
+    label: '管理',
+    items: [
+      { title: '渠道管理', href: '/channels', icon: Radio },
+      { title: '分组管理', href: '/groups', icon: Layers },
+      { title: 'API Keys', href: '/api-keys', icon: Key },
+    ],
   },
   {
-    title: '分组管理',
-    href: '/groups',
-    icon: Layers,
+    label: '统计分析',
+    items: [
+      { title: '模型统计', href: '/stats/models', icon: Cpu },
+      { title: '渠道统计', href: '/stats/channels', icon: Activity },
+      { title: 'Key 统计', href: '/api-key-stats', icon: BarChart3 },
+      { title: '请求日志', href: '/logs', icon: ScrollText },
+    ],
   },
   {
-    title: 'API Keys',
-    href: '/api-keys',
-    icon: Key,
-  },
-  {
-    title: 'Key 统计',
-    href: '/api-key-stats',
-    icon: BarChart3,
-  },
-  {
-    title: '请求日志',
-    href: '/logs',
-    icon: ScrollText,
-  },
-  {
-    title: '操练场',
-    href: '/playground',
-    icon: FlaskConical,
-  },
-  {
-    title: '模型信息',
-    href: '/models',
-    icon: Box,
+    label: '工具',
+    items: [
+      { title: '操练场', href: '/playground', icon: FlaskConical },
+      { title: '模型信息', href: '/models', icon: Box },
+    ],
   },
 ]
 
 export function Sidebar({ collapsed }: { collapsed: boolean }) {
   const location = useLocation()
+
+  const isActive = (href: string) =>
+    href === '/'
+      ? location.pathname === '/'
+      : location.pathname.startsWith(href)
 
   return (
     <aside className={`border-r border-sidebar-border bg-sidebar-background flex flex-col transition-all duration-200 ${collapsed ? 'w-16' : 'w-60'}`}>
@@ -68,34 +76,42 @@ export function Sidebar({ collapsed }: { collapsed: boolean }) {
           <span className="text-sm font-bold text-sidebar-foreground whitespace-nowrap">Galaxy Router</span>
         )}
       </div>
-      <nav className="flex-1 space-y-1 p-3">
-        {navItems.map((item) => {
-          const isActive =
-            item.href === '/'
-              ? location.pathname === '/'
-              : location.pathname.startsWith(item.href)
-
-          return (
-            <Link
-              key={item.href}
-              to={item.href}
-              title={collapsed ? item.title : undefined}
-              className={cn(
-                'group flex items-center gap-3 rounded-xl text-sm font-medium transition-all duration-200',
-                collapsed ? 'justify-center px-2 py-2.5' : 'px-3 py-2.5',
-                isActive
-                  ? 'bg-sidebar-accent text-sidebar-primary border-l-2 border-primary'
-                  : 'text-sidebar-foreground/70 hover:bg-sidebar-accent/50 hover:text-sidebar-foreground'
-              )}
-            >
-              <item.icon className={cn('h-4 w-4 shrink-0', isActive && 'text-sidebar-primary')} />
-              {!collapsed && <span className="flex-1">{item.title}</span>}
-              {isActive && !collapsed && (
-                <span className="h-1.5 w-1.5 rounded-full bg-sidebar-primary shadow-sm shadow-sidebar-primary/50" />
-              )}
-            </Link>
-          )
-        })}
+      <nav className="flex-1 overflow-y-auto p-3 space-y-1">
+        {navSections.map((section, si) => (
+          <div key={si}>
+            {section.label && !collapsed && (
+              <div className="px-3 pt-3 pb-1 text-[10px] font-semibold uppercase tracking-wider text-sidebar-foreground/40">
+                {section.label}
+              </div>
+            )}
+            {section.label && collapsed && (
+              <div className="my-2 border-t border-sidebar-border" />
+            )}
+            {section.items.map((item) => {
+              const active = isActive(item.href)
+              return (
+                <Link
+                  key={item.href}
+                  to={item.href}
+                  title={collapsed ? item.title : undefined}
+                  className={cn(
+                    'group flex items-center gap-3 rounded-xl text-sm font-medium transition-all duration-200',
+                    collapsed ? 'justify-center px-2 py-2.5' : 'px-3 py-2.5',
+                    active
+                      ? 'bg-sidebar-accent text-sidebar-primary border-l-2 border-primary'
+                      : 'text-sidebar-foreground/70 hover:bg-sidebar-accent/50 hover:text-sidebar-foreground'
+                  )}
+                >
+                  <item.icon className={cn('h-4 w-4 shrink-0', active && 'text-sidebar-primary')} />
+                  {!collapsed && <span className="flex-1">{item.title}</span>}
+                  {active && !collapsed && (
+                    <span className="h-1.5 w-1.5 rounded-full bg-sidebar-primary shadow-sm shadow-sidebar-primary/50" />
+                  )}
+                </Link>
+              )
+            })}
+          </div>
+        ))}
       </nav>
       <div className="border-t border-sidebar-border p-3">
         <Link

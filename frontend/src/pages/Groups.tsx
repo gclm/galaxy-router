@@ -225,6 +225,7 @@ export function Groups() {
                     {table.sortBy === 'name' && <ArrowUpDown className="h-3 w-3" />}
                   </button>
                 </th>
+                <th className="text-left px-4 py-3 font-medium">厂家</th>
                 <th className="text-left px-4 py-3 font-medium">匹配规则</th>
                 <th className="text-center px-4 py-3 font-medium">渠道数</th>
                 <th className="text-center px-4 py-3 font-medium">重试</th>
@@ -247,7 +248,7 @@ export function Groups() {
                 isEmpty={!table.loading && displayData.items.length === 0}
                 loadingText="加载中..."
                 emptyText={isFiltered ? '没有匹配的分组' : '暂无分组，点击上方按钮添加'}
-                colSpan={7}
+                colSpan={8}
               />
               {!table.loading &&
                 displayData.items.map((group) => (
@@ -256,6 +257,9 @@ export function Groups() {
                     className="border-b last:border-0 hover:bg-muted/30 transition-colors"
                   >
                     <td className="px-4 py-3 font-medium">{group.name}</td>
+                    <td className="px-4 py-3 text-xs text-muted-foreground">
+                      {group.provider || ''}
+                    </td>
                     <td className="px-4 py-3">
                       {group.match_regex ? (
                         <code className="rounded bg-muted px-1.5 py-0.5 text-xs">{group.match_regex}</code>

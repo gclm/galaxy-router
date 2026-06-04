@@ -31,16 +31,31 @@ const themeIcons: Record<Theme, typeof Sun> = {
   system: Monitor,
 }
 
-const pageTitles: Record<string, string> = {
-  '/': '仪表盘',
-  '/channels': '渠道管理',
-  '/groups': '分组管理',
-  '/api-keys': 'API Keys',
-  '/stats': '统计分析',
-  '/logs': '请求日志',
-  '/playground': '操练场',
-  '/models': '模型信息',
-  '/settings': '设置',
+interface PageInfo {
+  title: string
+}
+
+const pageMap: [string, PageInfo][] = [
+  ['/', { title: '仪表盘' }],
+  ['/channels', { title: '渠道管理' }],
+  ['/groups', { title: '分组管理' }],
+  ['/api-keys', { title: 'API Keys' }],
+  ['/stats/models', { title: '模型统计' }],
+  ['/stats/channels', { title: '渠道统计' }],
+  ['/api-key-stats', { title: 'Key 统计' }],
+  ['/logs', { title: '请求日志' }],
+  ['/playground', { title: '操练场' }],
+  ['/models', { title: '模型信息' }],
+  ['/settings', { title: '设置' }],
+]
+
+function getPageInfo(pathname: string): PageInfo {
+  // 精确匹配 / 优先
+  if (pathname === '/') return pageMap[0][1]
+  // 前缀匹配，长的优先
+  const sorted = pageMap.filter(([p]) => p !== '/' && pathname.startsWith(p))
+    .sort((a, b) => b[0].length - a[0].length)
+  return sorted[0]?.[1] ?? { title: '管理面板' }
 }
 
 export function Header({ collapsed, onToggleCollapse }: { collapsed: boolean; onToggleCollapse: () => void }) {
@@ -61,7 +76,7 @@ export function Header({ collapsed, onToggleCollapse }: { collapsed: boolean; on
   }
 
   const ThemeIcon = themeIcons[theme]
-  const title = pageTitles[location.pathname] ?? '管理面板'
+  const { title } = getPageInfo(location.pathname)
 
   return (
     <header className="flex h-16 items-center justify-between border-b px-4">

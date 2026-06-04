@@ -3,7 +3,8 @@ import { useModels, useUpdateModel } from '@/api/query-hooks'
 import type { ModelInfo } from '@/api/model-info'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog'
-import { Search } from 'lucide-react'
+import { PageHeader } from '@/components/common/PageHeader'
+import { FilterBar } from '@/components/common/FilterBar'
 import { toast } from 'sonner'
 
 const CAPABILITY_LABELS: Record<string, string> = {
@@ -57,36 +58,29 @@ export function Models() {
     v != null ? (v >= 1000000 ? `${(v / 1000000).toFixed(1)}M` : v >= 1000 ? `${(v / 1000).toFixed(0)}K` : String(v)) : '-'
 
   return (
-    <div className="max-w-6xl space-y-4">
-      <div className="flex items-center justify-between">
-        <div>
-          <p className="text-sm text-muted-foreground">共 {models.length} 个模型（数据来自 models.dev，可手动覆盖）</p>
-        </div>
-      </div>
+    <div className="space-y-4">
+      <PageHeader subtitle={`共 ${models.length} 个模型（数据来自 models.dev，可手动覆盖）`} />
 
       {/* 筛选栏 */}
-      <div className="flex items-center gap-3">
-        <select
-          value={provider}
-          onChange={(e) => setProvider(e.target.value)}
-          className="input w-auto min-w-[120px]"
-        >
-          <option value="">全部 Provider</option>
-          {providers.map((p) => (
-            <option key={p} value={p}>{p}</option>
-          ))}
-        </select>
-        <div className="relative flex-1 max-w-sm">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-          <input
-            type="text"
-            placeholder="搜索模型..."
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            className="input pl-9"
-          />
-        </div>
-      </div>
+      <FilterBar
+        searchValue={search}
+        onSearchChange={setSearch}
+        searchPlaceholder="搜索模型..."
+        onRefresh={() => {}}
+        loading={isLoading}
+        extra={
+          <select
+            value={provider}
+            onChange={(e) => setProvider(e.target.value)}
+            className="input w-auto min-w-[120px]"
+          >
+            <option value="">全部 Provider</option>
+            {providers.map((p) => (
+              <option key={p} value={p}>{p}</option>
+            ))}
+          </select>
+        }
+      />
 
       {/* 表格 */}
       <div className="rounded-2xl border bg-card overflow-hidden">

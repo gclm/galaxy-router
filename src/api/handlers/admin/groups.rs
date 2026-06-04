@@ -15,6 +15,7 @@ use crate::stats::tz_modifier;
 pub struct Group {
     pub id: String,
     pub name: String,
+    pub provider: String,
     pub match_regex: Option<String>,
     pub retry_enabled: bool,
     pub max_retries: i32,
@@ -50,6 +51,7 @@ pub struct ListGroupsQuery {
 #[derive(Debug, Deserialize)]
 pub struct CreateGroupRequest {
     pub name: String,
+    pub provider: Option<String>,
     pub match_regex: Option<String>,
     pub retry_enabled: Option<bool>,
     pub max_retries: Option<i32>,
@@ -71,6 +73,7 @@ pub struct CreateGroupItemRequest {
 #[derive(Debug, Deserialize)]
 pub struct UpdateGroupRequest {
     pub name: Option<String>,
+    pub provider: Option<String>,
     pub match_regex: Option<String>,
     pub retry_enabled: Option<bool>,
     pub max_retries: Option<i32>,
@@ -126,7 +129,7 @@ pub async fn list(
 
     let tz = tz_modifier(state.timezone_offset);
     let mut data_builder = sqlx::QueryBuilder::new(
-        format!("SELECT id, name, match_regex, retry_enabled, max_retries, first_token_timeout_secs, enabled, datetime(created_at, '{}') as created_at, datetime(updated_at, '{}') as updated_at FROM groups", tz, tz),
+        format!("SELECT id, name, provider, match_regex, retry_enabled, max_retries, first_token_timeout_secs, enabled, datetime(created_at, '{}') as created_at, datetime(updated_at, '{}') as updated_at FROM groups", tz, tz),
     );
     push_where(&mut data_builder, &query);
     data_builder.push(format!(" ORDER BY {} {} ", order_field, order_dir));
@@ -141,14 +144,21 @@ pub async fn list(
         .await
         .map_err(|e| ApiError::internal_error(e.to_string()))?;
 
+    // 批量加载 model_info 的 provider 映射，用于自动识别
+    let provider_map = load_model_provider_map(&state.pool).await?;
+
     use sqlx::Row;
     let mut items_list = Vec::new();
     for row in &rows {
         let id: String = row.get("id");
         let group_items = get_group_items(&state.pool, &id).await?;
+        let stored_provider: String = row.get("provider");
+        let name: String = row.get("name");
+        let provider = resolve_provider(&stored_provider, &name, &provider_map);
         items_list.push(Group {
             id,
-            name: row.get("name"),
+            name,
+            provider,
             match_regex: row.get("match_regex"),
             retry_enabled: row.get("retry_enabled"),
             max_retries: row.get("max_retries"),
@@ -217,12 +227,13 @@ pub async fn create(
 
     sqlx::query(
         r#"
-        INSERT INTO groups (id, name, match_regex, retry_enabled, max_retries, first_token_timeout_secs, enabled)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO groups (id, name, provider, match_regex, retry_enabled, max_retries, first_token_timeout_secs, enabled)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         "#
     )
     .bind(&group_id)
     .bind(&req.name)
+    .bind(req.provider.as_deref().unwrap_or(""))
     .bind(&req.match_regex)
     .bind(req.retry_enabled.unwrap_or(true))
     .bind(req.max_retries.unwrap_or(3))
@@ -315,6 +326,10 @@ pub async fn update(
     if let Some(ref name) = req.name {
         separated.push("name = ");
         separated.push_bind_unseparated(name);
+    }
+    if let Some(ref provider) = req.provider {
+        separated.push("provider = ");
+        separated.push_bind_unseparated(provider);
     }
     if let Some(ref regex) = req.match_regex {
         separated.push("match_regex = ");
@@ -488,8 +503,8 @@ async fn get_group_by_id(
     timezone_offset: i32,
 ) -> Result<Group, (StatusCode, Json<ApiError>)> {
     let tz = tz_modifier(timezone_offset);
-    let result = sqlx::query_as::<_, (String, String, Option<String>, bool, i32, i32, bool, String, String)>(
-        AssertSqlSafe(format!("SELECT id, name, match_regex, retry_enabled, max_retries, first_token_timeout_secs, enabled, datetime(created_at, '{}') as created_at, datetime(updated_at, '{}') as updated_at FROM groups WHERE id = ?", tz, tz).as_str())
+    let result = sqlx::query_as::<_, (String, String, String, Option<String>, bool, i32, i32, bool, String, String)>(
+        AssertSqlSafe(format!("SELECT id, name, provider, match_regex, retry_enabled, max_retries, first_token_timeout_secs, enabled, datetime(created_at, '{}') as created_at, datetime(updated_at, '{}') as updated_at FROM groups WHERE id = ?", tz, tz).as_str())
     )
     .bind(id)
     .fetch_optional(pool)
@@ -499,6 +514,7 @@ async fn get_group_by_id(
     let (
         id,
         name,
+        stored_provider,
         match_regex,
         retry_enabled,
         max_retries,
@@ -510,9 +526,13 @@ async fn get_group_by_id(
 
     let items = get_group_items(pool, &id).await?;
 
+    let provider_map = load_model_provider_map(pool).await?;
+    let provider = resolve_provider(&stored_provider, &name, &provider_map);
+
     Ok(Group {
         id,
         name,
+        provider,
         match_regex,
         retry_enabled,
         max_retries,
@@ -546,4 +566,40 @@ async fn get_group_items(
             weight,
         })
         .collect())
+}
+
+/// 从 model_info 表加载 model -> provider 映射
+async fn load_model_provider_map(
+    pool: &SqlitePool,
+) -> Result<std::collections::HashMap<String, String>, (StatusCode, Json<ApiError>)> {
+    let rows = sqlx::query_as::<_, (String, String)>(
+        "SELECT model, provider FROM model_info WHERE provider != ''",
+    )
+    .fetch_all(pool)
+    .await
+    .map_err(|e| ApiError::internal_error(e.to_string()))?;
+
+    Ok(rows.into_iter().collect())
+}
+
+/// 解析 provider：手动值优先，否则用 group name 匹配 model_info
+fn resolve_provider(
+    stored: &str,
+    group_name: &str,
+    provider_map: &std::collections::HashMap<String, String>,
+) -> String {
+    if !stored.is_empty() {
+        return stored.to_string();
+    }
+    // 用分组名精确匹配 model_info.model
+    if let Some(provider) = provider_map.get(group_name) {
+        return provider.clone();
+    }
+    // 模糊匹配：group name 是 model name 的前缀（如 "gpt-4o" 匹配 "gpt-4o-2024-08-06"）
+    for (model, provider) in provider_map {
+        if model.starts_with(group_name) || group_name.starts_with(model) {
+            return provider.clone();
+        }
+    }
+    String::new()
 }
