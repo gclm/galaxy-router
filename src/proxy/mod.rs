@@ -176,29 +176,37 @@ impl ProxyState {
         };
 
         // 3. 从分组中选择渠道
-        if let Some(group) = group
-            && let Ok(item) = self.select_group_item(&group, exclude_ids).await
-        {
-            let channel = self.get_channel(&item.channel_id).await?;
-            if let Some(endpoint) = find_endpoint(&channel) {
-                if let Some(hash) = session_hash {
-                    self.lb_state.set_sticky_session(hash, &channel.id).await;
+        if let Some(ref group) = group {
+            match self.select_group_item(group, exclude_ids).await {
+                Ok(item) => {
+                    let channel = self.get_channel(&item.channel_id).await?;
+                    if let Some(endpoint) = find_endpoint(&channel) {
+                        if let Some(hash) = session_hash {
+                            self.lb_state.set_sticky_session(hash, &channel.id).await;
+                        }
+                        let target_model = item.model_name.clone();
+                        return Ok(SelectionResult {
+                            channel,
+                            target_model,
+                            endpoint,
+                            group_id: Some(group.id.clone()),
+                        });
+                    }
                 }
-                let target_model = item.model_name.clone();
-                return Ok(SelectionResult {
-                    channel,
-                    target_model,
-                    endpoint,
-                    group_id: Some(group.id),
-                });
+                Err(e) => {
+                    // 分组存在但渠道不可用 → 503（不立即返回，先尝试直接渠道查找）
+                    tracing::warn!("分组 {} 渠道选择失败: {}", group.name, e);
+                }
             }
         }
 
         // 4. 直接查找渠道
-        let channel = self
+        let channel_result = self
             .find_channel_by_model(model, exclude_ids, |ch| find_endpoint(ch).is_some())
-            .await?;
-        if let Some(endpoint) = find_endpoint(&channel) {
+            .await;
+        if let Ok(channel) = channel_result
+            && let Some(endpoint) = find_endpoint(&channel)
+        {
             if let Some(hash) = session_hash {
                 self.lb_state.set_sticky_session(hash, &channel.id).await;
             }
@@ -211,7 +219,18 @@ impl ProxyState {
             });
         }
 
-        Err(ProxyError::NoAvailableChannel("没有可用渠道".to_string()))
+        // 5. 所有路径都失败：区分模型不存在 vs 渠道不可用
+        if group.is_some() {
+            Err(ProxyError::NoAvailableChannel(format!(
+                "模型 {} 的所有渠道不可用或被排除",
+                model
+            )))
+        } else {
+            Err(ProxyError::ModelNotFound(format!(
+                "模型不存在: {}",
+                model
+            )))
+        }
     }
 
     /// 根据名称查找分组
@@ -710,6 +729,7 @@ pub async fn proxy_stream(
                         None,
                         true,
                         user_agent.clone(),
+                        Some(&e),
                     )
                     .await;
                     return Err(e);
@@ -782,6 +802,7 @@ pub async fn proxy_stream(
                         None,
                         true,
                         user_agent.clone(),
+                        Some(&e),
                     )
                     .await;
                     return Err(e);
@@ -803,6 +824,7 @@ pub async fn proxy_stream(
         None,
         true,
         user_agent,
+        None,
     )
     .await;
     Err(last_error

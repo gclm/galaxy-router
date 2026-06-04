@@ -127,6 +127,8 @@ impl crate::stats::recorder::RequestRecord {
         channel_attempts: Vec<crate::stats::recorder::ChannelAttempt>,
         is_stream: bool,
         user_agent: Option<String>,
+        status_code: i32,
+        error_message: &str,
     ) -> Self {
         Self {
             request_id,
@@ -142,8 +144,8 @@ impl crate::stats::recorder::RequestRecord {
             cost: None,
             latency_ms: None,
             ttft_ms: None,
-            status_code: Some(503),
-            error_message: Some("请求未到达上游".to_string()),
+            status_code: Some(status_code),
+            error_message: Some(error_message.to_string()),
             endpoint_type: None,
             request_type: "unknown".to_string(),
             request_content,
@@ -170,6 +172,7 @@ pub(super) async fn save_request_record(
     ttft_ms: Option<i32>,
     is_stream: bool,
     user_agent: Option<String>,
+    select_error: Option<&ProxyError>,
 ) {
     // 构造 attempts 快照（用于记录日志）
     let channel_attempts: Vec<crate::stats::recorder::ChannelAttempt> = attempts
@@ -202,17 +205,29 @@ pub(super) async fn save_request_record(
             is_stream,
             user_agent,
         ),
-        None => crate::stats::recorder::RequestRecord::minimal_for_select_failure(
-            request_id,
-            api_key_id,
-            group_id,
-            model,
-            request_content,
-            response_content,
-            channel_attempts,
-            is_stream,
-            user_agent,
-        ),
+        None => {
+            let (status, msg) = select_error
+                .map(|e| match e {
+                    ProxyError::ModelNotFound(m) => (404, m.clone()),
+                    ProxyError::NoAvailableChannel(m) => (503, m.clone()),
+                    ProxyError::ModelNotSupported(m) => (400, m.clone()),
+                    _ => (502, e.to_string()),
+                })
+                .unwrap_or((503, "请求未到达上游".to_string()));
+            crate::stats::recorder::RequestRecord::minimal_for_select_failure(
+                request_id,
+                api_key_id,
+                group_id,
+                model,
+                request_content,
+                response_content,
+                channel_attempts,
+                is_stream,
+                user_agent,
+                status,
+                &msg,
+            )
+        }
     };
 
     let _ = state.stats_recorder.record_request(record).await;
@@ -416,6 +431,7 @@ pub async fn proxy_request(
                         None,
                         false,
                         user_agent.clone(),
+                        Some(&e),
                     )
                     .await;
                     return Err(e);
@@ -453,6 +469,7 @@ pub async fn proxy_request(
                         None,
                         false,
                         user_agent.clone(),
+                        None,
                     )
                     .await;
                     return Ok(result);
@@ -503,6 +520,7 @@ pub async fn proxy_request(
                         None,
                         false,
                         user_agent.clone(),
+                        Some(&e),
                     )
                     .await;
                     return Err(e);
@@ -524,6 +542,7 @@ pub async fn proxy_request(
         None,
         false,
         user_agent,
+        None,
     )
     .await;
     Err(last_error
@@ -1230,6 +1249,8 @@ mod tests {
             sample_attempts(),
             false,
             Some("ua/1.0".into()),
+            503,
+            "请求未到达上游",
         );
         assert_eq!(record.status_code, Some(503));
         assert_eq!(record.error_message.as_deref(), Some("请求未到达上游"));
@@ -1412,7 +1433,7 @@ mod tests {
             Err(e) => e,
         };
         assert!(
-            matches!(err, ProxyError::NoAvailableChannel(_)),
+            matches!(err, ProxyError::ModelNotFound(_)),
             "got {:?}",
             err
         );
@@ -1427,6 +1448,6 @@ mod tests {
             .fetch_one(&pool)
             .await
             .unwrap();
-        assert_eq!(status, Some(503));
+        assert_eq!(status, Some(404));
     }
 }

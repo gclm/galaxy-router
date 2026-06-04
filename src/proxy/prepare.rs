@@ -200,17 +200,38 @@ pub(super) async fn select_channel_for_proxy(
             Ok(sel)
         }
         Err(e) => {
-            tracing::warn!("精确端点匹配失败: {}, 尝试跨协议匹配", e);
+            match &e {
+                ProxyError::ModelNotFound(msg) => {
+                    tracing::warn!("模型不存在: model={}, {}", model, msg);
+                }
+                ProxyError::NoAvailableChannel(msg) => {
+                    tracing::warn!("精确端点匹配失败: model={}, {}, 尝试跨协议匹配", model, msg);
+                }
+                _ => {
+                    tracing::warn!("渠道选择失败: model={}, {}, 尝试跨协议匹配", model, e);
+                }
+            };
             let result = state
                 .select_channel_for_model_with_exclude(model, session_hash.as_deref(), exclude_ids)
                 .await;
-            if let Ok(ref sel) = result {
-                tracing::debug!(
-                    "跨协议选中: channel={} ({}), endpoint={}",
-                    sel.channel.name,
-                    sel.channel.id,
-                    sel.endpoint.endpoint_type.as_str()
-                );
+            match &result {
+                Ok(sel) => {
+                    tracing::debug!(
+                        "跨协议选中: channel={} ({}), endpoint={}",
+                        sel.channel.name,
+                        sel.channel.id,
+                        sel.endpoint.endpoint_type.as_str()
+                    );
+                }
+                Err(ProxyError::ModelNotFound(msg)) => {
+                    tracing::warn!("模型不存在(跨协议): model={}, {}", model, msg);
+                }
+                Err(ProxyError::NoAvailableChannel(msg)) => {
+                    tracing::warn!("跨协议匹配也无可用渠道: model={}, {}", model, msg);
+                }
+                Err(e) => {
+                    tracing::warn!("跨协议匹配失败: model={}, {}", model, e);
+                }
             }
             result
         }

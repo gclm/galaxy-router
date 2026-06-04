@@ -148,8 +148,8 @@ async fn test_e2e_proxy_route_rejects_disabled_api_key() {
         )
         .await
         .unwrap();
-    // 启用 key 走通认证，进入渠道选择；没有可用渠道返回 503
-    assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+    // 启用 key 走通认证，进入渠道选择；模型不存在返回 404
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
 }
 
 async fn build_test_app_with_key(enabled: bool) -> axum::Router {
@@ -247,8 +247,8 @@ async fn test_e2e_anthropic_messages_with_x_api_key_header() {
         )
         .await
         .unwrap();
-    // 鉴权通过，路由可达；无可用渠道 503
-    assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+    // 鉴权通过，路由可达；模型不存在 404
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
 }
 
 #[tokio::test]
@@ -303,8 +303,8 @@ async fn test_e2e_embeddings_route_reaches_handler() {
         )
         .await
         .unwrap();
-    // 鉴权通过 → 进入 handler → 渠道选择无匹配 → 503
-    assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+    // 鉴权通过 → 进入 handler → 模型不存在 → 404
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
 }
 
 #[tokio::test]
@@ -322,7 +322,7 @@ async fn test_e2e_images_generations_route_reaches_handler() {
         )
         .await
         .unwrap();
-    assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
 }
 
 #[tokio::test]
@@ -340,7 +340,7 @@ async fn test_e2e_responses_route_reaches_handler() {
         )
         .await
         .unwrap();
-    assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
 }
 
 #[tokio::test]
