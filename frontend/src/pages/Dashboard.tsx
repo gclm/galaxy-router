@@ -1,40 +1,23 @@
 import { useState, useMemo, useRef, useCallback, useEffect } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
+import { Link } from 'react-router-dom'
 import type { StatsParams } from '@/api'
-import type { SystemInfo, DailyStats, ModelStats, ChannelStats } from '@/api/types'
-import { useStatsOverview, useSystemInfo, useStatsDaily, useStatsModels, useStatsChannels, useStatsLatency } from '@/api/query-hooks'
+import type { SystemInfo, DailyStats } from '@/api/types'
+import { useStatsOverview, useSystemInfo, useStatsDaily, useStatsLatency } from '@/api/query-hooks'
 import { useAutoRefresh } from '@/hooks/useAutoRefresh'
 import { StatCard, AnimatedNumber, EmptyState } from '@/components/common'
+import { C_BLUE, C_GREEN, C_AMBER, C_VIOLET, tooltipStyle, tickStyle, legendStyle } from '@/components/charts'
+import { fmtTokens } from '@/lib/utils'
 import {
   Activity, MessageSquare, Coins,
   Cpu, Clock, Radio, Layers, Key, Calendar, ChevronDown,
   ShieldCheck, ShieldAlert,
+  BarChart3, ArrowRight,
 } from 'lucide-react'
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer,
-  AreaChart, Area, CartesianGrid, PieChart, Pie, Cell, Legend,
+  AreaChart, Area, CartesianGrid, Legend,
 } from 'recharts'
-
-const C_BLUE = 'var(--color-chart-1)'
-const C_GREEN = 'var(--color-chart-2)'
-const C_AMBER = 'var(--color-chart-3)'
-const C_VIOLET = 'var(--color-chart-4)'
-const C_ROSE = 'var(--color-chart-5)'
-
-const PIE_COLORS = [C_BLUE, C_GREEN, C_AMBER, C_VIOLET, C_ROSE]
-
-const tooltipStyle: React.CSSProperties = {
-  backgroundColor: 'var(--color-popover)',
-  border: '1px solid var(--color-border)',
-  borderRadius: '0.75rem',
-  color: 'var(--color-popover-foreground)',
-  fontSize: 12,
-  boxShadow: '0 4px 16px rgba(0,0,0,0.12)',
-  padding: '8px 12px',
-}
-
-const tickStyle = { fill: 'var(--color-muted-foreground)', fontSize: 11 }
-const legendStyle = { fontSize: 11, color: 'var(--color-foreground)' }
 
 const RANGE_TABS = [
   { label: '今天', days: 1 },
@@ -54,11 +37,6 @@ function formatUptime(secs: number): string {
 
 const fmt = (n: number) => n.toLocaleString()
 const fmtCost = (n: number) => n.toFixed(4)
-const fmtTokens = (n: number) => {
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
-  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`
-  return n.toLocaleString()
-}
 
 export function Dashboard() {
   const qc = useQueryClient()
@@ -79,8 +57,6 @@ export function Dashboard() {
   }, [customMode, customStart, customEnd, activeRange])
 
   const dailyQuery = useStatsDaily(chartParams)
-  const modelsQuery = useStatsModels(chartParams)
-  const channelsQuery = useStatsChannels(chartParams)
   const latencyQuery = useStatsLatency(chartParams)
 
   // Auto-refresh (default 60s, persisted)
@@ -262,15 +238,61 @@ export function Dashboard() {
             <TokenAreaChart data={sortedDaily} loading={dailyQuery.isLoading} />
           </div>
 
-          <div className="grid gap-5 md:grid-cols-2">
-            <ModelDistributionChart models={modelsQuery.data ?? []} loading={modelsQuery.isLoading} />
-            <ChannelBarChart channels={channelsQuery.data ?? []} loading={channelsQuery.isLoading} />
-          </div>
-
-          <CostBarChart data={sortedDaily} loading={dailyQuery.isLoading} />
+          <DailyCostBarChart data={sortedDaily} loading={dailyQuery.isLoading} />
         </div>
       </div>
+
+      {/* 统计分析入口 */}
+      <div className="grid grid-cols-3 gap-3">
+        <StatLinkCard
+          to="/stats/models"
+          icon={Cpu}
+          title="模型统计"
+          description="查看模型分布和成本"
+          color="from-blue-500 to-blue-600"
+        />
+        <StatLinkCard
+          to="/stats/channels"
+          icon={Radio}
+          title="渠道统计"
+          description="查看渠道成功率和负载"
+          color="from-violet-500 to-violet-600"
+        />
+        <StatLinkCard
+          to="/api-key-stats"
+          icon={BarChart3}
+          title="Key 统计"
+          description="查看 Key 用量和成本"
+          color="from-amber-500 to-amber-600"
+        />
+      </div>
     </div>
+  )
+}
+
+/* ---- 跳转入口卡片 ---- */
+
+function StatLinkCard({ to, icon: Icon, title, description, color }: {
+  to: string
+  icon: React.ComponentType<{ className?: string }>
+  title: string
+  description: string
+  color: string
+}) {
+  return (
+    <Link
+      to={to}
+      className="group rounded-xl border bg-card p-4 flex items-center gap-3 hover:bg-accent/50 transition-colors"
+    >
+      <div className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-gradient-to-br ${color} text-white shadow-sm`}>
+        <Icon className="h-4 w-4" />
+      </div>
+      <div className="flex-1 min-w-0">
+        <p className="text-sm font-medium">{title}</p>
+        <p className="text-xs text-muted-foreground mt-0.5">{description}</p>
+      </div>
+      <ArrowRight className="h-4 w-4 text-muted-foreground/50 group-hover:text-foreground transition-colors" />
+    </Link>
   )
 }
 
@@ -451,91 +473,9 @@ function TokenAreaChart({ data, loading }: { data: DailyStats[]; loading?: boole
   )
 }
 
-/* ---- 模型分布（饼图 + 表格） ---- */
-
-function ModelDistributionChart({ models, loading }: { models: ModelStats[]; loading?: boolean }) {
-  return (
-    <div>
-      <h3 className="text-xs font-medium text-muted-foreground mb-3">模型分布</h3>
-      {models.length > 0 ? (
-        <div className="flex gap-4">
-          <div className="w-1/2">
-            <ResponsiveContainer width="100%" height={200}>
-              <PieChart>
-                <Pie data={models.slice(0, 6)} dataKey="request_count" nameKey="model" outerRadius={80} innerRadius={40} labelLine={false} strokeWidth={0}>
-                  {models.slice(0, 6).map((_, i) => (
-                    <Cell key={i} fill={PIE_COLORS[i % PIE_COLORS.length]} />
-                  ))}
-                </Pie>
-                <Tooltip formatter={(v) => fmt(Number(v))} contentStyle={tooltipStyle} labelStyle={{ color: 'var(--color-muted-foreground)' }} />
-              </PieChart>
-            </ResponsiveContainer>
-          </div>
-          <div className="w-1/2 overflow-auto max-h-[200px]">
-            <table className="w-full text-xs">
-              <thead>
-                <tr className="border-b text-muted-foreground">
-                  <th className="text-left py-1 font-medium">#</th>
-                  <th className="text-left py-1 font-medium">模型</th>
-                  <th className="text-right py-1 font-medium">请求</th>
-                  <th className="text-right py-1 font-medium">成本</th>
-                </tr>
-              </thead>
-              <tbody>
-                {models.map((m, i) => (
-                  <tr key={m.model} className="border-b last:border-0">
-                    <td className="py-1 text-muted-foreground">
-                      <span className="inline-block w-2 h-2 rounded-full mr-1" style={{ backgroundColor: PIE_COLORS[i % PIE_COLORS.length] }} />
-                      {i + 1}
-                    </td>
-                    <td className="py-1 font-medium max-w-[140px] truncate" title={m.model}>{m.model}</td>
-                    <td className="py-1 text-right">{fmt(m.request_count)}</td>
-                    <td className="py-1 text-right">${fmtCost(m.total_cost)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      ) : (
-        <EmptyState loading={loading} isEmpty={!loading} emptyText="暂无模型数据" loadingText="加载图表数据..." standalone />
-      )}
-    </div>
-  )
-}
-
-/* ---- 渠道请求量（柱状图） ---- */
-
-function ChannelBarChart({ channels, loading }: { channels: ChannelStats[]; loading?: boolean }) {
-  return (
-    <div>
-      <h3 className="text-xs font-medium text-muted-foreground mb-3">渠道请求量</h3>
-      {channels.length > 0 ? (
-        <ResponsiveContainer width="100%" height={200}>
-          <BarChart data={channels.slice(0, 8)}>
-            <defs>
-              <linearGradient id="grad-bar-channel" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="0%" stopColor={C_GREEN} stopOpacity={0.9} />
-                <stop offset="100%" stopColor={C_GREEN} stopOpacity={0.5} />
-              </linearGradient>
-            </defs>
-            <CartesianGrid strokeDasharray="3 3" stroke="var(--color-border)" vertical={false} />
-            <XAxis dataKey="channel_name" tick={tickStyle} axisLine={false} tickLine={false} />
-            <YAxis tick={tickStyle} axisLine={false} tickLine={false} />
-            <Tooltip formatter={(v) => fmt(Number(v))} contentStyle={tooltipStyle} labelStyle={{ color: 'var(--color-muted-foreground)' }} />
-            <Bar dataKey="request_count" fill="url(#grad-bar-channel)" radius={[4, 4, 0, 0]} />
-          </BarChart>
-        </ResponsiveContainer>
-      ) : (
-        <EmptyState loading={loading} isEmpty={!loading} emptyText="暂无渠道数据" loadingText="加载图表数据..." standalone />
-      )}
-    </div>
-  )
-}
-
 /* ---- 每日成本（柱状图） ---- */
 
-function CostBarChart({ data, loading }: { data: DailyStats[]; loading?: boolean }) {
+function DailyCostBarChart({ data, loading }: { data: DailyStats[]; loading?: boolean }) {
   return (
     <div>
       <h3 className="text-xs font-medium text-muted-foreground mb-3">每日成本</h3>

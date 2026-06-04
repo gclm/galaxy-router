@@ -19,31 +19,35 @@ export function ViewToggle({ showChart, showTable, onChartToggle, onTableToggle 
     onTableToggle()
   }
 
+  const base = 'inline-flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-medium transition-all duration-150'
+
   return (
-    <div className="inline-flex rounded-lg border bg-background p-0.5">
+    <div className="inline-flex items-center gap-2">
       <button
         onClick={handleChart}
         className={cn(
-          'inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-colors',
+          base,
           showChart
-            ? 'bg-primary text-primary-foreground shadow-sm'
-            : 'text-muted-foreground hover:text-foreground',
+            ? 'border-primary/30 bg-primary/10 text-primary shadow-sm'
+            : 'border-border bg-background text-muted-foreground hover:text-foreground hover:border-muted-foreground/30',
         )}
       >
-        <BarChart3 className="h-3.5 w-3.5" />
+        <BarChart3 className={cn('h-3.5 w-3.5', showChart && 'text-primary')} />
         图表
+        {showChart && <span className="h-1 w-1 rounded-full bg-primary" />}
       </button>
       <button
         onClick={handleTable}
         className={cn(
-          'inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-colors',
+          base,
           showTable
-            ? 'bg-primary text-primary-foreground shadow-sm'
-            : 'text-muted-foreground hover:text-foreground',
+            ? 'border-primary/30 bg-primary/10 text-primary shadow-sm'
+            : 'border-border bg-background text-muted-foreground hover:text-foreground hover:border-muted-foreground/30',
         )}
       >
-        <Table2 className="h-3.5 w-3.5" />
+        <Table2 className={cn('h-3.5 w-3.5', showTable && 'text-primary')} />
         表格
+        {showTable && <span className="h-1 w-1 rounded-full bg-primary" />}
       </button>
     </div>
   )

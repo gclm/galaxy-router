@@ -1,25 +1,31 @@
-import { useState } from 'react'
+import { useState, useMemo } from 'react'
 import { useStatsApiKeys } from '@/api/query-hooks'
-import { PageHeader } from '@/components/common/PageHeader'
-import { FilterBar } from '@/components/common/FilterBar'
-import { EmptyState } from '@/components/common/EmptyState'
+import { PageHeader, FilterBar, EmptyState, SummaryCard, ViewToggle } from '@/components/common'
+import { DistributionPieChart, CostBarChart } from '@/components/charts'
 import { formatNumber, formatCost } from '@/lib/utils'
 
 export function ApiKeyStats() {
+  const [showChart, setShowChart] = useState(true)
+  const [showTable, setShowTable] = useState(true)
   const [search, setSearch] = useState('')
   const [days, setDays] = useState(7)
 
   const { data, isLoading } = useStatsApiKeys(days)
   const stats = data ?? []
 
-  const filtered = search
-    ? stats.filter((s) =>
-        s.api_key_name.toLowerCase().includes(search.toLowerCase()) ||
-        s.api_key_id.toLowerCase().includes(search.toLowerCase()),
-      )
-    : stats
+  const chartData = useMemo(() =>
+    stats.map((s) => ({ name: s.api_key_name, value: s.request_count, cost: s.total_cost }))
+  , [stats])
 
-  const totals = filtered.reduce(
+  const filtered = useMemo(() => {
+    if (!showTable || !search) return stats
+    return stats.filter((s) =>
+      s.api_key_name.toLowerCase().includes(search.toLowerCase()) ||
+      s.api_key_id.toLowerCase().includes(search.toLowerCase()),
+    )
+  }, [stats, search, showTable])
+
+  const totals = stats.reduce(
     (acc, s) => ({
       requests: acc.requests + s.request_count,
       success: acc.success + s.success_count,
@@ -50,87 +56,100 @@ export function ApiKeyStats() {
         <SummaryCard label="总成本" value={totals.cost > 0 ? `$${totals.cost.toFixed(4)}` : '-'} />
       </div>
 
-      {/* 筛选栏 */}
-      <FilterBar
-        searchValue={search}
-        onSearchChange={setSearch}
-        searchPlaceholder="搜索 Key 名称..."
-        onRefresh={() => {}}
-        loading={isLoading}
-        extra={
-          <select
-            value={days}
-            onChange={(e) => setDays(Number(e.target.value))}
-            className="input w-auto min-w-[120px]"
-          >
-            <option value={1}>最近 1 天</option>
-            <option value={7}>最近 7 天</option>
-            <option value={30}>最近 30 天</option>
-            <option value={90}>最近 90 天</option>
-          </select>
-        }
-      />
-
-      {/* 表格 */}
-      <div className="rounded-2xl border bg-card overflow-hidden">
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="border-b bg-muted/50">
-                <th className="text-left px-4 py-3 font-medium">Key 名称</th>
-                <th className="text-right px-4 py-3 font-medium">请求量</th>
-                <th className="text-right px-4 py-3 font-medium">成功</th>
-                <th className="text-right px-4 py-3 font-medium">失败</th>
-                <th className="text-right px-4 py-3 font-medium">成功率</th>
-                <th className="text-right px-4 py-3 font-medium">输入 Token</th>
-                <th className="text-right px-4 py-3 font-medium">输出 Token</th>
-                <th className="text-right px-4 py-3 font-medium">成本</th>
-              </tr>
-            </thead>
-            <tbody>
-              <EmptyState
-                loading={isLoading}
-                isEmpty={!isLoading && filtered.length === 0}
-                loadingText="加载中..."
-                emptyText={search ? '没有匹配的 Key' : '暂无统计数据'}
-                colSpan={8}
-              />
-              {!isLoading && filtered.map((row) => {
-                const rate = row.request_count > 0
-                  ? ((row.success_count / row.request_count) * 100).toFixed(1)
-                  : '-'
-                return (
-                  <tr
-                    key={row.api_key_id}
-                    className="border-b last:border-0 hover:bg-muted/30 transition-colors"
-                  >
-                    <td className="px-4 py-3">
-                      <p className="font-medium">{row.api_key_name || '未知'}</p>
-                      <p className="text-xs text-muted-foreground font-mono">{row.api_key_id.slice(0, 12)}...</p>
-                    </td>
-                    <td className="px-4 py-3 text-right tabular-nums">{formatNumber(row.request_count)}</td>
-                    <td className="px-4 py-3 text-right tabular-nums text-green-600">{formatNumber(row.success_count)}</td>
-                    <td className="px-4 py-3 text-right tabular-nums text-destructive">{formatNumber(row.failure_count)}</td>
-                    <td className="px-4 py-3 text-right tabular-nums">{rate}%</td>
-                    <td className="px-4 py-3 text-right tabular-nums text-muted-foreground">{formatNumber(row.input_tokens)}</td>
-                    <td className="px-4 py-3 text-right tabular-nums text-muted-foreground">{formatNumber(row.output_tokens)}</td>
-                    <td className="px-4 py-3 text-right tabular-nums">{formatCost(row.total_cost)}</td>
-                  </tr>
-                )
-              })}
-            </tbody>
-          </table>
-        </div>
+      {/* 工具栏 */}
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <ViewToggle
+          showChart={showChart}
+          showTable={showTable}
+          onChartToggle={() => setShowChart((v) => !v)}
+          onTableToggle={() => setShowTable((v) => !v)}
+        />
+        <FilterBar
+          searchValue={search}
+          onSearchChange={setSearch}
+          searchPlaceholder="搜索 Key 名称..."
+          onRefresh={() => {}}
+          loading={isLoading}
+          extra={
+            <select
+              value={days}
+              onChange={(e) => setDays(Number(e.target.value))}
+              className="input w-auto min-w-[120px]"
+            >
+              <option value={1}>最近 1 天</option>
+              <option value={7}>最近 7 天</option>
+              <option value={30}>最近 30 天</option>
+              <option value={90}>最近 90 天</option>
+            </select>
+          }
+        />
       </div>
-    </div>
-  )
-}
 
-function SummaryCard({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="rounded-xl bg-muted/30 border border-border p-4">
-      <p className="text-xs font-medium text-muted-foreground">{label}</p>
-      <p className="text-lg font-bold tracking-tight mt-1">{value}</p>
+      {/* 图表区域 */}
+      {showChart && (
+        <div className="grid gap-5 md:grid-cols-2">
+          <div className="rounded-2xl border bg-card p-5">
+            <DistributionPieChart data={chartData} loading={isLoading} />
+          </div>
+          <div className="rounded-2xl border bg-card p-5">
+            <CostBarChart data={chartData} title="Key 成本 Top 8" loading={isLoading} />
+          </div>
+        </div>
+      )}
+
+      {/* 表格区域 */}
+      {showTable && (
+        <div className="rounded-2xl border bg-card overflow-hidden">
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b bg-muted/50">
+                  <th className="text-left px-4 py-3 font-medium">Key 名称</th>
+                  <th className="text-right px-4 py-3 font-medium">请求量</th>
+                  <th className="text-right px-4 py-3 font-medium">成功</th>
+                  <th className="text-right px-4 py-3 font-medium">失败</th>
+                  <th className="text-right px-4 py-3 font-medium">成功率</th>
+                  <th className="text-right px-4 py-3 font-medium">输入 Token</th>
+                  <th className="text-right px-4 py-3 font-medium">输出 Token</th>
+                  <th className="text-right px-4 py-3 font-medium">成本</th>
+                </tr>
+              </thead>
+              <tbody>
+                <EmptyState
+                  loading={isLoading}
+                  isEmpty={!isLoading && filtered.length === 0}
+                  loadingText="加载中..."
+                  emptyText={search ? '没有匹配的 Key' : '暂无统计数据'}
+                  colSpan={8}
+                />
+                {!isLoading && filtered.map((row) => {
+                  const rate = row.request_count > 0
+                    ? ((row.success_count / row.request_count) * 100).toFixed(1)
+                    : '-'
+                  return (
+                    <tr
+                      key={row.api_key_id}
+                      className="border-b last:border-0 hover:bg-muted/30 transition-colors"
+                    >
+                      <td className="px-4 py-3">
+                        <p className="font-medium">{row.api_key_name || '未知'}</p>
+                        <p className="text-xs text-muted-foreground font-mono">{row.api_key_id.slice(0, 12)}...</p>
+                      </td>
+                      <td className="px-4 py-3 text-right tabular-nums">{formatNumber(row.request_count)}</td>
+                      <td className="px-4 py-3 text-right tabular-nums text-green-600">{formatNumber(row.success_count)}</td>
+                      <td className="px-4 py-3 text-right tabular-nums text-destructive">{formatNumber(row.failure_count)}</td>
+                      <td className="px-4 py-3 text-right tabular-nums">{rate}%</td>
+                      <td className="px-4 py-3 text-right tabular-nums text-muted-foreground">{formatNumber(row.input_tokens)}</td>
+                      <td className="px-4 py-3 text-right tabular-nums text-muted-foreground">{formatNumber(row.output_tokens)}</td>
+                      <td className="px-4 py-3 text-right tabular-nums">{formatCost(row.total_cost)}</td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

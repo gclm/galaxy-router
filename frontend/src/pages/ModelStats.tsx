@@ -7,7 +7,7 @@ import { ArrowUpDown } from 'lucide-react'
 
 export function ModelStats() {
   const [showChart, setShowChart] = useState(true)
-  const [showTable, setShowTable] = useState(false)
+  const [showTable, setShowTable] = useState(true)
   const [search, setSearch] = useState('')
   const [days, setDays] = useState(7)
   const [sortBy, setSortBy] = useState<'request_count' | 'total_cost' | 'input_tokens' | 'output_tokens'>('request_count')
