@@ -4,6 +4,7 @@ import {
   Radio,
   Layers,
   Key,
+  BarChart3,
   ScrollText,
   FlaskConical,
   Box,
@@ -31,6 +32,11 @@ const navItems = [
     title: 'API Keys',
     href: '/api-keys',
     icon: Key,
+  },
+  {
+    title: 'Key 统计',
+    href: '/api-key-stats',
+    icon: BarChart3,
   },
   {
     title: '请求日志',
@@ -78,7 +84,7 @@ export function Sidebar({ collapsed }: { collapsed: boolean }) {
                 'group flex items-center gap-3 rounded-xl text-sm font-medium transition-all duration-200',
                 collapsed ? 'justify-center px-2 py-2.5' : 'px-3 py-2.5',
                 isActive
-                  ? 'bg-sidebar-accent text-sidebar-primary'
+                  ? 'bg-sidebar-accent text-sidebar-primary border-l-2 border-primary'
                   : 'text-sidebar-foreground/70 hover:bg-sidebar-accent/50 hover:text-sidebar-foreground'
               )}
             >
@@ -99,7 +105,7 @@ export function Sidebar({ collapsed }: { collapsed: boolean }) {
             'flex items-center gap-3 rounded-xl text-sm font-medium transition-all duration-200',
             collapsed ? 'justify-center px-2 py-2.5' : 'px-3 py-2.5',
             location.pathname === '/settings'
-              ? 'bg-sidebar-accent text-sidebar-primary'
+              ? 'bg-sidebar-accent text-sidebar-primary border-l-2 border-primary'
               : 'text-sidebar-foreground/70 hover:bg-sidebar-accent/50 hover:text-sidebar-foreground'
           )}
         >

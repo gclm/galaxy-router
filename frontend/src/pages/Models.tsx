@@ -1,9 +1,10 @@
-import { useEffect, useMemo, useState } from 'react'
-import { modelInfoApi } from '@/api'
+import { useMemo, useState } from 'react'
+import { useModels, useUpdateModel } from '@/api/query-hooks'
 import type { ModelInfo } from '@/api/model-info'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog'
 import { Search } from 'lucide-react'
+import { toast } from 'sonner'
 
 const CAPABILITY_LABELS: Record<string, string> = {
   supports_function_calling: '函数调用',
@@ -26,15 +27,11 @@ const CAPABILITY_COLORS: Record<string, string> = {
 }
 
 export function Models() {
-  const [models, setModels] = useState<ModelInfo[]>([])
+  const { data: models = [], isLoading } = useModels()
+  const updateModel = useUpdateModel()
   const [search, setSearch] = useState('')
   const [provider, setProvider] = useState('')
   const [editing, setEditing] = useState<ModelInfo | null>(null)
-  const [loading, setLoading] = useState(true)
-
-  useEffect(() => {
-    modelInfoApi.list().then(setModels).catch(() => {}).finally(() => setLoading(false))
-  }, [])
 
   const providers = useMemo(() => [...new Set(models.map((m) => m.provider))].sort(), [models])
   const filtered = useMemo(() => models.filter((m) => {
@@ -44,17 +41,13 @@ export function Models() {
   }), [models, provider, search])
 
   const handleSave = async (info: ModelInfo) => {
-    await modelInfoApi.update(info)
-    setModels((prev) => {
-      const idx = prev.findIndex((x) => x.model === info.model)
-      if (idx >= 0) {
-        const next = [...prev]
-        next[idx] = info
-        return next
-      }
-      return [...prev, info].sort((a, b) => a.model.localeCompare(b.model))
-    })
-    setEditing(null)
+    try {
+      await updateModel.mutateAsync(info)
+      toast.success('保存成功')
+      setEditing(null)
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : '保存失败')
+    }
   }
 
   const fmt = (v: number | null | undefined, prefix = '$') =>
@@ -113,7 +106,7 @@ export function Models() {
               </tr>
             </thead>
             <tbody>
-              {loading ? (
+              {isLoading ? (
                 <tr>
                   <td colSpan={9} className="text-center py-12 text-muted-foreground">加载中...</td>
                 </tr>

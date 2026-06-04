@@ -174,6 +174,7 @@ pub struct ChannelState {
     pub pool: SqlitePool,
     pub cache: crate::proxy::ProxyCache,
     pub http_client: reqwest::Client,
+    pub timezone_offset: i32,
 }
 
 /// 测试渠道请求

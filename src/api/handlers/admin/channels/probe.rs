@@ -37,7 +37,7 @@ pub async fn test_channel(
         ))
     })?;
 
-    let channel = get_channel_by_id(&state.pool, &id).await?;
+    let channel = get_channel_by_id(&state.pool, &id, state.timezone_offset).await?;
 
     let api_key = channel
         .api_keys

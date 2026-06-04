@@ -1,6 +1,10 @@
-import { useEffect, useState, useMemo, useRef } from 'react'
-import { apiClient, statsApi, type StatsParams } from '@/api'
-import type { StatsOverview, SystemInfo, DailyStats, ModelStats, ChannelStats } from '@/api/types'
+import { useState, useMemo, useRef, useCallback, useEffect } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
+import type { StatsParams } from '@/api'
+import type { SystemInfo, DailyStats, ModelStats, ChannelStats } from '@/api/types'
+import { useStatsOverview, useSystemInfo, useStatsDaily, useStatsModels, useStatsChannels, useStatsLatency } from '@/api/query-hooks'
+import { useAutoRefresh } from '@/hooks/useAutoRefresh'
+import { StatCard, AnimatedNumber, EmptyState } from '@/components/common'
 import {
   Activity, MessageSquare, Coins,
   Cpu, Clock, Radio, Layers, Key, Calendar, ChevronDown,
@@ -57,12 +61,10 @@ const fmtTokens = (n: number) => {
 }
 
 export function Dashboard() {
-  const [systemInfo, setSystemInfo] = useState<SystemInfo | null>(null)
-  const [overview, setOverview] = useState<StatsOverview | null>(null)
-  const [daily, setDaily] = useState<DailyStats[]>([])
-  const [models, setModels] = useState<ModelStats[]>([])
-  const [channels, setChannels] = useState<ChannelStats[]>([])
-  const [loading, setLoading] = useState(true)
+  const qc = useQueryClient()
+
+  const overviewQuery = useStatsOverview()
+  const systemQuery = useSystemInfo()
 
   const [activeRange, setActiveRange] = useState(1)
   const [customStart, setCustomStart] = useState('')
@@ -76,43 +78,22 @@ export function Dashboard() {
     return { days: activeRange }
   }, [customMode, customStart, customEnd, activeRange])
 
-  useEffect(() => {
-    Promise.all([
-      statsApi.overview().catch(() => null),
-      apiClient.get<SystemInfo>('/system-info').catch(() => null),
-    ]).then(([stats, sys]) => {
-      if (stats) setOverview(stats)
-      if (sys) setSystemInfo(sys as SystemInfo)
-    })
-  }, [])
+  const dailyQuery = useStatsDaily(chartParams)
+  const modelsQuery = useStatsModels(chartParams)
+  const channelsQuery = useStatsChannels(chartParams)
+  const latencyQuery = useStatsLatency(chartParams)
 
-  useEffect(() => {
-    const controller = new AbortController()
-    const run = async () => {
-      const [d, m, c, lat] = await Promise.all([
-        statsApi.daily(chartParams).catch<DailyStats[]>(() => []),
-        statsApi.models(chartParams).catch<ModelStats[]>(() => []),
-        statsApi.channels(chartParams).catch<ChannelStats[]>(() => []),
-        statsApi.latency(chartParams).catch(() => null),
-      ])
-      if (!controller.signal.aborted) {
-        setDaily(d)
-        setModels(m)
-        setChannels(c)
-        if (lat) {
-          setOverview(prev => prev ? {
-            ...prev,
-            latency_p50: lat.p50_latency_ms ?? undefined,
-            latency_p95: lat.p95_latency_ms ?? undefined,
-            latency_p99: lat.p99_latency_ms ?? undefined,
-          } : prev)
-        }
-        setLoading(false)
-      }
-    }
-    run()
-    return () => { controller.abort() }
-  }, [chartParams])
+  // Auto-refresh (default 60s, persisted)
+  const refetchAll = useCallback(() => {
+    void qc.invalidateQueries({ queryKey: ['stats'] })
+    void qc.invalidateQueries({ queryKey: ['system-info'] })
+  }, [qc])
+
+  useAutoRefresh({
+    refetch: refetchAll,
+    defaultInterval: 60,
+    storageKey: 'dashboard-refresh',
+  })
 
   const handleRangeTab = (days: number) => {
     setCustomMode(false)
@@ -124,8 +105,10 @@ export function Dashboard() {
   }
 
   const sortedDaily = useMemo(() =>
-    [...daily].sort((a, b) => a.date.localeCompare(b.date))
-  , [daily])
+    [...(dailyQuery.data ?? [])].sort((a, b) => a.date.localeCompare(b.date))
+  , [dailyQuery.data])
+
+  const daily = dailyQuery.data ?? []
 
   const summary = useMemo(() => {
     const requests = daily.reduce((s, d) => s + d.request_count, 0)
@@ -140,15 +123,30 @@ export function Dashboard() {
     return { requests, success, failure, inputTokens, outputTokens, cacheReadTokens, cacheCreationTokens, cost, successRate }
   }, [daily])
 
-  if (loading) {
-    return <div className="flex items-center justify-center h-full text-muted-foreground">加载中...</div>
-  }
+  const latency = latencyQuery.data
+  const p50 = latency?.p50_latency_ms ?? 0
+  const p95 = latency?.p95_latency_ms ?? 0
+  const p99 = latency?.p99_latency_ms ?? 0
 
-  const total = overview
-    ? { requests: overview.total_requests, tokens: overview.total_input_tokens + overview.total_output_tokens, cost: overview.total_cost }
+  const total = overviewQuery.data
+    ? { requests: overviewQuery.data.total_requests, tokens: overviewQuery.data.total_input_tokens + overviewQuery.data.total_output_tokens, cost: overviewQuery.data.total_cost }
     : { requests: 0, tokens: 0, cost: 0 }
 
   const rangeLabel = customMode ? `${customStart} ~ ${customEnd}` : RANGE_TABS.find(t => t.days === activeRange)?.label ?? ''
+
+  // Initial page load spinner
+  if (overviewQuery.isLoading) {
+    return (
+      <div className="flex items-center justify-center h-full">
+        <div className="flex items-center gap-2 text-muted-foreground">
+          <div className="h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent" />
+          <span>加载中...</span>
+        </div>
+      </div>
+    )
+  }
+
+  const systemInfo = systemQuery.data as SystemInfo | undefined
 
   return (
     <div className="space-y-4">
@@ -201,90 +199,75 @@ export function Dashboard() {
 
         {/* KPI 卡片 */}
         <div className="grid grid-cols-2 md:grid-cols-5 gap-4 px-5 pt-4">
-          <div className="rounded-xl bg-muted/40 p-3.5">
-            <div className="flex items-center gap-2 mb-2">
-              <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-gradient-to-br from-blue-500 to-blue-600 text-white shadow-sm">
-                <Activity className="h-3.5 w-3.5" />
-              </div>
-              <span className="text-xs text-muted-foreground">请求数</span>
-            </div>
-            <p className="text-xl font-bold tracking-tight">{fmt(summary.requests)}</p>
-            <p className="text-[11px] text-muted-foreground/70 mt-0.5">
-              成功 {fmt(summary.success)} / 失败 {fmt(summary.failure)}
-            </p>
-          </div>
-
-          <div className="rounded-xl bg-muted/40 p-3.5">
-            <div className="flex items-center gap-2 mb-2">
-              <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-gradient-to-br from-violet-500 to-violet-600 text-white shadow-sm">
-                <MessageSquare className="h-3.5 w-3.5" />
-              </div>
-              <span className="text-xs text-muted-foreground">Token 用量</span>
-            </div>
-            <p className="text-xl font-bold tracking-tight">{fmtTokens(summary.inputTokens + summary.outputTokens)}</p>
-            <p className="text-[11px] text-muted-foreground/70 mt-0.5">
-              入 {fmtTokens(summary.inputTokens)} · 出 {fmtTokens(summary.outputTokens)}
-              {(summary.cacheReadTokens + summary.cacheCreationTokens) > 0 && (
-                <> · 缓存读 {fmtTokens(summary.cacheReadTokens)} · 缓存写 {fmtTokens(summary.cacheCreationTokens)}</>
-              )}
-            </p>
-          </div>
-
-          <div className="rounded-xl bg-muted/40 p-3.5">
-            <div className="flex items-center gap-2 mb-2">
-              <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-gradient-to-br from-amber-500 to-amber-600 text-white shadow-sm">
-                <Coins className="h-3.5 w-3.5" />
-              </div>
-              <span className="text-xs text-muted-foreground">成本</span>
-            </div>
-            <p className="text-xl font-bold tracking-tight">${fmtCost(summary.cost)}</p>
-            <p className="text-[11px] text-muted-foreground/70 mt-0.5">
-              累计 ${fmtCost(total.cost)}
-            </p>
-          </div>
-
-          <div className="rounded-xl bg-muted/40 p-3.5">
-            <div className="flex items-center gap-2 mb-2">
-              <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-gradient-to-br from-emerald-500 to-emerald-600 text-white shadow-sm">
-                {summary.successRate >= 95 ? <ShieldCheck className="h-3.5 w-3.5" /> : <ShieldAlert className="h-3.5 w-3.5" />}
-              </div>
-              <span className="text-xs text-muted-foreground">成功率</span>
-            </div>
-            <p className="text-xl font-bold tracking-tight">{summary.successRate.toFixed(1)}%</p>
-            <p className="text-[11px] text-muted-foreground/70 mt-0.5">
-              {rangeLabel} · 累计 {fmt(total.requests)} 次
-            </p>
-          </div>
-
-          <div className="rounded-xl bg-muted/40 p-3.5">
-            <div className="flex items-center gap-2 mb-2">
-              <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-gradient-to-br from-rose-500 to-rose-600 text-white shadow-sm">
-                <Clock className="h-3.5 w-3.5" />
-              </div>
-              <span className="text-xs text-muted-foreground">延迟</span>
-            </div>
-            <p className="text-xl font-bold tracking-tight">
-              {overview?.latency_p50 != null ? `${overview.latency_p50.toFixed(0)}ms` : '-'}
-            </p>
-            <p className="text-[11px] text-muted-foreground/70 mt-0.5">
-              P50 {overview?.latency_p50 != null ? `${overview.latency_p50.toFixed(0)}` : '-'} · P95 {overview?.latency_p95 != null ? `${overview.latency_p95.toFixed(0)}` : '-'} · P99 {overview?.latency_p99 != null ? `${overview.latency_p99.toFixed(0)}` : '-'}
-            </p>
-          </div>
+          <StatCard
+            label="请求数"
+            value={<AnimatedNumber value={summary.requests} format={fmt} />}
+            subtitle={
+              <>
+                成功 <AnimatedNumber value={summary.success} format={fmt} /> / 失败 <AnimatedNumber value={summary.failure} format={fmt} />
+              </>
+            }
+            icon={Activity}
+            gradient="from-blue-500 to-blue-600"
+          />
+          <StatCard
+            label="Token 用量"
+            value={fmtTokens(summary.inputTokens + summary.outputTokens)}
+            subtitle={
+              <>
+                入 {fmtTokens(summary.inputTokens)} · 出 {fmtTokens(summary.outputTokens)}
+                {(summary.cacheReadTokens + summary.cacheCreationTokens) > 0 && (
+                  <> · 缓存读 {fmtTokens(summary.cacheReadTokens)} · 缓存写 {fmtTokens(summary.cacheCreationTokens)}</>
+                )}
+              </>
+            }
+            icon={MessageSquare}
+            gradient="from-violet-500 to-violet-600"
+          />
+          <StatCard
+            label="成本"
+            value={`$${fmtCost(summary.cost)}`}
+            subtitle={<>累计 ${`$${fmtCost(total.cost)}`}</>}
+            icon={Coins}
+            gradient="from-amber-500 to-amber-600"
+          />
+          <StatCard
+            label="成功率"
+            value={`${summary.successRate.toFixed(1)}%`}
+            subtitle={
+              <>
+                {rangeLabel} · 累计 <AnimatedNumber value={total.requests} format={fmt} /> 次
+              </>
+            }
+            icon={summary.successRate >= 95 ? ShieldCheck : ShieldAlert}
+            gradient="from-emerald-500 to-emerald-600"
+          />
+          <StatCard
+            label="延迟"
+            value={`${p50.toFixed(0)}ms`}
+            subtitle={
+              <>
+                P50 {p50.toFixed(0)}ms · P95 {p95.toFixed(0)}ms · P99 {p99.toFixed(0)}ms
+              </>
+            }
+            icon={Clock}
+            gradient="from-rose-500 to-rose-600"
+          />
         </div>
 
         {/* 图表区域 */}
         <div className="p-5 space-y-5">
           <div className="grid gap-5 md:grid-cols-2">
-            <AreaChartCard title="请求趋势" data={sortedDaily} dataKey="request_count" stroke={C_BLUE} emptyText="暂无请求数据" />
-            <TokenAreaChart data={sortedDaily} />
+            <AreaChartCard title="请求趋势" data={sortedDaily} dataKey="request_count" stroke={C_BLUE} emptyText="暂无请求数据" loading={dailyQuery.isLoading} />
+            <TokenAreaChart data={sortedDaily} loading={dailyQuery.isLoading} />
           </div>
 
           <div className="grid gap-5 md:grid-cols-2">
-            <ModelDistributionChart models={models} />
-            <ChannelBarChart channels={channels} />
+            <ModelDistributionChart models={modelsQuery.data ?? []} loading={modelsQuery.isLoading} />
+            <ChannelBarChart channels={channelsQuery.data ?? []} loading={channelsQuery.isLoading} />
           </div>
 
-          <CostBarChart data={sortedDaily} />
+          <CostBarChart data={sortedDaily} loading={dailyQuery.isLoading} />
         </div>
       </div>
     </div>
@@ -390,12 +373,13 @@ function RangePicker({
 
 /* ---- 通用渐变面积图 ---- */
 
-function AreaChartCard({ title, data, dataKey, stroke, emptyText }: {
+function AreaChartCard({ title, data, dataKey, stroke, emptyText, loading }: {
   title: string
   data: DailyStats[]
   dataKey: string
   stroke: string
   emptyText: string
+  loading?: boolean
 }) {
   const id = dataKey.replace(/_/g, '-')
   return (
@@ -418,7 +402,7 @@ function AreaChartCard({ title, data, dataKey, stroke, emptyText }: {
           </AreaChart>
         </ResponsiveContainer>
       ) : (
-        <div className="flex h-[220px] items-center justify-center text-sm text-muted-foreground">{emptyText}</div>
+        <EmptyState loading={loading} isEmpty={!loading} emptyText={emptyText} loadingText="加载图表数据..." standalone />
       )}
     </div>
   )
@@ -426,7 +410,7 @@ function AreaChartCard({ title, data, dataKey, stroke, emptyText }: {
 
 /* ---- Token 趋势（多系列面积图） ---- */
 
-function TokenAreaChart({ data }: { data: DailyStats[] }) {
+function TokenAreaChart({ data, loading }: { data: DailyStats[]; loading?: boolean }) {
   const hasCache = data.some(d => (d.cache_read_tokens + d.cache_creation_tokens) > 0)
 
   return (
@@ -461,7 +445,7 @@ function TokenAreaChart({ data }: { data: DailyStats[] }) {
           </AreaChart>
         </ResponsiveContainer>
       ) : (
-        <div className="flex h-[220px] items-center justify-center text-sm text-muted-foreground">暂无 Token 数据</div>
+        <EmptyState loading={loading} isEmpty={!loading} emptyText="暂无 Token 数据" loadingText="加载图表数据..." standalone />
       )}
     </div>
   )
@@ -469,7 +453,7 @@ function TokenAreaChart({ data }: { data: DailyStats[] }) {
 
 /* ---- 模型分布（饼图 + 表格） ---- */
 
-function ModelDistributionChart({ models }: { models: ModelStats[] }) {
+function ModelDistributionChart({ models, loading }: { models: ModelStats[]; loading?: boolean }) {
   return (
     <div>
       <h3 className="text-xs font-medium text-muted-foreground mb-3">模型分布</h3>
@@ -514,7 +498,7 @@ function ModelDistributionChart({ models }: { models: ModelStats[] }) {
           </div>
         </div>
       ) : (
-        <div className="flex h-[200px] items-center justify-center text-sm text-muted-foreground">暂无模型数据</div>
+        <EmptyState loading={loading} isEmpty={!loading} emptyText="暂无模型数据" loadingText="加载图表数据..." standalone />
       )}
     </div>
   )
@@ -522,7 +506,7 @@ function ModelDistributionChart({ models }: { models: ModelStats[] }) {
 
 /* ---- 渠道请求量（柱状图） ---- */
 
-function ChannelBarChart({ channels }: { channels: ChannelStats[] }) {
+function ChannelBarChart({ channels, loading }: { channels: ChannelStats[]; loading?: boolean }) {
   return (
     <div>
       <h3 className="text-xs font-medium text-muted-foreground mb-3">渠道请求量</h3>
@@ -543,7 +527,7 @@ function ChannelBarChart({ channels }: { channels: ChannelStats[] }) {
           </BarChart>
         </ResponsiveContainer>
       ) : (
-        <div className="flex h-[200px] items-center justify-center text-sm text-muted-foreground">暂无渠道数据</div>
+        <EmptyState loading={loading} isEmpty={!loading} emptyText="暂无渠道数据" loadingText="加载图表数据..." standalone />
       )}
     </div>
   )
@@ -551,7 +535,7 @@ function ChannelBarChart({ channels }: { channels: ChannelStats[] }) {
 
 /* ---- 每日成本（柱状图） ---- */
 
-function CostBarChart({ data }: { data: DailyStats[] }) {
+function CostBarChart({ data, loading }: { data: DailyStats[]; loading?: boolean }) {
   return (
     <div>
       <h3 className="text-xs font-medium text-muted-foreground mb-3">每日成本</h3>
@@ -572,7 +556,7 @@ function CostBarChart({ data }: { data: DailyStats[] }) {
           </BarChart>
         </ResponsiveContainer>
       ) : (
-        <div className="flex h-[200px] items-center justify-center text-sm text-muted-foreground">暂无成本数据</div>
+        <EmptyState loading={loading} isEmpty={!loading} emptyText="暂无成本数据" loadingText="加载图表数据..." standalone />
       )}
     </div>
   )

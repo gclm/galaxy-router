@@ -45,6 +45,8 @@ pub async fn create_router(
 
     let shared_cache = ProxyCache::new();
 
+    let tz = config.server.timezone_offset;
+
     let channel_state = ChannelState {
         pool: pool.clone(),
         cache: shared_cache.clone(),
@@ -52,17 +54,20 @@ pub async fn create_router(
             .timeout(std::time::Duration::from_secs(30))
             .build()
             .expect("Failed to create HTTP client"),
+        timezone_offset: tz,
     };
 
     let group_state = GroupState {
         pool: pool.clone(),
         cache: shared_cache.clone(),
+        timezone_offset: tz,
     };
 
     let api_key_cache = crate::api::middleware::ApiKeyCache::new();
     let api_key_state = ApiKeyState {
         pool: pool.clone(),
         api_key_cache,
+        timezone_offset: tz,
     };
 
     let stats_state = StatsApiState {

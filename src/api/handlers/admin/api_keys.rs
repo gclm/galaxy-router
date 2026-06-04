@@ -4,10 +4,11 @@ use axum::{
     http::StatusCode,
 };
 use serde::{Deserialize, Serialize};
-use sqlx::SqlitePool;
+use sqlx::{SqlitePool, AssertSqlSafe};
 
 use crate::api::middleware::ApiKeyCache;
 use crate::api::{ApiError, ApiResponse, response::generate_id};
+use crate::stats::{now_local_str, tz_modifier};
 
 /// API Key
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -50,6 +51,7 @@ pub struct UpdateApiKeyRequest {
 pub struct ApiKeyState {
     pub pool: SqlitePool,
     pub api_key_cache: ApiKeyCache,
+    pub timezone_offset: i32,
 }
 
 /// 空字符串转 None
@@ -70,8 +72,9 @@ pub fn parse_supported_models(models_str: &str) -> Vec<String> {
 pub async fn list(
     State(state): State<ApiKeyState>,
 ) -> Result<Json<ApiResponse<Vec<ApiKey>>>, (StatusCode, Json<ApiError>)> {
+    let tz = tz_modifier(state.timezone_offset);
     let keys = sqlx::query_as::<_, (String, String, String, bool, String, i32, i32, String, String, String)>(
-        "SELECT id, name, api_key, enabled, supported_models, COALESCE(rate_limit_rpm, 0), COALESCE(rate_limit_tpm, 0), COALESCE(allowed_groups, ''), created_at, updated_at FROM api_keys ORDER BY created_at DESC"
+        AssertSqlSafe(format!("SELECT id, name, api_key, enabled, supported_models, COALESCE(rate_limit_rpm, 0), COALESCE(rate_limit_tpm, 0), COALESCE(allowed_groups, ''), datetime(created_at, '{tz}') as created_at, datetime(updated_at, '{tz}') as updated_at FROM api_keys ORDER BY created_at DESC").as_str()),
     )
     .fetch_all(&state.pool)
     .await
@@ -151,8 +154,8 @@ pub async fn create(
         } else {
             Some(allowed_groups)
         },
-        created_at: chrono::Utc::now().to_rfc3339(),
-        updated_at: chrono::Utc::now().to_rfc3339(),
+        created_at: now_local_str(state.timezone_offset),
+        updated_at: now_local_str(state.timezone_offset),
     };
 
     Ok((StatusCode::CREATED, Json(ApiResponse::success(key))))
@@ -163,8 +166,9 @@ pub async fn get(
     State(state): State<ApiKeyState>,
     Path(id): Path<String>,
 ) -> Result<Json<ApiResponse<ApiKey>>, (StatusCode, Json<ApiError>)> {
+    let tz = tz_modifier(state.timezone_offset);
     let result = sqlx::query_as::<_, (String, String, String, bool, String, i32, i32, String, String, String)>(
-        "SELECT id, name, api_key, enabled, supported_models, COALESCE(rate_limit_rpm, 0), COALESCE(rate_limit_tpm, 0), COALESCE(allowed_groups, ''), created_at, updated_at FROM api_keys WHERE id = ?",
+        AssertSqlSafe(format!("SELECT id, name, api_key, enabled, supported_models, COALESCE(rate_limit_rpm, 0), COALESCE(rate_limit_tpm, 0), COALESCE(allowed_groups, ''), datetime(created_at, '{tz}') as created_at, datetime(updated_at, '{tz}') as updated_at FROM api_keys WHERE id = ?").as_str()),
     )
     .bind(&id)
     .fetch_optional(&state.pool)

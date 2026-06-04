@@ -2,11 +2,12 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 /// 角色
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum Role {
-    System,
+    #[default]
     User,
+    System,
     Assistant,
     Tool,
     Developer,
@@ -88,8 +89,12 @@ pub struct FunctionCall {
 }
 
 /// 消息
+///
+/// 注意: `role` 字段在流式 delta 中可能缺失（只有第一个 chunk 包含 role），
+/// 因此使用 `#[serde(default)]` 使其反序列化时不报错。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Message {
+    #[serde(default)]
     pub role: Role,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub content: Option<Content>,

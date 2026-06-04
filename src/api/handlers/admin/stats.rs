@@ -4,10 +4,10 @@ use axum::{
     http::StatusCode,
 };
 use serde::{Deserialize, Serialize};
-
+use sqlx::AssertSqlSafe;
 
 use crate::api::{ApiError, ApiResponse};
-use crate::stats::StatsState;
+use crate::stats::{StatsState, tz_modifier};
 
 /// 查询参数
 #[derive(Debug, Deserialize)]
@@ -269,8 +269,9 @@ pub async fn set_budget(
     .map_err(|e| ApiError::internal_error(e.to_string()))?;
 
     // 查询返回
+    let tz = tz_modifier(state.stats.timezone_offset);
     let row = sqlx::query_as::<_, BudgetLimit>(
-        "SELECT id, api_key_id, monthly_limit_usd, daily_limit_usd, enabled, created_at, updated_at FROM budget_limits WHERE api_key_id = ?",
+        AssertSqlSafe(format!("SELECT id, api_key_id, monthly_limit_usd, daily_limit_usd, enabled, datetime(created_at, '{}') as created_at, datetime(updated_at, '{}') as updated_at FROM budget_limits WHERE api_key_id = ?", tz, tz).as_str()),
     )
     .bind(&req.api_key_id)
     .fetch_one(&state.stats.pool)
@@ -284,8 +285,9 @@ pub async fn set_budget(
 pub async fn list_budgets(
     State(state): State<StatsApiState>,
 ) -> Result<Json<ApiResponse<Vec<BudgetLimit>>>, (StatusCode, Json<ApiError>)> {
+    let tz = tz_modifier(state.stats.timezone_offset);
     let rows = sqlx::query_as::<_, BudgetLimit>(
-        "SELECT id, api_key_id, monthly_limit_usd, daily_limit_usd, enabled, created_at, updated_at FROM budget_limits ORDER BY created_at DESC",
+        AssertSqlSafe(format!("SELECT id, api_key_id, monthly_limit_usd, daily_limit_usd, enabled, datetime(created_at, '{}') as created_at, datetime(updated_at, '{}') as updated_at FROM budget_limits ORDER BY created_at DESC", tz, tz).as_str()),
     )
     .fetch_all(&state.stats.pool)
     .await

@@ -8,6 +8,27 @@ use serde::{Deserialize, Serialize};
 use sqlx::{AssertSqlSafe, SqlitePool};
 use std::collections::HashMap;
 
+/// 生成 SQLite datetime() 修饰符，如 "+8 hours" 或 "-5 hours"
+pub fn tz_modifier(offset: i32) -> String {
+    assert!(
+        (-12..=14).contains(&offset),
+        "时区偏移量超出合理范围: {}",
+        offset
+    );
+    if offset >= 0 {
+        format!("+{} hours", offset)
+    } else {
+        format!("-{} hours", offset.abs())
+    }
+}
+
+/// 生成当前本地时间字符串（用于 INSERT）
+pub fn now_local_str(offset: i32) -> String {
+    (chrono::Utc::now() + chrono::Duration::hours(offset as i64))
+        .format("%Y-%m-%d %H:%M:%S")
+        .to_string()
+}
+
 /// 统计状态
 #[derive(Clone)]
 pub struct StatsState {
@@ -24,17 +45,7 @@ impl StatsState {
     }
 
     fn tz_modifier(&self) -> String {
-        // 验证时区偏移量在合理范围内（-12 到 +14 小时）
-        assert!(
-            (-12..=14).contains(&self.timezone_offset),
-            "时区偏移量超出合理范围: {}",
-            self.timezone_offset
-        );
-        if self.timezone_offset >= 0 {
-            format!("+{} hours", self.timezone_offset)
-        } else {
-            format!("-{} hours", self.timezone_offset.abs())
-        }
+        tz_modifier(self.timezone_offset)
     }
 
     fn now_local(&self) -> chrono::DateTime<chrono::Utc> {
@@ -560,18 +571,19 @@ impl StatsState {
 
         let total: (i64,) = count_builder.build_query_as().fetch_one(&self.pool).await?;
 
+        let tz = self.tz_modifier();
         let mut data_builder = QueryBuilder::new(
-            r#"SELECT ul.id, ul.api_key_id, ak.name as api_key_name,
+            &format!(r#"SELECT ul.id, ul.api_key_id, ak.name as api_key_name,
                       ul.channel_id, c.name as channel_name,
                       ul.group_id, ul.requested_model, ul.actual_model,
                       ul.input_tokens, ul.output_tokens,
                       ul.cache_read_tokens, ul.cache_creation_tokens,
-                      ul.cost, ul.latency_ms, ul.ttft_ms, ul.status_code, ul.error_message, ul.created_at,
+                      ul.cost, ul.latency_ms, ul.ttft_ms, ul.status_code, ul.error_message, datetime(ul.created_at, '{}') as created_at,
                       ul.endpoint_type, ul.request_type, ul.is_stream, ul.upstream_key_hint, ul.user_agent, ul.attempts as raw_attempts
                FROM usage_logs ul
                LEFT JOIN api_keys ak ON ul.api_key_id = ak.id
                LEFT JOIN channels c ON ul.channel_id = c.id
-               WHERE 1=1"#,
+               WHERE 1=1"#, tz),
         );
         if let Some(ref model) = filter.model {
             data_builder.push(" AND ul.requested_model = ");
@@ -621,19 +633,20 @@ impl StatsState {
 
     /// 获取单条日志详情（含请求/响应内容）
     pub async fn get_log_detail(&self, id: &str) -> Result<Option<UsageLogDetail>, sqlx::Error> {
+        let tz = self.tz_modifier();
         let row = sqlx::query_as::<_, UsageLogDetail>(
-            r#"SELECT ul.id, ul.api_key_id, ak.name as api_key_name,
+            AssertSqlSafe(format!(r#"SELECT ul.id, ul.api_key_id, ak.name as api_key_name,
                       ul.channel_id, c.name as channel_name,
                       ul.group_id, ul.requested_model, ul.actual_model,
                       ul.input_tokens, ul.output_tokens,
                       ul.cache_read_tokens, ul.cache_creation_tokens,
-                      ul.cost, ul.latency_ms, ul.ttft_ms, ul.status_code, ul.error_message, ul.created_at,
+                      ul.cost, ul.latency_ms, ul.ttft_ms, ul.status_code, ul.error_message, datetime(ul.created_at, '{}') as created_at,
                       ul.endpoint_type, ul.request_type,
                       ul.request_content, ul.response_content, ul.is_stream, ul.upstream_key_hint, ul.user_agent, ul.attempts as raw_attempts
                FROM usage_logs ul
                LEFT JOIN api_keys ak ON ul.api_key_id = ak.id
                LEFT JOIN channels c ON ul.channel_id = c.id
-               WHERE ul.id = ?"#,
+               WHERE ul.id = ?"#, tz).as_str()),
         )
         .bind(id)
         .fetch_optional(&self.pool)

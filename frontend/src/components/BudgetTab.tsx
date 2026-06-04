@@ -1,56 +1,50 @@
-import { useEffect, useState } from 'react'
-import { statsApi, apiKeysApi } from '@/api'
+import { useState } from 'react'
+import { useBudgets, useSetBudget, useDeleteBudget, useApiKeys } from '@/api/query-hooks'
 import type { BudgetLimit, ApiKey } from '@/api/types'
 import { Button } from '@/components/ui/button'
 import { ToggleSwitch } from '@/components/ToggleSwitch'
+import { toast } from 'sonner'
 import { DollarSign, Plus, Trash2 } from 'lucide-react'
 
 export function BudgetTab() {
-  const [budgets, setBudgets] = useState<BudgetLimit[]>([])
-  const [apiKeys, setApiKeys] = useState<ApiKey[]>([])
-  const [loading, setLoading] = useState(true)
+  const { data: budgets = [], isLoading } = useBudgets()
+  const { data: apiKeysData } = useApiKeys()
+  const setBudget = useSetBudget()
+  const deleteBudget = useDeleteBudget()
 
-  const loadData = async () => {
-    const [b, k] = await Promise.all([
-      statsApi.listBudgets().catch<BudgetLimit[]>(() => []),
-      apiKeysApi.list().catch<ApiKey[]>(() => []),
-    ])
-    setBudgets(b)
-    setApiKeys(k)
-    setLoading(false)
-  }
-
-  useEffect(() => { loadData() }, [])
-
+  const apiKeys = apiKeysData ?? []
   const keyNameMap = Object.fromEntries(apiKeys.map(k => [k.id, k.name]))
-
   const keysWithoutBudget = apiKeys.filter(k => !budgets.some(b => b.api_key_id === k.id))
 
   const handleToggle = async (budget: BudgetLimit) => {
     try {
-      await statsApi.setBudget({
+      await setBudget.mutateAsync({
         api_key_id: budget.api_key_id,
         monthly_limit_usd: budget.monthly_limit_usd,
         daily_limit_usd: budget.daily_limit_usd,
         enabled: !budget.enabled,
       })
-      await loadData()
+      toast.success(budget.enabled ? '已禁用' : '已启用')
     } catch (err) {
-      alert(err instanceof Error ? err.message : '操作失败')
+      toast.error(err instanceof Error ? err.message : '操作失败')
     }
   }
 
   const handleDelete = async (id: string) => {
     if (!confirm('确认删除此预算限制？')) return
     try {
-      await statsApi.deleteBudget(id)
-      await loadData()
+      await deleteBudget.mutateAsync(id)
+      toast.success('已删除')
     } catch (err) {
-      alert(err instanceof Error ? err.message : '删除失败')
+      toast.error(err instanceof Error ? err.message : '删除失败')
     }
   }
 
-  if (loading) {
+  const handleCreated = async () => {
+    toast.success('预算已创建')
+  }
+
+  if (isLoading) {
     return <div className="py-8 text-center text-sm text-muted-foreground">加载中...</div>
   }
 
@@ -65,7 +59,7 @@ export function BudgetTab() {
           {keysWithoutBudget.length > 0 && (
             <AddBudgetDialog
               availableKeys={keysWithoutBudget}
-              onCreated={loadData}
+              onCreated={handleCreated}
             />
           )}
         </div>
@@ -87,7 +81,7 @@ export function BudgetTab() {
                 keyName={keyNameMap[budget.api_key_id] || budget.api_key_id.slice(0, 8)}
                 onToggle={() => handleToggle(budget)}
                 onDelete={() => handleDelete(budget.id)}
-                onUpdate={loadData}
+                setBudget={setBudget}
               />
             ))}
           </div>
@@ -104,13 +98,13 @@ function BudgetRow({
   keyName,
   onToggle,
   onDelete,
-  onUpdate,
+  setBudget,
 }: {
   budget: BudgetLimit
   keyName: string
   onToggle: () => void
   onDelete: () => void
-  onUpdate: () => void
+  setBudget: ReturnType<typeof useSetBudget>
 }) {
   const [editingField, setEditingField] = useState<'monthly' | 'daily' | null>(null)
   const [draftValue, setDraftValue] = useState('')
@@ -127,16 +121,16 @@ function BudgetRow({
     if (isNaN(num) || num < 0) return
     setPending(true)
     try {
-      await statsApi.setBudget({
+      await setBudget.mutateAsync({
         api_key_id: budget.api_key_id,
         monthly_limit_usd: editingField === 'monthly' ? num : budget.monthly_limit_usd,
         daily_limit_usd: editingField === 'daily' ? num : budget.daily_limit_usd,
         enabled: budget.enabled,
       })
       setEditingField(null)
-      onUpdate()
+      toast.success('保存成功')
     } catch (err) {
-      alert(err instanceof Error ? err.message : '保存失败')
+      toast.error(err instanceof Error ? err.message : '保存失败')
     } finally {
       setPending(false)
     }
@@ -244,22 +238,21 @@ function AddBudgetDialog({
   onCreated,
 }: {
   availableKeys: ApiKey[]
-  onCreated: () => void
+  onCreated: () => Promise<void>
 }) {
   const [open, setOpen] = useState(false)
   const [selectedKeyId, setSelectedKeyId] = useState('')
   const [monthly, setMonthly] = useState('')
   const [daily, setDaily] = useState('')
-  const [pending, setPending] = useState(false)
+  const setBudget = useSetBudget()
 
   const handleSubmit = async () => {
     if (!selectedKeyId) return
     const monthlyVal = parseFloat(monthly) || 0
     const dailyVal = parseFloat(daily) || 0
     if (monthlyVal <= 0 && dailyVal <= 0) return
-    setPending(true)
     try {
-      await statsApi.setBudget({
+      await setBudget.mutateAsync({
         api_key_id: selectedKeyId,
         monthly_limit_usd: monthlyVal,
         daily_limit_usd: dailyVal,
@@ -269,11 +262,9 @@ function AddBudgetDialog({
       setSelectedKeyId('')
       setMonthly('')
       setDaily('')
-      onCreated()
+      await onCreated()
     } catch (err) {
-      alert(err instanceof Error ? err.message : '创建失败')
-    } finally {
-      setPending(false)
+      toast.error(err instanceof Error ? err.message : '创建失败')
     }
   }
 
@@ -316,8 +307,8 @@ function AddBudgetDialog({
         onChange={(e) => setDaily(e.target.value)}
         className="input w-24 text-xs py-1"
       />
-      <Button size="sm" onClick={handleSubmit} disabled={pending || !selectedKeyId || (parseFloat(monthly) <= 0 && parseFloat(daily) <= 0)}>
-        {pending ? '...' : '确认'}
+      <Button size="sm" onClick={handleSubmit} disabled={setBudget.isPending || !selectedKeyId || (parseFloat(monthly) <= 0 && parseFloat(daily) <= 0)}>
+        {setBudget.isPending ? '...' : '确认'}
       </Button>
       <Button size="sm" variant="ghost" onClick={() => setOpen(false)}>取消</Button>
     </div>

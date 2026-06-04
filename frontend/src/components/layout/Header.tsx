@@ -74,7 +74,10 @@ export function Header({ collapsed, onToggleCollapse }: { collapsed: boolean; on
         >
           {collapsed ? <PanelLeft className="h-5 w-5" /> : <PanelLeftClose className="h-5 w-5" />}
         </Button>
-        <h2 className="text-lg font-semibold">{title}</h2>
+        <h2 className="text-lg font-semibold flex items-center gap-2">
+          <span className="h-2 w-2 rounded-full bg-primary shadow-sm shadow-primary/50" />
+          {title}
+        </h2>
       </div>
       <div className="flex items-center gap-1">
         <Button

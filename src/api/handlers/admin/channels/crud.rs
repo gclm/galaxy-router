@@ -3,7 +3,7 @@ use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
 };
-use sqlx::SqlitePool;
+use sqlx::{AssertSqlSafe, SqlitePool};
 
 use super::types::{
     Channel, ChannelRow, ChannelState, CreateChannelRequest, ListChannelsQuery, PaginatedResponse,
@@ -11,6 +11,7 @@ use super::types::{
 };
 use crate::api::response::generate_id;
 use crate::api::{ApiError, ApiResponse};
+use crate::stats::tz_modifier;
 
 /// 获取渠道列表（支持搜索、筛选、排序、分页）
 pub async fn list(
@@ -40,8 +41,9 @@ pub async fn list(
         .map_err(|e| ApiError::internal_error(e.to_string()))?;
     let total: i64 = sqlx::Row::get(&count_row, 0);
 
+    let tz = tz_modifier(state.timezone_offset);
     let mut data_builder = sqlx::QueryBuilder::new(
-        "SELECT id, name, api_keys, endpoints, models, rate_limit_rpm, rate_limit_tpm, failure_threshold, blacklist_minutes, concurrency, timeout_secs, max_concurrency, custom_headers, enabled, created_at, updated_at FROM channels",
+        &format!("SELECT id, name, api_keys, endpoints, models, rate_limit_rpm, rate_limit_tpm, failure_threshold, blacklist_minutes, concurrency, timeout_secs, max_concurrency, custom_headers, enabled, datetime(created_at, '{}') as created_at, datetime(updated_at, '{}') as updated_at FROM channels", tz, tz),
     );
     push_where(&mut data_builder, &query);
     data_builder.push(format!(" ORDER BY {} {} ", order_field, order_dir));
@@ -156,7 +158,7 @@ pub async fn create(
         }
     })?;
 
-    let channel = get_channel_by_id(&state.pool, &id).await?;
+    let channel = get_channel_by_id(&state.pool, &id, state.timezone_offset).await?;
     state.cache.invalidate_all_channels().await;
     Ok((StatusCode::CREATED, Json(ApiResponse::success(channel))))
 }
@@ -166,7 +168,7 @@ pub async fn get(
     State(state): State<ChannelState>,
     Path(id): Path<String>,
 ) -> Result<Json<ApiResponse<Channel>>, (StatusCode, Json<ApiError>)> {
-    let channel = get_channel_by_id(&state.pool, &id).await?;
+    let channel = get_channel_by_id(&state.pool, &id, state.timezone_offset).await?;
     Ok(Json(ApiResponse::success(channel)))
 }
 
@@ -275,8 +277,7 @@ pub async fn update(
         .await
         .map_err(|e| ApiError::internal_error(e.to_string()))?;
 
-    let channel = get_channel_by_id(&state.pool, &id).await?;
-    state.cache.invalidate_channel(&id).await;
+    let channel = get_channel_by_id(&state.pool, &id, state.timezone_offset).await?;
     Ok(Json(ApiResponse::success(channel)))
 }
 
@@ -303,10 +304,12 @@ pub async fn delete(
 pub(super) async fn get_channel_by_id(
     pool: &SqlitePool,
     id: &str,
+    timezone_offset: i32,
 ) -> Result<Channel, (StatusCode, Json<ApiError>)> {
-    let result = sqlx::query_as::<_, ChannelRow>(
-        "SELECT id, name, api_keys, endpoints, models, rate_limit_rpm, rate_limit_tpm, failure_threshold, blacklist_minutes, concurrency, timeout_secs, max_concurrency, custom_headers, enabled, created_at, updated_at FROM channels WHERE id = ?"
-    )
+    let tz = tz_modifier(timezone_offset);
+    let result = sqlx::query_as::<_, ChannelRow>(AssertSqlSafe(
+        format!("SELECT id, name, api_keys, endpoints, models, rate_limit_rpm, rate_limit_tpm, failure_threshold, blacklist_minutes, concurrency, timeout_secs, max_concurrency, custom_headers, enabled, datetime(created_at, '{}') as created_at, datetime(updated_at, '{}') as updated_at FROM channels WHERE id = ?", tz, tz)
+    ))
     .bind(id)
     .fetch_optional(pool)
     .await

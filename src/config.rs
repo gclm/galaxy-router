@@ -102,8 +102,8 @@ pub struct PricingTomlConfig {
     /// 远程刷新间隔（小时）
     #[serde(default = "default_pricing_refresh_hours")]
     pub refresh_interval_hours: u64,
-    /// 启用的 provider 白名单（空=全部导入）
-    #[serde(default)]
+    /// 启用的 provider 白名单
+    #[serde(default = "default_pricing_providers")]
     pub providers: Vec<String>,
 }
 
@@ -112,9 +112,25 @@ impl Default for PricingTomlConfig {
         Self {
             cache_path: default_pricing_cache_path(),
             refresh_interval_hours: default_pricing_refresh_hours(),
-            providers: Vec::new(),
+            providers: default_pricing_providers(),
         }
     }
+}
+
+fn default_pricing_providers() -> Vec<String> {
+    vec![
+        "openai".into(),
+        "anthropic".into(),
+        "deepseek".into(),
+        "google".into(),
+        "zai".into(),
+        "minimax".into(),
+        "xai".into(),
+        "alibaba".into(),
+        "moonshotai".into(),
+        "xiaomi".into(),
+        "stepfun".into(),
+    ]
 }
 
 fn default_pricing_cache_path() -> String {

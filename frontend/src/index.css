@@ -14,13 +14,13 @@
   --color-secondary: hsl(0 0% 96.1%);
   --color-secondary-foreground: hsl(0 0% 9%);
   --color-muted: hsl(0 0% 96.1%);
-  --color-muted-foreground: hsl(0 0% 45.1%);
-  --color-accent: hsl(0 0% 96.1%);
-  --color-accent-foreground: hsl(0 0% 9%);
-  --color-destructive: hsl(0 84.2% 60.2%);
+  --color-muted-foreground: hsl(215 14% 40%);
+  --color-accent: hsl(220 14% 96%);
+  --color-accent-foreground: hsl(222 47% 11%);
+  --color-destructive: hsl(0 84% 60%);
   --color-destructive-foreground: hsl(0 0% 98%);
-  --color-border: hsl(0 0% 89.8%);
-  --color-input: hsl(0 0% 89.8%);
+  --color-border: hsl(220 13% 91%);
+  --color-input: hsl(220 13% 91%);
   --color-ring: hsl(221 83% 53%);
   --color-chart-1: hsl(217 91% 60%);
   --color-chart-2: hsl(160 60% 40%);
@@ -57,7 +57,7 @@
 .dark {
   --color-background: hsl(222 47% 5%);
   --color-foreground: hsl(0 0% 98%);
-  --color-card: hsl(222 47% 7%);
+  --color-card: hsl(222 47% 9%);
   --color-card-foreground: hsl(0 0% 98%);
   --color-popover: hsl(222 47% 5%);
   --color-popover-foreground: hsl(0 0% 98%);
@@ -66,10 +66,10 @@
   --color-secondary: hsl(0 0% 14.9%);
   --color-secondary-foreground: hsl(0 0% 98%);
   --color-muted: hsl(0 0% 14.9%);
-  --color-muted-foreground: hsl(0 0% 63.9%);
-  --color-accent: hsl(0 0% 14.9%);
+  --color-muted-foreground: hsl(215 16% 60%);
+  --color-accent: hsl(222 47% 12%);
   --color-accent-foreground: hsl(0 0% 98%);
-  --color-destructive: hsl(0 62.8% 30.6%);
+  --color-destructive: hsl(0 62.8% 50.6%);
   --color-destructive-foreground: hsl(0 0% 98%);
   --color-border: hsl(0 0% 14.9%);
   --color-input: hsl(0 0% 14.9%);
@@ -122,22 +122,30 @@
   .btn-primary {
     @apply bg-gradient-to-r from-primary to-primary/90;
     @apply text-primary-foreground shadow-md shadow-primary/25;
-    @apply hover:from-primary/90 hover:to-primary/80 hover:shadow-lg hover:shadow-primary/30;
+    @apply hover:-translate-y-px hover:shadow-lg hover:shadow-primary/30;
     @apply active:scale-[0.98] transition-all duration-200;
   }
 
   .card-hover {
-    @apply hover:-translate-y-0.5 hover:shadow-lg;
+    @apply hover:-translate-y-0.5 hover:shadow-[0_28px_60px_rgba(15,23,42,0.12)];
+    @apply dark:hover:shadow-[0_28px_60px_rgba(0,0,0,0.45)];
     @apply transition-all duration-200;
   }
 
   .input {
     @apply w-full rounded-xl px-4 py-2.5 text-sm;
-    @apply bg-white dark:bg-gray-800/50;
-    @apply border border-gray-200 dark:border-gray-700;
-    @apply text-gray-900 dark:text-gray-100;
-    @apply placeholder:text-gray-400 dark:placeholder:text-gray-500;
+    @apply border border-border bg-muted/30;
+    @apply text-foreground placeholder:text-muted-foreground;
     @apply transition-all duration-200;
     @apply focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/30;
+  }
+
+  .animate-rise {
+    animation: rise 0.4s ease-out both;
+  }
+
+  @keyframes rise {
+    from { opacity: 0; transform: translateY(14px); }
+    to   { opacity: 1; transform: translateY(0); }
   }
 }

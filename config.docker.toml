@@ -18,4 +18,4 @@ port = 8080
 [pricing]
 cache_path = "data/pricing_cache.json"
 refresh_interval_hours = 24
-providers = ["openai", "anthropic", "deepseek", "google", "zhipuai", "minimax", "xai", "moonshot", "xiaomi", "stepfun"]
+providers = ["openai", "anthropic", "deepseek", "google", "zai", "minimax", "xai", "alibaba", "moonshotai", "xiaomi", "stepfun"]

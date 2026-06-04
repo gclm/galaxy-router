@@ -1,11 +1,12 @@
-import { useEffect, useRef, useState } from 'react'
-import { formatDate } from '@/lib/utils'
-import { statsApi } from '@/api/stats'
-import { channelsApi } from '@/api/channels'
+import { useState } from 'react'
+import { formatDate, formatNumber, formatCost, formatLatency } from '@/lib/utils'
+import { useLogs, useLogDetail, useLogModels, useChannels } from '@/api/query-hooks'
+import { useAutoRefresh } from '@/hooks/useAutoRefresh'
 import { ENDPOINT_LABELS } from '@/api/types'
-import type { EndpointType, RequestLog, RequestLogDetail, ChannelAttempt, Channel } from '@/api/types'
+import type { EndpointType, ChannelAttempt } from '@/api/types'
 import { Button } from '@/components/ui/button'
 import { Pagination } from '@/components/Pagination'
+import { EmptyState } from '@/components/common'
 import {
   Dialog,
   DialogContent,
@@ -28,20 +29,6 @@ import {
   MessageSquare,
   AlertCircle,
 } from 'lucide-react'
-
-function formatNumber(n: number | undefined) {
-  return (n ?? 0).toLocaleString()
-}
-
-function formatCost(n: number | null) {
-  return n != null ? `$${n.toFixed(6)}` : '-'
-}
-
-function formatLatency(ms: number | null) {
-  if (ms == null) return '-'
-  if (ms < 1000) return `${ms}ms`
-  return `${(ms / 1000).toFixed(2)}s`
-}
 
 function CopyButton({ text }: { text: string }) {
   const [copied, setCopied] = useState(false)
@@ -90,71 +77,49 @@ function JsonBlock({ content, fallback }: { content: string | null; fallback: st
 }
 
 export function Logs() {
-  const [logs, setLogs] = useState<RequestLog[]>([])
-  const [total, setTotal] = useState(0)
-  const [loading, setLoading] = useState(true)
-
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(20)
-
-  const [modelOptions, setModelOptions] = useState<string[]>([])
-  const [channelOptions, setChannelOptions] = useState<Channel[]>([])
   const [selectedModel, setSelectedModel] = useState('')
   const [selectedChannel, setSelectedChannel] = useState('')
   const [status, setStatus] = useState('')
+  const [detailLogId, setDetailLogId] = useState<string | null>(null)
 
-  const [detailLog, setDetailLog] = useState<RequestLog | null>(null)
-  const [logDetail, setLogDetail] = useState<RequestLogDetail | null>(null)
-  const [detailLoading, setDetailLoading] = useState(false)
-  const fetchRef = useRef<() => void>(() => {})
+  const query = {
+    page,
+    page_size: pageSize,
+    model: selectedModel || undefined,
+    channel_id: selectedChannel || undefined,
+    status: status || undefined,
+  }
 
-  useEffect(() => {
-    statsApi.logModels().then(setModelOptions).catch(() => {})
-    channelsApi.list().then(res => setChannelOptions(res.items)).catch(() => {})
-  }, [])
+  const { data, isLoading, refetch } = useLogs(query)
+  const { data: modelOptions = [] } = useLogModels()
+  const { data: channelData } = useChannels()
+  const { data: logDetail, isLoading: detailLoading } = useLogDetail(detailLogId)
 
-  useEffect(() => {
-    const controller = new AbortController()
-    const run = async () => {
-      setLoading(true)
-      try {
-        const data = await statsApi.logs({
-          page,
-          page_size: pageSize,
-          model: selectedModel || undefined,
-          channel_id: selectedChannel || undefined,
-          status: status || undefined,
-        })
-        setLogs(data.items)
-        setTotal(data.total)
-      } catch (error) {
-        if (!controller.signal.aborted) console.error('Failed to fetch logs:', error)
-      } finally {
-        if (!controller.signal.aborted) setLoading(false)
-      }
-    }
-    run()
-    fetchRef.current = run
-    return () => { controller.abort() }
-  }, [page, pageSize, selectedModel, selectedChannel, status])
+  const { enabled: autoRefresh, toggle: toggleAutoRefresh } = useAutoRefresh({
+    refetch: () => { refetch() },
+    defaultInterval: 30,
+    storageKey: 'logs-refresh',
+    defaultEnabled: false,
+  })
 
-  const openDetail = async (log: RequestLog) => {
-    setDetailLog(log)
-    setLogDetail(null)
-    setDetailLoading(true)
-    try {
-      const detail = await statsApi.logDetail(log.id)
-      setLogDetail(detail)
-    } catch {
-      console.error('Failed to fetch log detail')
-    } finally {
-      setDetailLoading(false)
-    }
+  const logs = data?.items ?? []
+  const total = data?.total ?? 0
+  const channelOptions = channelData?.items ?? []
+
+  const openDetail = (logId: string) => {
+    setDetailLogId(logId)
   }
 
   const closeDetail = () => {
-    setDetailLog(null)
-    setLogDetail(null)
+    setDetailLogId(null)
+  }
+
+  const handleRefresh = () => {
+    // Triggered by FilterBar button; React Query refetches on focus/window focus
+    // We can force a refetch by toggling a key, but for simplicity we rely on staleTime
+    window.dispatchEvent(new Event('focus'))
   }
 
   return (
@@ -194,8 +159,15 @@ export function Logs() {
           <option value="success">成功</option>
           <option value="failure">失败</option>
         </select>
-        <Button variant="outline" size="icon" onClick={() => fetchRef.current()} title="刷新">
-          <RefreshCw className="h-4 w-4" />
+        <Button variant="outline" size="icon" onClick={handleRefresh} title="刷新" disabled={isLoading}>
+          {isLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+        </Button>
+        <Button
+          variant={autoRefresh ? 'default' : 'outline'}
+          size="sm"
+          onClick={toggleAutoRefresh}
+        >
+          自动刷新
         </Button>
       </div>
 
@@ -219,75 +191,70 @@ export function Logs() {
               </tr>
             </thead>
             <tbody>
-              {loading ? (
-                <tr>
-                  <td colSpan={11} className="text-center py-12 text-muted-foreground">加载中...</td>
-                </tr>
-              ) : logs.length === 0 ? (
-                <tr>
-                  <td colSpan={11} className="text-center py-12 text-muted-foreground">暂无请求日志</td>
-                </tr>
-              ) : (
-                logs.map((log) => (
-                  <tr
-                    key={log.id}
-                    className="border-b last:border-0 hover:bg-muted/30 transition-colors cursor-pointer"
-                    onClick={() => openDetail(log)}
-                  >
-                    <td className="px-4 py-3 text-xs text-muted-foreground whitespace-nowrap">{formatDate(log.created_at)}</td>
-                    <td className="px-4 py-3">
-                      <div>
-                        <p className="font-medium text-sm">{log.requested_model}</p>
-                        {log.actual_model && log.actual_model !== log.requested_model && (
-                          <p className="text-xs text-muted-foreground">→ {log.actual_model}</p>
-                        )}
-                      </div>
-                    </td>
-                    <td className="px-4 py-3 text-muted-foreground text-xs">{log.channel_name ?? '-'}</td>
-                    <td className="px-4 py-3 text-center">
-                      <span className="inline-flex items-center rounded-md bg-primary/10 px-1.5 py-0.5 text-xs font-medium text-primary">
-                        {log.endpoint_type ? (ENDPOINT_LABELS[log.endpoint_type as EndpointType] ?? log.endpoint_type) : '-'}
-                      </span>
-                    </td>
-                    <td className="px-4 py-3 text-center">
-                      <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${
-                        log.request_type === 'passthrough'
-                          ? 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400'
-                          : 'bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400'
-                      }`}>
-                        {log.request_type === 'passthrough' ? '直通' : '转换'}
-                      </span>
-                      {log.is_stream && (
-                        <span className="ml-1 inline-flex items-center rounded-full px-1.5 py-0.5 text-xs font-medium bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400">
-                          流式
-                        </span>
+              <EmptyState
+                loading={isLoading}
+                isEmpty={!isLoading && logs.length === 0}
+                colSpan={11}
+              />
+              {!isLoading && logs.length > 0 && logs.map((log) => (
+                <tr
+                  key={log.id}
+                  className="border-b last:border-0 hover:bg-muted/30 transition-colors cursor-pointer"
+                  onClick={() => openDetail(log.id)}
+                >
+                  <td className="px-4 py-3 text-xs text-muted-foreground whitespace-nowrap">{formatDate(log.created_at)}</td>
+                  <td className="px-4 py-3">
+                    <div>
+                      <p className="font-medium text-sm">{log.requested_model}</p>
+                      {log.actual_model && log.actual_model !== log.requested_model && (
+                        <p className="text-xs text-muted-foreground">→ {log.actual_model}</p>
                       )}
-                    </td>
-                    <td className="px-4 py-3 text-center">
-                      {log.error_message ? (
-                        <span className="inline-flex items-center gap-1 text-destructive text-xs">
-                          <XCircle className="h-3.5 w-3.5" />
-                          {log.status_code ?? 'ERR'}
-                        </span>
-                      ) : (
-                        <span className="inline-flex items-center gap-1 text-green-600 text-xs">
-                          <CheckCircle2 className="h-3.5 w-3.5" />
-                          {log.status_code ?? 200}
-                        </span>
-                      )}
-                    </td>
-                    <td className="px-4 py-3 text-right text-xs">{formatNumber(log.input_tokens)}</td>
-                    <td className="px-4 py-3 text-right text-xs">{formatNumber(log.output_tokens)}</td>
-                    <td className="px-4 py-3 text-right text-xs text-muted-foreground">
-                      {formatLatency(log.latency_ms)}
-                    </td>
-                    <td className="px-4 py-3 text-right text-xs text-muted-foreground">
-                      {log.ttft_ms != null ? formatLatency(log.ttft_ms) : '-'}
-                    </td>
-                    <td className="px-4 py-3 text-right text-xs">{formatCost(log.cost)}</td>
-                  </tr>
-                ))
-              )}
+                    </div>
+                  </td>
+                  <td className="px-4 py-3 text-muted-foreground text-xs">{log.channel_name ?? '-'}</td>
+                  <td className="px-4 py-3 text-center">
+                    <span className="inline-flex items-center rounded-md bg-primary/10 px-1.5 py-0.5 text-xs font-medium text-primary">
+                      {log.endpoint_type ? (ENDPOINT_LABELS[log.endpoint_type as EndpointType] ?? log.endpoint_type) : '-'}
+                    </span>
+                  </td>
+                  <td className="px-4 py-3 text-center">
+                    <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${
+                      log.request_type === 'passthrough'
+                        ? 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400'
+                        : 'bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400'
+                    }`}>
+                      {log.request_type === 'passthrough' ? '直通' : '转换'}
+                    </span>
+                    {log.is_stream && (
+                      <span className="ml-1 inline-flex items-center rounded-full px-1.5 py-0.5 text-xs font-medium bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400">
+                        流式
+                      </span>
+                    )}
+                  </td>
+                  <td className="px-4 py-3 text-center">
+                    {log.error_message ? (
+                      <span className="inline-flex items-center gap-1 text-destructive text-xs">
+                        <XCircle className="h-3.5 w-3.5" />
+                        {log.status_code ?? 'ERR'}
+                      </span>
+                    ) : (
+                      <span className="inline-flex items-center gap-1 text-green-600 text-xs">
+                        <CheckCircle2 className="h-3.5 w-3.5" />
+                        {log.status_code ?? 200}
+                      </span>
+                    )}
+                  </td>
+                  <td className="px-4 py-3 text-right text-xs">{formatNumber(log.input_tokens)}</td>
+                  <td className="px-4 py-3 text-right text-xs">{formatNumber(log.output_tokens)}</td>
+                  <td className="px-4 py-3 text-right text-xs text-muted-foreground">
+                    {formatLatency(log.latency_ms)}
+                  </td>
+                  <td className="px-4 py-3 text-right text-xs text-muted-foreground">
+                    {log.ttft_ms != null ? formatLatency(log.ttft_ms) : '-'}
+                  </td>
+                  <td className="px-4 py-3 text-right text-xs">{formatCost(log.cost)}</td>
+                </tr>
+              ))}
             </tbody>
           </table>
         </div>
@@ -296,7 +263,7 @@ export function Logs() {
       </div>
 
       {/* 详情弹窗 */}
-      <Dialog open={!!detailLog} onOpenChange={(open) => { if (!open) closeDetail() }}>
+      <Dialog open={!!detailLogId} onOpenChange={(open) => { if (!open) closeDetail() }}>
         <DialogContent className="max-w-4xl h-[85vh] overflow-hidden flex flex-col p-0 gap-0">
           {detailLoading ? (
             <div className="flex items-center justify-center h-48">
@@ -413,7 +380,7 @@ export function Logs() {
                 </div>
               )}
 
-              {/* 重试链 */}
+              {/* 重试链路 */}
               {logDetail.attempts && logDetail.attempts.length > 0 && (
                 <div className="mx-6 mt-4">
                   <div className="flex items-center gap-2 mb-2">

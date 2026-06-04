@@ -4,10 +4,11 @@ use axum::{
     http::StatusCode,
 };
 use serde::{Deserialize, Serialize};
-use sqlx::SqlitePool;
+use sqlx::{AssertSqlSafe, SqlitePool};
 
 use crate::api::handlers::admin::channels::PaginatedResponse;
 use crate::api::{ApiError, ApiResponse, response::generate_id};
+use crate::stats::tz_modifier;
 
 /// 分组
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -92,6 +93,7 @@ pub struct AddGroupItemRequest {
 pub struct GroupState {
     pub pool: SqlitePool,
     pub cache: crate::proxy::ProxyCache,
+    pub timezone_offset: i32,
 }
 
 /// 获取分组列表（支持搜索、筛选、排序、分页）
@@ -122,8 +124,9 @@ pub async fn list(
         .map_err(|e| ApiError::internal_error(e.to_string()))?;
     let total: i64 = sqlx::Row::get(&count_row, 0);
 
+    let tz = tz_modifier(state.timezone_offset);
     let mut data_builder = sqlx::QueryBuilder::new(
-        "SELECT id, name, match_regex, retry_enabled, max_retries, first_token_timeout_secs, enabled, created_at, updated_at FROM groups",
+        &format!("SELECT id, name, match_regex, retry_enabled, max_retries, first_token_timeout_secs, enabled, datetime(created_at, '{}') as created_at, datetime(updated_at, '{}') as updated_at FROM groups", tz, tz),
     );
     push_where(&mut data_builder, &query);
     data_builder.push(format!(" ORDER BY {} {} ", order_field, order_dir));
@@ -265,7 +268,7 @@ pub async fn create(
         .map_err(|e| ApiError::internal_error(e.to_string()))?;
 
     state.cache.invalidate_all_groups().await;
-    let group = get_group_by_id(&state.pool, &group_id).await?;
+    let group = get_group_by_id(&state.pool, &group_id, state.timezone_offset).await?;
     Ok((StatusCode::CREATED, Json(ApiResponse::success(group))))
 }
 
@@ -274,7 +277,7 @@ pub async fn get(
     State(state): State<GroupState>,
     Path(id): Path<String>,
 ) -> Result<Json<ApiResponse<Group>>, (StatusCode, Json<ApiError>)> {
-    let group = get_group_by_id(&state.pool, &id).await?;
+    let group = get_group_by_id(&state.pool, &id, state.timezone_offset).await?;
     Ok(Json(ApiResponse::success(group)))
 }
 
@@ -384,7 +387,7 @@ pub async fn update(
         .await
         .map_err(|e| ApiError::internal_error(e.to_string()))?;
 
-    let group = get_group_by_id(&state.pool, &id).await?;
+    let group = get_group_by_id(&state.pool, &id, state.timezone_offset).await?;
     state.cache.invalidate_all_groups().await;
     Ok(Json(ApiResponse::success(group)))
 }
@@ -482,9 +485,11 @@ pub async fn delete_item(
 async fn get_group_by_id(
     pool: &SqlitePool,
     id: &str,
+    timezone_offset: i32,
 ) -> Result<Group, (StatusCode, Json<ApiError>)> {
+    let tz = tz_modifier(timezone_offset);
     let result = sqlx::query_as::<_, (String, String, Option<String>, bool, i32, i32, bool, String, String)>(
-        "SELECT id, name, match_regex, retry_enabled, max_retries, first_token_timeout_secs, enabled, created_at, updated_at FROM groups WHERE id = ?"
+        AssertSqlSafe(format!("SELECT id, name, match_regex, retry_enabled, max_retries, first_token_timeout_secs, enabled, datetime(created_at, '{}') as created_at, datetime(updated_at, '{}') as updated_at FROM groups WHERE id = ?", tz, tz).as_str())
     )
     .bind(id)
     .fetch_optional(pool)

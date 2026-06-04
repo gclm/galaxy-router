@@ -1,11 +1,20 @@
 import { useEffect, useMemo, useState } from 'react'
-import { authApi, settingsApi, backupApi } from '@/api'
 import type { SettingItem, InfraConfig } from '@/api/types'
 import type { ImportResult, ResetResult } from '@/api/backup'
 import { Button } from '@/components/ui/button'
 import { ToggleSwitch } from '@/components/ToggleSwitch'
 import { BudgetTab } from '@/components/BudgetTab'
 import { useAuthStore } from '@/stores/auth'
+import {
+  useSettings,
+  useInfraConfig,
+  useUpdateSetting,
+  useChangePassword,
+  useExportBackup,
+  useImportBackup,
+  useResetBackup,
+} from '@/api/query-hooks'
+import { toast } from 'sonner'
 import { User, Shield, TrendingUp, Sliders, Server, Database, Globe, DollarSign } from 'lucide-react'
 
 const tabs = [
@@ -55,15 +64,11 @@ const fieldDefs: Record<string, FieldDef[]> = {
 }
 
 export function Settings() {
-  const { user } = useAuthStore()
   const [activeTab, setActiveTab] = useState<TabId>('account')
-  const [settings, setSettings] = useState<SettingItem[]>([])
-  const [infra, setInfra] = useState<InfraConfig | null>(null)
 
-  useEffect(() => {
-    settingsApi.list().then(setSettings).catch(() => {})
-    settingsApi.infra().then(setInfra).catch(() => {})
-  }, [])
+  const { data: settings = [] } = useSettings()
+  const { data: infra } = useInfraConfig()
+  const updateSetting = useUpdateSetting()
 
   const settingMap = useMemo(() => Object.fromEntries(settings.map((s) => [s.key, s])), [settings])
 
@@ -80,8 +85,12 @@ export function Settings() {
   }
 
   const handleUpdate = async (key: string, value: string) => {
-    await settingsApi.update(key, value)
-    setSettings((prev) => prev.map((s) => (s.key === key ? { ...s, value } : s)))
+    try {
+      await updateSetting.mutateAsync({ key, value })
+      toast.success('保存成功')
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : '保存失败')
+    }
   }
 
   const handleWeightUpdate = async (weightName: string, rawValue: string) => {
@@ -93,10 +102,12 @@ export function Settings() {
       try { obj = JSON.parse(weightsStr) } catch { /* ignore */ }
     }
     obj[weightName] = val
-    await settingsApi.update('scheduler.score_weights', JSON.stringify(obj))
-    setSettings((prev) =>
-      prev.map((s) => (s.key === 'scheduler.score_weights' ? { ...s, value: JSON.stringify(obj) } : s))
-    )
+    try {
+      await updateSetting.mutateAsync({ key: 'scheduler.score_weights', value: JSON.stringify(obj) })
+      toast.success('保存成功')
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : '保存失败')
+    }
   }
 
   return (
@@ -121,7 +132,7 @@ export function Settings() {
       </div>
 
       <div className="mt-6">
-        {activeTab === 'account' && <AccountTab user={user} />}
+        {activeTab === 'account' && <AccountTab />}
         {activeTab === 'scheduler' && (
           <SchedulerTab
             settingMap={settingMap}
@@ -149,37 +160,31 @@ export function Settings() {
 
 /* ── 账户安全 ── */
 
-function AccountTab({ user }: { user: { username: string; id: string } | null }) {
+function AccountTab() {
+  const { user } = useAuthStore()
   const [oldPassword, setOldPassword] = useState('')
   const [newPassword, setNewPassword] = useState('')
   const [confirmPassword, setConfirmPassword] = useState('')
-  const [error, setError] = useState('')
-  const [success, setSuccess] = useState('')
-  const [loading, setLoading] = useState(false)
+  const changePassword = useChangePassword()
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
-    setError('')
-    setSuccess('')
     if (newPassword !== confirmPassword) {
-      setError('两次输入的新密码不一致')
+      toast.error('两次输入的新密码不一致')
       return
     }
     if (newPassword.length < 8) {
-      setError('新密码至少 8 个字符')
+      toast.error('新密码至少 8 个字符')
       return
     }
-    setLoading(true)
     try {
-      await authApi.changePassword({ old_password: oldPassword, new_password: newPassword })
-      setSuccess('密码修改成功')
+      await changePassword.mutateAsync({ old_password: oldPassword, new_password: newPassword })
+      toast.success('密码修改成功')
       setOldPassword('')
       setNewPassword('')
       setConfirmPassword('')
     } catch (err) {
-      setError(err instanceof Error ? err.message : '修改失败')
-    } finally {
-      setLoading(false)
+      toast.error(err instanceof Error ? err.message : '修改失败')
     }
   }
 
@@ -217,10 +222,8 @@ function AccountTab({ user }: { user: { username: string; id: string } | null })
             <label className="block text-sm font-medium mb-1">确认新密码</label>
             <input type="password" value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} className="input" required />
           </div>
-          {error && <div className="rounded-lg bg-destructive/10 p-3 text-sm text-destructive">{error}</div>}
-          {success && <div className="rounded-lg bg-green-50 dark:bg-green-900/20 p-3 text-sm text-green-700 dark:text-green-400">{success}</div>}
-          <Button type="submit" disabled={loading} className="btn-primary">
-            {loading ? '修改中...' : '修改密码'}
+          <Button type="submit" disabled={changePassword.isPending} className="btn-primary">
+            {changePassword.isPending ? '修改中...' : '修改密码'}
           </Button>
         </form>
       </section>
@@ -250,7 +253,7 @@ function SchedulerTab({
       <SettingRow label={topKField.label} description={topKField.description}>
         <InlineNumberEdit
           value={settingMap[topKField.key]?.value ?? '7'}
-          onSave={(v) => onUpdate(topKField.key, v)}
+          onSave={async (v) => onUpdate(topKField.key, v)}
           min={topKField.min}
           max={topKField.max}
         />
@@ -261,7 +264,7 @@ function SchedulerTab({
         <SettingRow key={field.key} label={field.label}>
           <InlineNumberEdit
             value={getWeightValue(field.key)}
-            onSave={(v) => onWeightUpdate(field.key.replace('scheduler.', ''), v)}
+            onSave={async (v) => onWeightUpdate(field.key.replace('scheduler.', ''), v)}
             min={field.min}
             max={field.max}
             step={0.1}
@@ -539,25 +542,25 @@ function CorsTab({
     ))
   }, [savedValue])
 
-  const handleAdd = () => {
+  const handleAdd = async () => {
     const raw = inputValue.trim()
     if (!raw) return
     const newOrigins = raw.split(/[,，]/).map(s => s.trim()).filter(Boolean)
     if (newOrigins.includes('*')) {
-      saveOrigins(['*'])
+      await saveOrigins(['*'])
     } else {
-      saveOrigins([...originsList, ...newOrigins])
+      await saveOrigins([...originsList, ...newOrigins])
     }
     setInputValue('')
   }
 
-  const handleRemove = (origin: string) => {
+  const handleRemove = async (origin: string) => {
     const next = originsList.filter(o => o !== origin)
-    saveOrigins(next)
+    await saveOrigins(next)
   }
 
-  const handlePreset = (preset: string) => {
-    saveOrigins(preset === '*' ? ['*'] : [])
+  const handlePreset = async (preset: string) => {
+    await saveOrigins(preset === '*' ? ['*'] : [])
   }
 
   const saveOrigins = async (origins: string[]) => {
@@ -567,6 +570,8 @@ function CorsTab({
     try {
       await onUpdate('cors.allow_origins', value)
       setSavedValue(value)
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : '保存失败')
     } finally {
       setPending(false)
     }
@@ -648,18 +653,19 @@ function CorsTab({
 /* ── 数据备份 ── */
 
 function BackupTab() {
-  const [exporting, setExporting] = useState(false)
-  const [importing, setImporting] = useState(false)
   const [importResult, setImportResult] = useState<ImportResult | null>(null)
   const [importError, setImportError] = useState('')
-  const [resetting, setResetting] = useState(false)
   const [resetResult, setResetResult] = useState<ResetResult | null>(null)
   const [showResetConfirm, setShowResetConfirm] = useState(false)
 
+  const exportBackup = useExportBackup()
+  const importBackup = useImportBackup()
+  const resetBackup = useResetBackup()
+
   const handleExport = async () => {
-    setExporting(true)
+    exportBackup.reset()
     try {
-      const data = await backupApi.export()
+      const data = await exportBackup.mutateAsync()
       const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })
       const url = URL.createObjectURL(blob)
       const a = document.createElement('a')
@@ -668,10 +674,9 @@ function BackupTab() {
       a.download = `galaxy-router-backup-${date}.json`
       a.click()
       URL.revokeObjectURL(url)
+      toast.success('导出成功')
     } catch (err) {
-      alert(err instanceof Error ? err.message : '导出失败')
-    } finally {
-      setExporting(false)
+      toast.error(err instanceof Error ? err.message : '导出失败')
     }
   }
 
@@ -680,31 +685,30 @@ function BackupTab() {
     if (!file) return
     setImportResult(null)
     setImportError('')
-    setImporting(true)
 
     try {
       const text = await file.text()
       const data = JSON.parse(text)
-      const result = await backupApi.import(data)
+      const result = await importBackup.mutateAsync(data)
       setImportResult(result)
+      toast.success('导入成功')
     } catch (err) {
       setImportError(err instanceof Error ? err.message : '导入失败')
+      toast.error(err instanceof Error ? err.message : '导入失败')
     } finally {
-      setImporting(false)
       e.target.value = ''
     }
   }
 
   const handleReset = async () => {
-    setResetting(true)
+    resetBackup.reset()
     setShowResetConfirm(false)
     try {
-      const result = await backupApi.reset()
+      const result = await resetBackup.mutateAsync()
       setResetResult(result)
+      toast.success('已恢复出厂设置')
     } catch (err) {
-      alert(err instanceof Error ? err.message : '重置失败')
-    } finally {
-      setResetting(false)
+      toast.error(err instanceof Error ? err.message : '重置失败')
     }
   }
 
@@ -721,8 +725,8 @@ function BackupTab() {
         <p className="text-xs text-amber-600">
           备份文件包含上游 API Key 明文，请妥善保管。
         </p>
-        <Button onClick={handleExport} disabled={exporting} className="btn-primary">
-          {exporting ? '导出中...' : '导出备份'}
+        <Button onClick={handleExport} disabled={exportBackup.isPending} className="btn-primary">
+          {exportBackup.isPending ? '导出中...' : '导出备份'}
         </Button>
       </section>
 
@@ -736,16 +740,16 @@ function BackupTab() {
         </p>
         <div>
           <label className={`inline-flex cursor-pointer items-center gap-2 rounded-lg px-4 py-2 text-sm font-medium transition-colors ${
-            importing
+            importBackup.isPending
               ? 'bg-muted text-muted-foreground cursor-not-allowed'
               : 'bg-primary text-primary-foreground hover:bg-primary/90'
           }`}>
-            {importing ? '导入中...' : '选择备份文件'}
+            {importBackup.isPending ? '导入中...' : '选择备份文件'}
             <input
               type="file"
               accept=".json"
               onChange={handleImport}
-              disabled={importing}
+              disabled={importBackup.isPending}
               className="hidden"
             />
           </label>
@@ -786,8 +790,8 @@ function BackupTab() {
         </p>
         {showResetConfirm ? (
           <div className="flex items-center gap-3">
-            <Button onClick={handleReset} variant="destructive" disabled={resetting}>
-              {resetting ? '重置中...' : '确认重置'}
+            <Button onClick={handleReset} variant="destructive" disabled={resetBackup.isPending}>
+              {resetBackup.isPending ? '重置中...' : '确认重置'}
             </Button>
             <Button variant="outline" onClick={() => setShowResetConfirm(false)}>取消</Button>
           </div>
