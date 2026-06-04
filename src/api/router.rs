@@ -197,7 +197,8 @@ pub async fn create_router(
                 .route("/", post(fetch_models::fetch_models))
                 .with_state(fetch_models_state),
         )
-        .layer(middleware::from_fn(require_admin_auth));
+        .layer(middleware::from_fn(require_admin_auth))
+        .layer(middleware::from_fn(crate::api::middleware::require_json));
 
     Router::new()
         // 请求体大小限制 50MB（多模态图片可能较大）
@@ -244,7 +245,6 @@ pub async fn create_router(
                 }
             },
         ))
-        .layer(middleware::from_fn(crate::api::middleware::require_json))
         .layer(TraceLayer::new_for_http())
 }
 

@@ -17,6 +17,13 @@ pub struct StatsQuery {
     pub end_date: Option<String>,
 }
 
+impl StatsQuery {
+    /// 获取天数参数，限制在 1..=365 范围内
+    fn days(&self) -> i32 {
+        self.days.unwrap_or(30).clamp(1, 365)
+    }
+}
+
 /// 统计 API 状态
 #[derive(Clone)]
 pub struct StatsApiState {
@@ -44,7 +51,7 @@ pub async fn models(
     let stats = match (&query.start_date, &query.end_date) {
         (Some(start), Some(end)) => state.stats.get_model_stats_by_range(start, end).await,
         _ => {
-            let days = query.days.unwrap_or(30);
+            let days = query.days();
             state.stats.get_model_stats(days).await
         }
     }
@@ -61,7 +68,7 @@ pub async fn channels(
     let stats = match (&query.start_date, &query.end_date) {
         (Some(start), Some(end)) => state.stats.get_channel_stats_by_range(start, end).await,
         _ => {
-            let days = query.days.unwrap_or(30);
+            let days = query.days();
             state.stats.get_channel_stats(days).await
         }
     }
@@ -78,7 +85,7 @@ pub async fn daily(
     let stats = match (&query.start_date, &query.end_date) {
         (Some(start), Some(end)) => state.stats.get_daily_stats_by_range(start, end).await,
         _ => {
-            let days = query.days.unwrap_or(30);
+            let days = query.days();
             state.stats.get_daily_stats(days).await
         }
     }
@@ -167,7 +174,7 @@ pub async fn api_keys(
     State(state): State<StatsApiState>,
     Query(query): Query<StatsQuery>,
 ) -> Result<Json<ApiResponse<serde_json::Value>>, (StatusCode, Json<ApiError>)> {
-    let days = query.days.unwrap_or(30);
+    let days = query.days();
     let stats = state
         .stats
         .get_api_key_stats(days)
@@ -182,7 +189,7 @@ pub async fn latency(
     State(state): State<StatsApiState>,
     Query(query): Query<StatsQuery>,
 ) -> Result<Json<ApiResponse<serde_json::Value>>, (StatusCode, Json<ApiError>)> {
-    let days = query.days.unwrap_or(30);
+    let days = query.days();
     let (p50, p95, p99) = state
         .stats
         .get_latency_percentiles(days)

@@ -244,9 +244,9 @@ export interface StatsOverview {
 }
 
 export interface LatencyStats {
-  latency_p50: number | null
-  latency_p95: number | null
-  latency_p99: number | null
+  p50_latency_ms: number | null
+  p95_latency_ms: number | null
+  p99_latency_ms: number | null
 }
 
 export interface BudgetLimit {

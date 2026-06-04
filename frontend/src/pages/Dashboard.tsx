@@ -89,15 +89,24 @@ export function Dashboard() {
   useEffect(() => {
     const controller = new AbortController()
     const run = async () => {
-      const [d, m, c] = await Promise.all([
+      const [d, m, c, lat] = await Promise.all([
         statsApi.daily(chartParams).catch<DailyStats[]>(() => []),
         statsApi.models(chartParams).catch<ModelStats[]>(() => []),
         statsApi.channels(chartParams).catch<ChannelStats[]>(() => []),
+        statsApi.latency(chartParams).catch(() => null),
       ])
       if (!controller.signal.aborted) {
         setDaily(d)
         setModels(m)
         setChannels(c)
+        if (lat) {
+          setOverview(prev => prev ? {
+            ...prev,
+            latency_p50: lat.p50_latency_ms ?? undefined,
+            latency_p95: lat.p95_latency_ms ?? undefined,
+            latency_p99: lat.p99_latency_ms ?? undefined,
+          } : prev)
+        }
         setLoading(false)
       }
     }

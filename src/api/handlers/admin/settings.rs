@@ -90,6 +90,7 @@ const ALLOWED_SETTING_KEYS: &[&str] = &[
     "sticky_session.ttl_seconds",
     "proxy.enabled",
     "proxy.url",
+    "cors.allow_origins",
 ];
 
 pub async fn update(
