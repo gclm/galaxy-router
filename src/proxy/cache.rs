@@ -163,6 +163,7 @@ mod tests {
             custom_headers: vec![],
             timeout_secs: 300,
             max_concurrency: 0,
+            thinking_mode: None,
         }
     }
 

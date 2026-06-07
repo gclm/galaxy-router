@@ -130,8 +130,8 @@ pub async fn create(
 
     sqlx::query(
         r#"
-        INSERT INTO channels (id, name, api_keys, endpoints, models, rate_limit_rpm, rate_limit_tpm, failure_threshold, blacklist_minutes, concurrency, timeout_secs, max_concurrency, custom_headers, enabled)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO channels (id, name, api_keys, endpoints, models, rate_limit_rpm, rate_limit_tpm, failure_threshold, blacklist_minutes, concurrency, timeout_secs, max_concurrency, custom_headers, thinking_mode, enabled)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         "#
     )
     .bind(&id)
@@ -147,6 +147,7 @@ pub async fn create(
     .bind(req.timeout_secs.unwrap_or(300))
     .bind(req.max_concurrency.unwrap_or(0))
     .bind(&custom_headers_json)
+    .bind(&req.thinking_mode)
     .bind(req.enabled.unwrap_or(true))
     .execute(&state.pool)
     .await
@@ -219,6 +220,11 @@ pub async fn update(
     if let Some(ref custom_headers) = req.custom_headers {
         separated.push("custom_headers = ");
         separated.push_bind_unseparated(serde_json::to_string(custom_headers).unwrap_or_default());
+        has_update = true;
+    }
+    if let Some(ref thinking_mode) = req.thinking_mode {
+        separated.push("thinking_mode = ");
+        separated.push_bind_unseparated(thinking_mode);
         has_update = true;
     }
     if let Some(enabled) = req.enabled {
@@ -345,6 +351,7 @@ pub(crate) fn row_to_channel(row: ChannelRow) -> Result<Channel, String> {
         timeout_secs: row.timeout_secs,
         max_concurrency: row.max_concurrency,
         custom_headers: decode_json_field("channels.custom_headers", &row.custom_headers)?,
+        thinking_mode: row.thinking_mode,
         enabled: row.enabled,
         created_at: row.created_at,
         updated_at: row.updated_at,
@@ -370,6 +377,7 @@ fn row_to_channel_from_row(row: &sqlx::sqlite::SqliteRow) -> Result<Channel, Str
             "channels.custom_headers",
             &row.get::<String, _>("custom_headers"),
         )?,
+        thinking_mode: row.get("thinking_mode"),
         enabled: row.get("enabled"),
         created_at: row.get("created_at"),
         updated_at: row.get("updated_at"),

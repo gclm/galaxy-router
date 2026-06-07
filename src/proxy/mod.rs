@@ -9,6 +9,7 @@ pub mod scheduler;
 pub mod selection;
 pub mod sse;
 pub mod state;
+pub mod thinking_normalizer;
 
 pub use cache::ProxyCache;
 pub use channel::ChannelInfo;
@@ -512,15 +513,15 @@ impl ProxyState {
         }
 
         // 2. 缓存未命中，查询数据库
-        let result = sqlx::query_as::<_, (String, String, String, String, String, String, i32, i32)>(
-            "SELECT id, name, api_keys, endpoints, models, custom_headers, COALESCE(timeout_secs, 300), COALESCE(max_concurrency, 0) FROM channels WHERE id = ? AND enabled = 1"
+        let result = sqlx::query_as::<_, (String, String, String, String, String, String, i32, i32, Option<String>)>(
+            "SELECT id, name, api_keys, endpoints, models, custom_headers, COALESCE(timeout_secs, 300), COALESCE(max_concurrency, 0), thinking_mode FROM channels WHERE id = ? AND enabled = 1"
         )
         .bind(channel_id)
         .fetch_optional(&self.pool)
         .await
         .map_err(|e| ProxyError::DatabaseError(e.to_string()))?;
 
-        let (id, name, api_keys_str, endpoints_str, models_str, custom_headers_str, timeout_secs, max_concurrency) =
+        let (id, name, api_keys_str, endpoints_str, models_str, custom_headers_str, timeout_secs, max_concurrency, thinking_mode) =
             result.ok_or_else(|| ProxyError::ChannelNotFound("渠道不存在或已禁用".to_string()))?;
 
         let api_keys: Vec<UpstreamApiKey> = parse_api_keys(&api_keys_str);
@@ -539,6 +540,7 @@ impl ProxyState {
             custom_headers,
             timeout_secs: timeout_secs as u64,
             max_concurrency: max_concurrency as u32,
+            thinking_mode,
         };
 
         // 3. 写入缓存
@@ -570,14 +572,14 @@ impl ProxyState {
         }
 
         // 2. 回退到数据库全表扫描（冷启动或缓存未命中）
-        let channels = sqlx::query_as::<_, (String, String, String, String, String, String, i32, i32)>(
-            "SELECT id, name, api_keys, endpoints, models, custom_headers, COALESCE(timeout_secs, 300), COALESCE(max_concurrency, 0) FROM channels WHERE enabled = 1",
+        let channels = sqlx::query_as::<_, (String, String, String, String, String, String, i32, i32, Option<String>)>(
+            "SELECT id, name, api_keys, endpoints, models, custom_headers, COALESCE(timeout_secs, 300), COALESCE(max_concurrency, 0), thinking_mode FROM channels WHERE enabled = 1",
         )
         .fetch_all(&self.pool)
         .await
         .map_err(|e| ProxyError::DatabaseError(e.to_string()))?;
 
-        for (id, name, api_keys_str, endpoints_str, models_str, custom_headers_str, timeout_secs, max_concurrency) in channels {
+        for (id, name, api_keys_str, endpoints_str, models_str, custom_headers_str, timeout_secs, max_concurrency, thinking_mode) in channels {
             if exclude_ids.contains(&id) {
                 continue;
             }
@@ -607,6 +609,7 @@ impl ProxyState {
                 custom_headers,
                 timeout_secs: timeout_secs as u64,
                 max_concurrency: max_concurrency as u32,
+                thinking_mode,
             };
 
             if !endpoint_filter(&channel) {

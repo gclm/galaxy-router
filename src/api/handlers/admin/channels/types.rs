@@ -16,6 +16,7 @@ pub(crate) struct ChannelRow {
     pub(crate) timeout_secs: i32,
     pub(crate) max_concurrency: i32,
     pub(crate) custom_headers: String,
+    pub(crate) thinking_mode: Option<String>,
     pub(crate) enabled: bool,
     pub(crate) created_at: String,
     pub(crate) updated_at: String,
@@ -127,6 +128,8 @@ pub struct Channel {
     pub timeout_secs: i32,
     pub max_concurrency: i32,
     pub custom_headers: Vec<CustomHeader>,
+    /// 思维链规范化模式：None=关闭，Some("normalize")=启用
+    pub thinking_mode: Option<String>,
     pub enabled: bool,
     pub created_at: String,
     pub updated_at: String,
@@ -147,6 +150,7 @@ pub struct CreateChannelRequest {
     pub timeout_secs: Option<i32>,
     pub max_concurrency: Option<i32>,
     pub custom_headers: Option<Vec<CustomHeader>>,
+    pub thinking_mode: Option<String>,
     pub enabled: Option<bool>,
 }
 
@@ -165,6 +169,7 @@ pub struct UpdateChannelRequest {
     pub timeout_secs: Option<i32>,
     pub max_concurrency: Option<i32>,
     pub custom_headers: Option<Vec<CustomHeader>>,
+    pub thinking_mode: Option<String>,
     pub enabled: Option<bool>,
 }
 

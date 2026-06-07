@@ -38,3 +38,4 @@ tmp/
 coverage/
 tarpaulin-report.html
 /coverage/
+config-test.toml

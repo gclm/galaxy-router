@@ -12,6 +12,7 @@ use crate::proxy::sse::{
     apply_sse_usage, collect_sse_content, extract_error_from_sse, extract_usage_from_sse,
     find_sse_boundary, format_stream_error_event, sanitize_upstream_error,
 };
+use crate::proxy::thinking_normalizer::{PassthroughNormalizer, ThinkingTagExtractor};
 use crate::stats::redaction::sanitize_json_content;
 
 /// 单次尝试的统计信息
@@ -705,6 +706,7 @@ pub(super) async fn execute_proxy_stream(
 
     // 提前 clone 给 spawn 任务使用
     let sc_channel_id = channel_id_clone.clone();
+    let sc_thinking_mode = selection.channel.thinking_mode.clone();
     let sc_model = model_clone.clone();
     let sc_target_model = target_model_clone.clone();
     let sc_client_endpoint = client_endpoint_clone.clone();
@@ -760,6 +762,18 @@ pub(super) async fn execute_proxy_stream(
         let mut ttft_ms: Option<i32> = None;
         let mut first_token_seen = false;
 
+        // 思维链规范化器：仅在渠道启用 thinking_mode="normalize" 时创建
+        let thinking_normalizer_enabled = sc_thinking_mode
+            .as_deref()
+            .map(|m| m == "normalize")
+            .unwrap_or(false);
+        let mut passthrough_normalizer: Option<PassthroughNormalizer> = None;
+        let mut conversion_extractor: Option<ThinkingTagExtractor> = None;
+        if thinking_normalizer_enabled {
+            passthrough_normalizer = Some(PassthroughNormalizer::new());
+            conversion_extractor = Some(ThinkingTagExtractor::new());
+        }
+
         if needs_conversion {
             let inbound = get_inbound(&client_endpoint_clone);
             let outbound = get_outbound(&upstream_endpoint_clone);
@@ -807,7 +821,11 @@ pub(super) async fn execute_proxy_stream(
                             }
 
                             match outbound.transform_stream_event(&event_bytes) {
-                                Ok(Some(llm_stream)) => {
+                                Ok(Some(mut llm_stream)) => {
+                                    // 思维链规范化先于 stats：让 stats 看到的是清理后的内容
+                                    if let Some(ref mut extractor) = conversion_extractor {
+                                        extractor.extract(&mut llm_stream);
+                                    }
                                     // 收集内容用于统计
                                     if let Some(choice) = llm_stream.first_choice() {
                                         if let Some(crate::protocol::model::Content::Text(t)) = &choice.delta.content
@@ -905,6 +923,7 @@ pub(super) async fn execute_proxy_stream(
                     Ok(bytes) => {
                         buffer.extend_from_slice(&bytes);
 
+                        let mut client_disconnected = false;
                         while let Some(event_end) = find_sse_boundary(&buffer) {
                             let event_bytes = buffer[..event_end].to_vec();
                             buffer = buffer[event_end..].to_vec();
@@ -929,9 +948,24 @@ pub(super) async fn execute_proxy_stream(
                                 }
                                 collect_sse_content(text, &upstream_endpoint_clone, &mut collected_text, &mut collected_reasoning, &mut collected_tool_calls);
                             }
-                        }
 
-                        if !stream_send(&stream_tx, bytes).await {
+                            // 直通路径：可选的 thinking 规范化
+                            if let Some(ref mut normalizer) = passthrough_normalizer {
+                                let events = normalizer.process_sse(&event_bytes, &upstream_endpoint_clone);
+                                for evt in events {
+                                    if !stream_send(&stream_tx, Bytes::from(evt)).await {
+                                        client_disconnected = true;
+                                        break;
+                                    }
+                                }
+                            } else if !stream_send(&stream_tx, Bytes::from(event_bytes)).await {
+                                client_disconnected = true;
+                            }
+                            if client_disconnected {
+                                break;
+                            }
+                        }
+                        if client_disconnected {
                             break;
                         }
                     }

@@ -15,6 +15,8 @@ pub struct ChannelInfo {
     pub timeout_secs: u64,
     /// 最大并发请求数（0=不限制）
     pub max_concurrency: u32,
+    /// 思维链规范化模式：None=关闭，Some("normalize")=启用
+    pub thinking_mode: Option<String>,
 }
 
 impl ChannelInfo {
@@ -87,6 +89,7 @@ mod tests {
             custom_headers: vec![],
             timeout_secs: 300,
             max_concurrency: 0,
+            thinking_mode: None,
         }
     }
 

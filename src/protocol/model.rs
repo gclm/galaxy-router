@@ -219,6 +219,10 @@ pub struct StreamChoice {
     pub index: u32,
     pub delta: Message,
     pub finish_reason: Option<FinishReason>,
+    /// Anthropic thinking block 的 signature（用于多轮 thinking 连续性）
+    /// 不在 OpenAI 客户端序列化时输出（serde 字段映射到顶级）
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub thinking_signature: Option<String>,
 }
 
 /// 统一响应模型

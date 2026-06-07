@@ -547,10 +547,46 @@ impl Outbound for AnthropicOutbound {
                             cache_control: None,
                         },
                         finish_reason: None,
+                        thinking_signature: None,
                     }],
                     usage: None,
                     system_fingerprint: None,
                 }))
+            }
+            "content_block_start" => {
+                // 提取 thinking block 的 signature（部分厂商如 GLM-5.1 把 signature 放在此处）
+                // 标准 Anthropic 通过独立的 signature_delta 事件传递 signature
+                let cb_type = parsed["content_block"]["type"].as_str().unwrap_or("");
+                if cb_type == "thinking" {
+                    let signature = parsed["content_block"]["signature"]
+                        .as_str()
+                        .map(|s| s.to_string());
+                    let block_index = parsed["index"].as_u64().unwrap_or(0) as u32;
+                    Ok(Some(LlmStreamResponse {
+                        id: String::new(),
+                        object: "chat.completion.chunk".to_string(),
+                        created: chrono::Utc::now().timestamp(),
+                        model: String::new(),
+                        choices: vec![StreamChoice {
+                            index: block_index,
+                            delta: Message {
+                                role: Role::Assistant,
+                                content: None,
+                                name: None,
+                                tool_calls: None,
+                                tool_call_id: None,
+                                reasoning_content: None,
+                                cache_control: None,
+                            },
+                            finish_reason: None,
+                            thinking_signature: signature,
+                        }],
+                        usage: None,
+                        system_fingerprint: None,
+                    }))
+                } else {
+                    Ok(None)
+                }
             }
             "content_block_delta" => {
                 let delta_type = parsed["delta"]["type"].as_str().unwrap_or("");
@@ -574,6 +610,7 @@ impl Outbound for AnthropicOutbound {
                                     cache_control: None,
                                 },
                                 finish_reason: None,
+                                thinking_signature: None,
                             }],
                             usage: None,
                             system_fingerprint: None,
@@ -598,6 +635,7 @@ impl Outbound for AnthropicOutbound {
                                     cache_control: None,
                                 },
                                 finish_reason: None,
+                                thinking_signature: None,
                             }],
                             usage: None,
                             system_fingerprint: None,
@@ -629,6 +667,7 @@ impl Outbound for AnthropicOutbound {
                             cache_control: None,
                         },
                         finish_reason,
+                        thinking_signature: None,
                     }],
                     usage: None,
                     system_fingerprint: None,
@@ -694,6 +733,10 @@ pub struct AnthropicStreamConverter {
 
     // 去重
     last_event_type: String,
+
+    /// 待补发的 thinking block signature（来自 content_block_start 事件）
+    /// 在 close_thinking_block 中作为 signature_delta 事件发出
+    pending_thinking_signature: Option<String>,
 }
 
 impl Default for AnthropicStreamConverter {
@@ -718,6 +761,7 @@ impl AnthropicStreamConverter {
             tool_calls: HashMap::new(),
             input_usage: None,
             last_event_type: String::new(),
+            pending_thinking_signature: None,
         }
     }
 
@@ -773,6 +817,7 @@ impl AnthropicStreamConverter {
     }
 
     /// 关闭 thinking block
+    /// 在 content_block_stop 之前补发 signature_delta 事件（如果有 pending signature）
     fn close_thinking_block(&mut self) -> Vec<Vec<u8>> {
         if !self.has_thinking_content_started {
             return vec![];
@@ -780,6 +825,16 @@ impl AnthropicStreamConverter {
         self.has_thinking_content_started = false;
 
         let mut events = vec![];
+        // 补发 signature_delta（如果上游把 signature 放在 content_block_start 里）
+        if let Some(sig) = self.pending_thinking_signature.take() {
+            if self.should_emit("content_block_delta") {
+                events.push(Self::sse_event("content_block_delta", serde_json::json!({
+                    "type": "content_block_delta",
+                    "index": self.content_index,
+                    "delta": { "type": "signature_delta", "signature": sig }
+                })));
+            }
+        }
         if self.should_emit("content_block_stop") {
             events.push(Self::sse_event("content_block_stop", serde_json::json!({
                 "type": "content_block_stop",
@@ -1028,6 +1083,11 @@ impl StreamConverter for AnthropicStreamConverter {
         }
 
         if let Some(choice) = event.first_choice() {
+            // 缓存 thinking signature（来自 content_block_start 事件），在 close_thinking_block 中补发
+            if let Some(sig) = &choice.thinking_signature {
+                self.pending_thinking_signature = Some(sig.clone());
+            }
+
             // 处理 reasoning_content（thinking block）
             if let Some(reasoning) = &choice.delta.reasoning_content
                 && !reasoning.is_empty()
