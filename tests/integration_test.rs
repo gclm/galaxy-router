@@ -501,7 +501,7 @@ async fn test_channel_rejects_crlf_in_api_key() {
             key: "X-Custom".into(),
             value: "value".into(),
         }],
-        thinking_mode: None,
+        extras: None,
         enabled: true,
         created_at: "2026-01-01T00:00:00Z".into(),
         updated_at: "2026-01-01T00:00:00Z".into(),

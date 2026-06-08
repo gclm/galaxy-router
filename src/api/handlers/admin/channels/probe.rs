@@ -4,12 +4,15 @@ use axum::{
     http::StatusCode,
 };
 use reqwest::Client;
+use std::collections::HashMap;
 
 use super::crud::get_channel_by_id;
 use super::types::{
-    ChannelState, CustomHeader, EndpointType, TestChannelRequest, TestChannelResponse,
+    ChannelState, CustomHeader, DetectRequest, DetectResponse, EndpointConfig, EndpointDetection,
+    EndpointType, TestChannelRequest, TestChannelResponse,
 };
 use crate::api::{ApiError, ApiResponse};
+use crate::proxy::channel::ChannelInfo;
 
 const TEST_PROMPT: &str = "Hello! Please respond with a brief greeting in one sentence.";
 
@@ -38,33 +41,24 @@ pub async fn test_channel(
     })?;
 
     let channel = get_channel_by_id(&state.pool, &id, state.timezone_offset).await?;
-
     let api_key = channel
         .api_keys
         .iter()
         .find(|k| k.key == req.api_key && k.enabled)
         .ok_or_else(|| ApiError::bad_request("指定的 API Key 不存在或已禁用"))?;
-
     let endpoint = channel
         .endpoints
         .iter()
         .find(|e| e.endpoint_type == endpoint_type && e.enabled)
         .ok_or_else(|| ApiError::bad_request(format!("渠道没有启用 {} 端点", req.test_protocol)))?;
 
-    let url = format!(
-        "{}{}",
-        endpoint.base_url.trim_end_matches('/'),
-        upstream_path
-    );
-
     if use_stream {
-        let (result, latency_ms, ttft, pt, ct) = send_streaming_test(
+        let (result, latency_ms, ttft, pt, ct) = probe_endpoint_raw(
             &state.http_client,
-            &url,
-            &body,
-            &endpoint_type,
+            endpoint,
             &api_key.key,
-            &channel.custom_headers,
+            &body,
+            Some(&channel.custom_headers),
             req.user_agent.as_deref(),
         )
         .await;
@@ -96,7 +90,7 @@ pub async fn test_channel(
 
         let mut req_builder = state
             .http_client
-            .post(&url)
+            .post(&format!("{}{}", endpoint.base_url.trim_end_matches('/'), upstream_path))
             .header("Content-Type", "application/json")
             .timeout(std::time::Duration::from_secs(30));
 
@@ -182,6 +176,98 @@ pub async fn test_channel(
             }))),
         }
     }
+}
+
+/// 检测渠道 quirks：调用上游拿原始响应，分析是否含 `<think/>` 标签或 signature 异常
+pub async fn detect_channel_quirks(
+    State(state): State<ChannelState>,
+    Path(id): Path<String>,
+    Json(req): Json<DetectRequest>,
+) -> Result<Json<ApiResponse<DetectResponse>>, (StatusCode, Json<ApiError>)> {
+    let channel = get_channel_by_id(&state.pool, &id, state.timezone_offset).await?;
+
+    // 选 API key
+    let api_key = req
+        .api_key
+        .as_deref()
+        .and_then(|k| channel.api_keys.iter().find(|ak| ak.key == k && ak.enabled))
+        .or_else(|| channel.api_keys.iter().find(|ak| ak.enabled))
+        .ok_or_else(|| ApiError::bad_request("渠道没有可用的 API Key"))?;
+
+    // 选 model
+    let model = req
+        .model
+        .clone()
+        .or_else(|| channel.models.first().cloned())
+        .ok_or_else(|| ApiError::bad_request("渠道没有可用模型，请指定 model"))?;
+
+    // 选要测的 endpoints
+    let endpoints: Vec<&EndpointConfig> = if let Some(filter) = &req.endpoints {
+        channel
+            .endpoints
+            .iter()
+            .filter(|e| e.enabled && filter.iter().any(|t| t == e.endpoint_type.as_str()))
+            .collect()
+    } else {
+        channel.endpoints.iter().filter(|e| e.enabled).collect()
+    };
+
+    if endpoints.is_empty() {
+        return Err(ApiError::bad_request("没有启用的端点可检测"));
+    }
+
+    // 为不同 endpoint 并行构造合适的 thinking-启用请求体
+    let endpoint_results: Vec<EndpointDetection> = {
+        let probes = endpoints.into_iter().map(|endpoint| {
+            let client = &state.http_client;
+            let channel = &channel;
+            let api_key = api_key.key.clone();
+            let model = model.clone();
+            async move {
+                let (body, upstream_path) = match build_detect_payload(&endpoint.endpoint_type, &model) {
+                    Some(v) => v,
+                    None => {
+                        return EndpointDetection {
+                            endpoint: endpoint.endpoint_type.as_str().to_string(),
+                            recommendations: HashMap::new(),
+                            evidence: format!("协议 {} 不支持检测", endpoint.endpoint_type.as_str()),
+                            sample: String::new(),
+                        };
+                    }
+                };
+                let (result, _latency, _ttft, _pt, _ct) = probe_endpoint_raw(
+                    client,
+                    &endpoint,
+                    &api_key,
+                    &body,
+                    Some(&channel.custom_headers),
+                    None,
+                )
+                .await;
+                let response_text = match result {
+                    Ok(s) => s,
+                    Err(e) => format!("[探测调用失败: {}]", e),
+                };
+                analyze_response(&endpoint.endpoint_type, &response_text)
+            }
+        });
+        futures::future::join_all(probes).await
+    };
+
+    // 渠道级合并推荐：任一 endpoint 建议开启 → true
+    let mut recommendations: HashMap<String, bool> = HashMap::new();
+    for r in &endpoint_results {
+        for (k, v) in &r.recommendations {
+            if *v {
+                recommendations.insert(k.clone(), true);
+            }
+        }
+    }
+
+    Ok(Json(ApiResponse::success(DetectResponse {
+        recommendations,
+        endpoint_results,
+    })))
 }
 
 /// 构建测试请求体和上游路径
@@ -344,13 +430,17 @@ fn inject_custom_headers(
 }
 
 /// 流式测试：发 SSE 请求，消费完整流，返回首 token 时间和完整内容
-async fn send_streaming_test(
+
+/// 检测使用的 prompt：包含"请详细分析"等更可能触发 thinking 的内容
+const DETECT_PROMPT: &str = "请详细分析 1+1=2 的推理过程，并简短回答。";
+
+/// 共享的端点探测：发流式请求 + 消费完整响应，返回原始响应文本
+async fn probe_endpoint_raw(
     client: &Client,
-    url: &str,
-    body: &serde_json::Value,
-    endpoint_type: &EndpointType,
+    endpoint: &EndpointConfig,
     api_key: &str,
-    custom_headers: &[CustomHeader],
+    body: &serde_json::Value,
+    custom_headers: Option<&[CustomHeader]>,
     user_agent: Option<&str>,
 ) -> (
     Result<String, String>,
@@ -359,12 +449,23 @@ async fn send_streaming_test(
     Option<u64>,
     Option<u64>,
 ) {
+    let url = format!(
+        "{}{}",
+        endpoint.base_url.trim_end_matches('/'),
+        match endpoint.endpoint_type {
+            EndpointType::OpenAiChat => "/chat/completions",
+            EndpointType::OpenAiResponse => "/responses",
+            EndpointType::Anthropic => "/messages",
+            _ => "",
+        }
+    );
+
     let mut req_builder = client
-        .post(url)
+        .post(&url)
         .header("Content-Type", "application/json")
         .timeout(std::time::Duration::from_secs(60));
 
-    match endpoint_type {
+    match endpoint.endpoint_type {
         EndpointType::Anthropic => {
             req_builder = req_builder
                 .header("x-api-key", api_key)
@@ -374,7 +475,10 @@ async fn send_streaming_test(
             req_builder = req_builder.header("Authorization", format!("Bearer {}", api_key));
         }
     }
-    req_builder = inject_custom_headers(req_builder, custom_headers);
+
+    if let Some(headers) = custom_headers {
+        req_builder = inject_custom_headers(req_builder, headers);
+    }
 
     if let Some(ua) = user_agent
         && !ua.is_empty()
@@ -429,7 +533,6 @@ async fn send_streaming_test(
 
     let mut event_type = "";
     for line in text.lines() {
-        // 解析 event: 行（OpenAI Responses 流式事件需要区分事件类型）
         if let Some(stripped) = line.strip_prefix("event: ") {
             event_type = stripped.trim();
             continue;
@@ -443,29 +546,24 @@ async fn send_streaming_test(
                 first_token_ms = Some(start.elapsed().as_millis() as u64);
             }
             if let Ok(json) = serde_json::from_str::<serde_json::Value>(data) {
-                // --- Usage 提取（兼容多种格式）---
-                // OpenAI Chat: usage 在 data 顶层
                 if let Some(v) = json["usage"]["prompt_tokens"].as_u64() {
                     prompt_tokens = Some(v);
                 }
                 if let Some(v) = json["usage"]["completion_tokens"].as_u64() {
                     completion_tokens = Some(v);
                 }
-                // OpenAI Responses / Anthropic: input_tokens / output_tokens
                 if let Some(v) = json["usage"]["input_tokens"].as_u64() {
                     prompt_tokens = Some(v);
                 }
                 if let Some(v) = json["usage"]["output_tokens"].as_u64() {
                     completion_tokens = Some(v);
                 }
-                // OpenAI Responses: response.completed 事件中 usage 嵌套在 response 下
                 if let Some(v) = json["response"]["usage"]["input_tokens"].as_u64() {
                     prompt_tokens = Some(v);
                 }
                 if let Some(v) = json["response"]["usage"]["output_tokens"].as_u64() {
                     completion_tokens = Some(v);
                 }
-                // Anthropic: message_start 事件中 usage 嵌套在 message 下
                 if let Some(v) = json["message"]["usage"]["input_tokens"].as_u64() {
                     prompt_tokens = Some(v);
                 }
@@ -473,22 +571,16 @@ async fn send_streaming_test(
                     completion_tokens = Some(v);
                 }
 
-                // --- Delta 内容提取（按端点类型分别处理）---
-                let delta = match endpoint_type {
-                    EndpointType::OpenAiChat => {
-                        json["choices"][0]["delta"]["content"].as_str()
-                    }
+                let delta = match endpoint.endpoint_type {
+                    EndpointType::OpenAiChat => json["choices"][0]["delta"]["content"].as_str(),
                     EndpointType::OpenAiResponse => {
-                        // 只处理 output_text.delta 事件，其他事件没有文本内容
                         if event_type == "response.output_text.delta" {
                             json["delta"].as_str()
                         } else {
                             None
                         }
                     }
-                    EndpointType::Anthropic => {
-                        json["delta"]["text"].as_str()
-                    }
+                    EndpointType::Anthropic => json["delta"]["text"].as_str(),
                     _ => json["delta"]
                         .as_str()
                         .or_else(|| json["choices"][0]["delta"]["content"].as_str()),
@@ -520,7 +612,148 @@ async fn send_streaming_test(
     }
 }
 
+/// 构建检测用的请求体（启用 thinking 模式以触发签名/标签）
+fn build_detect_payload(
+    protocol: &EndpointType,
+    model: &str,
+) -> Option<(serde_json::Value, &'static str)> {
+    match protocol {
+        EndpointType::OpenAiChat => Some((
+            serde_json::json!({
+                "model": model,
+                "messages": [{"role": "user", "content": DETECT_PROMPT}],
+                "max_tokens": 200,
+                "stream": true
+            }),
+            "/chat/completions",
+        )),
+        EndpointType::OpenAiResponse => Some((
+            serde_json::json!({
+                "model": model,
+                "input": DETECT_PROMPT,
+                "max_output_tokens": 200,
+                "stream": true
+            }),
+            "/responses",
+        )),
+        EndpointType::Anthropic => Some((
+            serde_json::json!({
+                "model": model,
+                "messages": [{"role": "user", "content": DETECT_PROMPT}],
+                "max_tokens": 200,
+                "thinking": {"type": "enabled", "budget_tokens": 1024},
+                "stream": true
+            }),
+            "/messages",
+        )),
+        _ => None,
+    }
+}
+
+/// 分析上游响应，检测非标准行为
+fn analyze_response(endpoint_type: &EndpointType, response: &str) -> EndpointDetection {
+    let mut recommendations: HashMap<String, bool> = HashMap::new();
+    let mut evidence_parts: Vec<String> = Vec::new();
+    let mut sample = String::new();
+
+    if let Some(tag_start) = response.find("<think>") {
+        recommendations.insert("thinking.extract_tags".to_string(), true);
+        evidence_parts.push("响应中发现 <think> 标签".to_string());
+        if let Some(rel_end) = response[tag_start..].find("</think>") {
+            let end = tag_start + rel_end + "</think>".len();
+            sample = response[tag_start..end].chars().take(200).collect();
+        } else {
+            sample = response[tag_start..].chars().take(200).collect();
+        }
+    }
+
+    if matches!(endpoint_type, EndpointType::Anthropic) {
+        let has_content_block_start = response.contains("\"content_block_start\"");
+        let has_thinking = response.contains("\"thinking\"");
+        let has_signature_field = response.contains("\"signature\":");
+        let has_signature_delta = response.contains("\"signature_delta\"");
+
+        if has_content_block_start && has_thinking && has_signature_field && !has_signature_delta {
+            recommendations.insert("thinking.fix_signature".to_string(), true);
+            evidence_parts
+                .push("Anthropic signature 在 content_block_start 内、未见 signature_delta 事件".to_string());
+            if let Some(idx) = response.find("\"signature\":") {
+                let start = idx + "\"signature\":".len();
+                let end = response[start..]
+                    .find(|c: char| c == ',' || c == '}' || c == '\n')
+                    .unwrap_or(80)
+                    .min(80);
+                sample = response[idx..start + end].to_string();
+            }
+        }
+    }
+
+    EndpointDetection {
+        endpoint: endpoint_type.as_str().to_string(),
+        recommendations,
+        evidence: evidence_parts.join("；"),
+        sample,
+    }
+}
+
 #[cfg(test)]
+mod analyze_response_tests {
+    use super::*;
+
+    #[test]
+    fn detects_think_tags_in_openai_chat() {
+        let resp = r#"data: {"choices":[{"delta":{"content":"<think>hidden</think> visible"}}]}"#;
+        let r = analyze_response(&EndpointType::OpenAiChat, resp);
+        assert!(r.recommendations.get("thinking.extract_tags").copied().unwrap_or(false));
+        assert!(r.evidence.contains("<think>"));
+        assert!(r.sample.contains("hidden"));
+        assert!(!r.recommendations.contains_key("thinking.fix_signature"));
+    }
+
+    #[test]
+    fn detects_glm_signature_in_anthropic_start() {
+        let resp = r#"event: content_block_start
+data: {"type":"content_block_start","index":0,"content_block":{"type":"thinking","signature":"abc123"}}
+event: content_block_delta
+data: {"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"hi"}}
+event: content_block_stop
+data: {"type":"content_block_stop","index":0}
+"#;
+        let r = analyze_response(&EndpointType::Anthropic, resp);
+        assert!(r.recommendations.get("thinking.fix_signature").copied().unwrap_or(false));
+        assert!(r.evidence.contains("content_block_start"));
+        assert!(r.sample.contains("abc123"));
+    }
+
+    #[test]
+    fn no_recommendation_for_standard_anthropic() {
+        let resp = r#"event: content_block_start
+data: {"type":"content_block_start","index":0,"content_block":{"type":"thinking"}}
+event: content_block_delta
+data: {"type":"content_block_delta","index":0,"delta":{"type":"signature_delta","signature":"abc"}}
+"#;
+        let r = analyze_response(&EndpointType::Anthropic, resp);
+        assert!(!r.recommendations.contains_key("thinking.fix_signature"));
+        assert!(!r.recommendations.contains_key("thinking.extract_tags"));
+    }
+
+    #[test]
+    fn no_recommendation_for_normal_chat() {
+        let resp = r#"data: {"choices":[{"delta":{"content":"hello"}}]}"#;
+        let r = analyze_response(&EndpointType::OpenAiChat, resp);
+        assert!(r.recommendations.is_empty());
+        assert!(r.evidence.is_empty());
+    }
+
+    #[test]
+    fn does_not_set_fix_signature_for_non_anthropic() {
+        // GLM 风格 signature-in-start 只在 anthropic 协议下检测
+        let resp = r#"data: {"content_block_start":true,"thinking":true,"signature":"abc"}"#;
+        let r = analyze_response(&EndpointType::OpenAiChat, resp);
+        assert!(!r.recommendations.contains_key("thinking.fix_signature"));
+    }
+}
+
 mod tests {
     use super::*;
     use serde_json::json;

@@ -16,7 +16,7 @@ pub(crate) struct ChannelRow {
     pub(crate) timeout_secs: i32,
     pub(crate) max_concurrency: i32,
     pub(crate) custom_headers: String,
-    pub(crate) thinking_mode: Option<String>,
+    pub(crate) extras: String,
     pub(crate) enabled: bool,
     pub(crate) created_at: String,
     pub(crate) updated_at: String,
@@ -128,8 +128,12 @@ pub struct Channel {
     pub timeout_secs: i32,
     pub max_concurrency: i32,
     pub custom_headers: Vec<CustomHeader>,
-    /// 思维链规范化模式：None=关闭，Some("normalize")=启用
-    pub thinking_mode: Option<String>,
+    /// 扩展字段（JSON 自由格式）
+    /// 当前用法：
+    /// - thinking.extract_tags: bool 抽取 `<think/>` 标签到 `reasoning_content`
+    /// - thinking.fix_signature: bool 修复 GLM-style signature 位置
+    #[serde(default)]
+    pub extras: Option<serde_json::Map<String, serde_json::Value>>,
     pub enabled: bool,
     pub created_at: String,
     pub updated_at: String,
@@ -150,7 +154,7 @@ pub struct CreateChannelRequest {
     pub timeout_secs: Option<i32>,
     pub max_concurrency: Option<i32>,
     pub custom_headers: Option<Vec<CustomHeader>>,
-    pub thinking_mode: Option<String>,
+    pub extras: Option<serde_json::Map<String, serde_json::Value>>,
     pub enabled: Option<bool>,
 }
 
@@ -169,7 +173,7 @@ pub struct UpdateChannelRequest {
     pub timeout_secs: Option<i32>,
     pub max_concurrency: Option<i32>,
     pub custom_headers: Option<Vec<CustomHeader>>,
-    pub thinking_mode: Option<String>,
+    pub extras: Option<serde_json::Map<String, serde_json::Value>>,
     pub enabled: Option<bool>,
 }
 
@@ -207,4 +211,36 @@ pub struct TestChannelResponse {
     pub prompt_tokens: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub completion_tokens: Option<u64>,
+}
+
+/// 检测渠道 quirks 请求（所有参数可选）
+#[derive(Debug, Deserialize, Default)]
+pub struct DetectRequest {
+    /// 指定 endpoint 列表（如 `["openai_chat", "anthropic"]`）；不传则测所有启用端点
+    pub endpoints: Option<Vec<String>>,
+    /// 指定 API key；不传则用第一个启用的
+    pub api_key: Option<String>,
+    /// 指定 model；不传则用渠道 models 第一个
+    pub model: Option<String>,
+}
+
+/// 单个 endpoint 的检测结果
+#[derive(Debug, Serialize, Clone)]
+pub struct EndpointDetection {
+    pub endpoint: String,
+    /// 推荐的开关（key 是如 "thinking.extract_tags"）
+    pub recommendations: std::collections::HashMap<String, bool>,
+    /// 检测证据描述
+    pub evidence: String,
+    /// 响应样本（截断到 200 字符）
+    pub sample: String,
+}
+
+/// 检测渠道 quirks 响应
+#[derive(Debug, Serialize)]
+pub struct DetectResponse {
+    /// 渠道级合并推荐（任一 endpoint 建议开启则 true）
+    pub recommendations: std::collections::HashMap<String, bool>,
+    /// 每个 endpoint 的详细检测结果
+    pub endpoint_results: Vec<EndpointDetection>,
 }

@@ -176,6 +176,18 @@ export function ChannelDetail({ channel, open, onOpenChange, onEdit, onTest }: C
               </div>
             </section>
           )}
+
+          {/* 扩展设置（extras）*/}
+          {channel.extras && Object.keys(channel.extras).length > 0 && (
+            <section>
+              <h3 className="text-sm font-semibold text-muted-foreground mb-2">
+                扩展设置
+              </h3>
+              <pre className="text-xs font-mono bg-muted/30 p-2 rounded overflow-x-auto">
+                {JSON.stringify(channel.extras, null, 2)}
+              </pre>
+            </section>
+          )}
         </div>
 
         {/* 底部操作 */}

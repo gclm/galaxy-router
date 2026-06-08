@@ -25,4 +25,4 @@ pub(crate) use crud::row_to_channel;
 pub use crud::{create, delete, get, list, parse_api_keys, update};
 
 // Probe handler
-pub use probe::test_channel;
+pub use probe::{detect_channel_quirks, test_channel};

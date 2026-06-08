@@ -381,11 +381,13 @@ impl PassthroughNormalizer {
             Err(_) => return vec![raw_bytes.to_vec()],
         };
 
-        let data_line = text
+        // 提取 data 行（parse_sse_event 不直接暴露，复用其行扫描模式）
+        let data = text
             .lines()
-            .find(|l| l.trim_start().starts_with("data:"));
-        let data = match data_line {
-            Some(d) => d.trim_start().strip_prefix("data:").unwrap_or("").trim_start(),
+            .find_map(|l| l.trim_start().strip_prefix("data:"))
+            .map(|s| s.trim_start());
+        let data = match data {
+            Some(d) => d,
             None => return vec![raw_bytes.to_vec()],
         };
 
@@ -474,28 +476,22 @@ impl PassthroughNormalizer {
             Err(_) => return vec![raw_bytes.to_vec()],
         };
 
-        let event_type = text
-            .lines()
-            .find_map(|l| l.strip_prefix("event:").map(|v| v.trim().to_string()))
-            .unwrap_or_default();
+        let sse = crate::protocol::model::parse_sse_event(text);
+        let event_type = sse.event_type;
+        let data = if sse.data.is_empty() {
+            // parse_sse_event 只匹配 "data: "（带空格），兼容无空格的情况
+            text.lines()
+                .find_map(|l| l.trim_start().strip_prefix("data:"))
+                .map(|s| s.trim_start().to_string())
+                .unwrap_or_default()
+        } else {
+            sse.data
+        };
 
-        let data_line = text.lines().find_map(|l| {
-            let trimmed = l.trim_start();
-            if trimmed.starts_with("data:") {
-                Some(trimmed)
-            } else {
-                None
-            }
-        });
-
-        if event_type == "content_block_start" {
-            let data = data_line
-                .and_then(|d| d.strip_prefix("data:"))
-                .unwrap_or("")
-                .trim_start();
+        if event_type == "content_block_start" && !data.is_empty() {
             // 快速预检：data 中没有 "thinking" 字符串则不是 thinking block，跳过 JSON 解析
             if data.contains("thinking")
-                && let Ok(parsed) = serde_json::from_str::<Value>(data)
+                && let Ok(parsed) = serde_json::from_str::<Value>(&data)
             {
                 let cb_type = parsed["content_block"]["type"].as_str().unwrap_or("");
                 if cb_type == "thinking"
@@ -775,7 +771,6 @@ mod tests {
                     cache_control: None,
                 },
                 finish_reason: None,
-                thinking_signature: None,
             }],
             usage: None,
             system_fingerprint: None,

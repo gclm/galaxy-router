@@ -15,6 +15,19 @@ use crate::proxy::sse::{
 use crate::proxy::thinking_normalizer::{PassthroughNormalizer, ThinkingTagExtractor};
 use crate::stats::redaction::sanitize_json_content;
 
+/// 从渠道 extras JSON Map 读取 `extras.thinking.<key>` 布尔开关
+fn thinking_flag(
+    extras: &Option<serde_json::Map<String, serde_json::Value>>,
+    key: &str,
+) -> bool {
+    extras
+        .as_ref()
+        .and_then(|e| e.get("thinking"))
+        .and_then(|v| v.get(key))
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+}
+
 /// 单次尝试的统计信息
 pub(super) struct AttemptStats {
     channel_id: String,
@@ -706,7 +719,7 @@ pub(super) async fn execute_proxy_stream(
 
     // 提前 clone 给 spawn 任务使用
     let sc_channel_id = channel_id_clone.clone();
-    let sc_thinking_mode = selection.channel.thinking_mode.clone();
+    let sc_extras = selection.channel.extras.clone();
     let sc_model = model_clone.clone();
     let sc_target_model = target_model_clone.clone();
     let sc_client_endpoint = client_endpoint_clone.clone();
@@ -762,17 +775,21 @@ pub(super) async fn execute_proxy_stream(
         let mut ttft_ms: Option<i32> = None;
         let mut first_token_seen = false;
 
-        // 思维链规范化器：仅在渠道启用 thinking_mode="normalize" 时创建
-        let thinking_normalizer_enabled = sc_thinking_mode
-            .as_deref()
-            .map(|m| m == "normalize")
-            .unwrap_or(false);
-        let mut passthrough_normalizer: Option<PassthroughNormalizer> = None;
-        let mut conversion_extractor: Option<ThinkingTagExtractor> = None;
-        if thinking_normalizer_enabled {
-            passthrough_normalizer = Some(PassthroughNormalizer::new());
-            conversion_extractor = Some(ThinkingTagExtractor::new());
-        }
+        // 思维链规范化器：仅在渠道 extras.thinking.{extract_tags,fix_signature} 启用时创建
+        let extract_think_tags = thinking_flag(&sc_extras, "extract_tags");
+        let fix_signature = thinking_flag(&sc_extras, "fix_signature");
+
+        let mut passthrough_normalizer: Option<PassthroughNormalizer> =
+            if extract_think_tags || fix_signature {
+                Some(PassthroughNormalizer::new())
+            } else {
+                None
+            };
+        let mut conversion_extractor: Option<ThinkingTagExtractor> = if extract_think_tags {
+            Some(ThinkingTagExtractor::new())
+        } else {
+            None
+        };
 
         if needs_conversion {
             let inbound = get_inbound(&client_endpoint_clone);

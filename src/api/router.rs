@@ -125,6 +125,7 @@ pub async fn create_router(
                         .delete(channels::delete),
                 )
                 .route("/{id}/test", post(channels::test_channel))
+                .route("/{id}/detect", post(channels::detect_channel_quirks))
                 .with_state(channel_state),
         )
         .nest(

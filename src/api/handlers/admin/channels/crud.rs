@@ -43,7 +43,7 @@ pub async fn list(
 
     let tz = tz_modifier(state.timezone_offset);
     let mut data_builder = sqlx::QueryBuilder::new(
-        format!("SELECT id, name, api_keys, endpoints, models, rate_limit_rpm, rate_limit_tpm, failure_threshold, blacklist_minutes, concurrency, timeout_secs, max_concurrency, custom_headers, enabled, datetime(created_at, '{}') as created_at, datetime(updated_at, '{}') as updated_at FROM channels", tz, tz),
+        format!("SELECT id, name, api_keys, endpoints, models, rate_limit_rpm, rate_limit_tpm, failure_threshold, blacklist_minutes, concurrency, timeout_secs, max_concurrency, custom_headers, extras, enabled, datetime(created_at, '{}') as created_at, datetime(updated_at, '{}') as updated_at FROM channels", tz, tz),
     );
     push_where(&mut data_builder, &query);
     data_builder.push(format!(" ORDER BY {} {} ", order_field, order_dir));
@@ -130,7 +130,7 @@ pub async fn create(
 
     sqlx::query(
         r#"
-        INSERT INTO channels (id, name, api_keys, endpoints, models, rate_limit_rpm, rate_limit_tpm, failure_threshold, blacklist_minutes, concurrency, timeout_secs, max_concurrency, custom_headers, thinking_mode, enabled)
+        INSERT INTO channels (id, name, api_keys, endpoints, models, rate_limit_rpm, rate_limit_tpm, failure_threshold, blacklist_minutes, concurrency, timeout_secs, max_concurrency, custom_headers, extras, enabled)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         "#
     )
@@ -147,7 +147,7 @@ pub async fn create(
     .bind(req.timeout_secs.unwrap_or(300))
     .bind(req.max_concurrency.unwrap_or(0))
     .bind(&custom_headers_json)
-    .bind(&req.thinking_mode)
+    .bind(req.extras.as_ref().map(|m| serde_json::to_string(m).unwrap_or_else(|_| "{}".to_string())).unwrap_or_else(|| "{}".to_string()))
     .bind(req.enabled.unwrap_or(true))
     .execute(&state.pool)
     .await
@@ -222,9 +222,9 @@ pub async fn update(
         separated.push_bind_unseparated(serde_json::to_string(custom_headers).unwrap_or_default());
         has_update = true;
     }
-    if let Some(ref thinking_mode) = req.thinking_mode {
-        separated.push("thinking_mode = ");
-        separated.push_bind_unseparated(thinking_mode);
+    if let Some(ref extras) = req.extras {
+        separated.push("extras = ");
+        separated.push_bind_unseparated(serde_json::to_string(extras).unwrap_or_else(|_| "{}".to_string()));
         has_update = true;
     }
     if let Some(enabled) = req.enabled {
@@ -314,7 +314,7 @@ pub(super) async fn get_channel_by_id(
 ) -> Result<Channel, (StatusCode, Json<ApiError>)> {
     let tz = tz_modifier(timezone_offset);
     let result = sqlx::query_as::<_, ChannelRow>(AssertSqlSafe(
-        format!("SELECT id, name, api_keys, endpoints, models, rate_limit_rpm, rate_limit_tpm, failure_threshold, blacklist_minutes, concurrency, timeout_secs, max_concurrency, custom_headers, enabled, datetime(created_at, '{}') as created_at, datetime(updated_at, '{}') as updated_at FROM channels WHERE id = ?", tz, tz)
+        format!("SELECT id, name, api_keys, endpoints, models, rate_limit_rpm, rate_limit_tpm, failure_threshold, blacklist_minutes, concurrency, timeout_secs, max_concurrency, custom_headers, extras, enabled, datetime(created_at, '{}') as created_at, datetime(updated_at, '{}') as updated_at FROM channels WHERE id = ?", tz, tz)
     ))
     .bind(id)
     .fetch_optional(pool)
@@ -337,6 +337,8 @@ where
 }
 
 pub(crate) fn row_to_channel(row: ChannelRow) -> Result<Channel, String> {
+    let extras: Option<serde_json::Map<String, serde_json::Value>> =
+        serde_json::from_str(&row.extras).ok();
     Ok(Channel {
         id: row.id,
         name: row.name,
@@ -351,7 +353,7 @@ pub(crate) fn row_to_channel(row: ChannelRow) -> Result<Channel, String> {
         timeout_secs: row.timeout_secs,
         max_concurrency: row.max_concurrency,
         custom_headers: decode_json_field("channels.custom_headers", &row.custom_headers)?,
-        thinking_mode: row.thinking_mode,
+        extras,
         enabled: row.enabled,
         created_at: row.created_at,
         updated_at: row.updated_at,
@@ -360,6 +362,9 @@ pub(crate) fn row_to_channel(row: ChannelRow) -> Result<Channel, String> {
 
 fn row_to_channel_from_row(row: &sqlx::sqlite::SqliteRow) -> Result<Channel, String> {
     use sqlx::Row;
+    let extras_str: String = row.get("extras");
+    let extras: Option<serde_json::Map<String, serde_json::Value>> =
+        serde_json::from_str(&extras_str).ok();
     Ok(Channel {
         id: row.get("id"),
         name: row.get("name"),
@@ -377,7 +382,7 @@ fn row_to_channel_from_row(row: &sqlx::sqlite::SqliteRow) -> Result<Channel, Str
             "channels.custom_headers",
             &row.get::<String, _>("custom_headers"),
         )?,
-        thinking_mode: row.get("thinking_mode"),
+        extras,
         enabled: row.get("enabled"),
         created_at: row.get("created_at"),
         updated_at: row.get("updated_at"),

@@ -74,6 +74,13 @@ export interface Channel {
   timeout_secs: number
   max_concurrency: number
   custom_headers: CustomHeader[]
+  /**
+   * 扩展字段（JSON 自由格式 Map）
+   * 当前用法：
+   *   thinking.extract_tags: bool 抽取 <think/> 标签到 reasoning_content
+   *   thinking.fix_signature: bool 修复 GLM-style signature 位置
+   */
+  extras: Record<string, unknown> | null
   enabled: boolean
   created_at: string
   updated_at: string
@@ -92,6 +99,7 @@ export interface CreateChannelRequest {
   timeout_secs?: number
   max_concurrency?: number
   custom_headers?: CustomHeader[]
+  extras?: Record<string, unknown>
   enabled?: boolean
 }
 
@@ -108,6 +116,7 @@ export interface UpdateChannelRequest {
   timeout_secs?: number
   max_concurrency?: number
   custom_headers?: CustomHeader[]
+  extras?: Record<string, unknown>
   enabled?: boolean
 }
 
@@ -133,6 +142,27 @@ export interface TestChannelResponse {
   output_content: string | null
   prompt_tokens?: number
   completion_tokens?: number
+}
+
+// Detect 渠道 quirks 相关
+export interface DetectRequest {
+  endpoints?: string[]
+  api_key?: string
+  model?: string
+}
+
+export interface EndpointDetection {
+  endpoint: string
+  /** key 形如 "thinking.extract_tags"，value 是 bool */
+  recommendations: Record<string, boolean>
+  evidence: string
+  sample: string
+}
+
+export interface DetectResponse {
+  /** 渠道级合并推荐（任一 endpoint 建议开启则 true） */
+  recommendations: Record<string, boolean>
+  endpoint_results: EndpointDetection[]
 }
 
 // Group types
