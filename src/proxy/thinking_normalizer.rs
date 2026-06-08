@@ -97,7 +97,8 @@ impl ThinkTagParser {
         out
     }
 
-    /// 流结束时调用
+    /// 流结束时调用（当前实现未使用，保留以供将来需要时调用）
+    #[allow(dead_code)]
     pub fn flush(&mut self) -> ParserOutput {
         let mut out = ParserOutput::default();
         let prev = std::mem::replace(&mut self.state, ParseState::Normal);
@@ -314,20 +315,20 @@ impl ThinkingTagExtractor {
     pub fn extract(&mut self, response: &mut LlmStreamResponse) -> bool {
         let mut modified = false;
         for choice in &mut response.choices {
-            if let Some(Content::Text(text)) = &choice.delta.content {
-                if !text.is_empty() {
-                    let out = self.parser.feed(text);
-                    if !out.content.is_empty() {
-                        choice.delta.content = Some(Content::Text(out.content));
-                        modified = true;
-                    } else {
-                        choice.delta.content = None;
-                        modified = true;
-                    }
-                    if !out.thinking.is_empty() {
-                        append_reasoning(&mut choice.delta.reasoning_content, &out.thinking);
-                        modified = true;
-                    }
+            if let Some(Content::Text(text)) = &choice.delta.content
+                && !text.is_empty()
+            {
+                let out = self.parser.feed(text);
+                if !out.content.is_empty() {
+                    choice.delta.content = Some(Content::Text(out.content));
+                    modified = true;
+                } else {
+                    choice.delta.content = None;
+                    modified = true;
+                }
+                if !out.thinking.is_empty() {
+                    append_reasoning(&mut choice.delta.reasoning_content, &out.thinking);
+                    modified = true;
                 }
             }
         }
@@ -410,20 +411,19 @@ impl PassthroughNormalizer {
 
         if let Some(choices) = parsed.get_mut("choices").and_then(|c| c.as_array_mut()) {
             for choice in choices {
-                if let Some(delta) = choice.get_mut("delta").and_then(|d| d.as_object_mut()) {
-                    if let Some(content_val) = delta.get("content").and_then(|c| c.as_str()) {
-                        if !content_val.is_empty() {
-                            let out = self.tag_parser.feed(content_val);
-                            if !out.content.is_empty() {
-                                delta.insert("content".to_string(), Value::String(out.content));
-                            } else {
-                                delta.remove("content");
-                            }
-                            content_modified = true;
-                            if !out.thinking.is_empty() {
-                                reasoning_to_add = Some(out.thinking);
-                            }
-                        }
+                if let Some(delta) = choice.get_mut("delta").and_then(|d| d.as_object_mut())
+                    && let Some(content_val) = delta.get("content").and_then(|c| c.as_str())
+                    && !content_val.is_empty()
+                {
+                    let out = self.tag_parser.feed(content_val);
+                    if !out.content.is_empty() {
+                        delta.insert("content".to_string(), Value::String(out.content));
+                    } else {
+                        delta.remove("content");
+                    }
+                    content_modified = true;
+                    if !out.thinking.is_empty() {
+                        reasoning_to_add = Some(out.thinking);
                     }
                 }
             }
@@ -433,29 +433,29 @@ impl PassthroughNormalizer {
             return vec![raw_bytes.to_vec()];
         }
 
-        if let Some(thinking) = reasoning_to_add {
-            if let Some(choices) = parsed.get_mut("choices").and_then(|c| c.as_array_mut()) {
-                for choice in choices {
-                    if let Some(delta) = choice.get_mut("delta").and_then(|d| d.as_object_mut()) {
-                        match delta.get_mut("reasoning_content") {
-                            Some(existing) => {
-                                if let Some(s) = existing.as_str() {
-                                    let mut new = s.to_string();
-                                    new.push_str(&thinking);
-                                    *existing = Value::String(new);
-                                } else {
-                                    delta.insert(
-                                        "reasoning_content".to_string(),
-                                        Value::String(thinking.clone()),
-                                    );
-                                }
-                            }
-                            None => {
+        if let Some(thinking) = reasoning_to_add
+            && let Some(choices) = parsed.get_mut("choices").and_then(|c| c.as_array_mut())
+        {
+            for choice in choices {
+                if let Some(delta) = choice.get_mut("delta").and_then(|d| d.as_object_mut()) {
+                    match delta.get_mut("reasoning_content") {
+                        Some(existing) => {
+                            if let Some(s) = existing.as_str() {
+                                let mut new = s.to_string();
+                                new.push_str(&thinking);
+                                *existing = Value::String(new);
+                            } else {
                                 delta.insert(
                                     "reasoning_content".to_string(),
                                     Value::String(thinking.clone()),
                                 );
                             }
+                        }
+                        None => {
+                            delta.insert(
+                                "reasoning_content".to_string(),
+                                Value::String(thinking.clone()),
+                            );
                         }
                     }
                 }
