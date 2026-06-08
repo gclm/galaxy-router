@@ -854,11 +854,32 @@ pub(super) async fn execute_proxy_stream(
                                         }
                                         if let Some(tcs) = &choice.delta.tool_calls {
                                             for tc in tcs {
-                                                collected_tool_calls.push(serde_json::json!({
-                                                    "id": tc.id,
-                                                    "name": tc.function.name,
-                                                    "arguments": tc.function.arguments,
-                                                }));
+                                                if !tc.id.is_empty() {
+                                                    // 新 tool call
+                                                    collected_tool_calls.push(
+                                                        serde_json::json!({
+                                                            "id": tc.id,
+                                                            "name": tc.function.name,
+                                                            "arguments": tc.function.arguments,
+                                                        }),
+                                                    );
+                                                } else if let Some(last) =
+                                                    collected_tool_calls.last_mut()
+                                                {
+                                                    // 续传 chunk — 追加 arguments
+                                                    if let Some(args) =
+                                                        last["arguments"].as_str()
+                                                    {
+                                                        let combined = format!(
+                                                            "{}{}",
+                                                            args, tc.function.arguments
+                                                        );
+                                                        last["arguments"] =
+                                                            serde_json::Value::String(
+                                                                combined,
+                                                            );
+                                                    }
+                                                }
                                             }
                                         }
                                     }
