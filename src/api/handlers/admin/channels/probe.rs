@@ -12,7 +12,6 @@ use super::types::{
     EndpointType, TestChannelRequest, TestChannelResponse,
 };
 use crate::api::{ApiError, ApiResponse};
-use crate::proxy::channel::ChannelInfo;
 
 const TEST_PROMPT: &str = "Hello! Please respond with a brief greeting in one sentence.";
 
@@ -90,7 +89,7 @@ pub async fn test_channel(
 
         let mut req_builder = state
             .http_client
-            .post(&format!("{}{}", endpoint.base_url.trim_end_matches('/'), upstream_path))
+            .post(format!("{}{}", endpoint.base_url.trim_end_matches('/'), upstream_path))
             .header("Content-Type", "application/json")
             .timeout(std::time::Duration::from_secs(30));
 
@@ -224,7 +223,7 @@ pub async fn detect_channel_quirks(
             let api_key = api_key.key.clone();
             let model = model.clone();
             async move {
-                let (body, upstream_path) = match build_detect_payload(&endpoint.endpoint_type, &model) {
+                let (body, _upstream_path) = match build_detect_payload(&endpoint.endpoint_type, &model) {
                     Some(v) => v,
                     None => {
                         return EndpointDetection {
@@ -237,10 +236,10 @@ pub async fn detect_channel_quirks(
                 };
                 let (result, _latency, _ttft, _pt, _ct) = probe_endpoint_raw(
                     client,
-                    &endpoint,
-                    &api_key,
+                    endpoint,
+                    api_key.as_str(),
                     &body,
-                    Some(&channel.custom_headers),
+                    Some(channel.custom_headers.as_slice()),
                     None,
                 )
                 .await;
@@ -430,7 +429,6 @@ fn inject_custom_headers(
 }
 
 /// 流式测试：发 SSE 请求，消费完整流，返回首 token 时间和完整内容
-
 /// 检测使用的 prompt：包含"请详细分析"等更可能触发 thinking 的内容
 const DETECT_PROMPT: &str = "请详细分析 1+1=2 的推理过程，并简短回答。";
 
@@ -680,7 +678,7 @@ fn analyze_response(endpoint_type: &EndpointType, response: &str) -> EndpointDet
             if let Some(idx) = response.find("\"signature\":") {
                 let start = idx + "\"signature\":".len();
                 let end = response[start..]
-                    .find(|c: char| c == ',' || c == '}' || c == '\n')
+                    .find([' ', ',', '}', '\n'])
                     .unwrap_or(80)
                     .min(80);
                 sample = response[idx..start + end].to_string();
@@ -754,6 +752,7 @@ data: {"type":"content_block_delta","index":0,"delta":{"type":"signature_delta",
     }
 }
 
+#[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
