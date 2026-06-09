@@ -23,9 +23,9 @@ use crate::api::handlers::admin::system_info::{self, SystemInfoState};
 use crate::api::handlers::proxy::{chat, embeddings, images, messages, models, responses};
 use crate::api::middleware::require_admin_auth;
 use crate::config::{AppConfig, QueuingConfig};
+use crate::metrics::query::StatsState;
 use crate::proxy::{ProxyCache, ProxyState};
 use crate::static_assets;
-use crate::metrics::query::StatsState;
 
 /// 创建应用路由
 pub async fn create_router(

@@ -55,7 +55,9 @@ pub fn inbound_for(endpoint: &EndpointType) -> Option<&'static dyn Inbound> {
         EndpointType::OpenAiChat => Some(&openai_chat::OpenAiChatInbound),
         EndpointType::OpenAiResponse => Some(&openai_responses::OpenAiResponsesInbound),
         EndpointType::Anthropic => Some(&anthropic::AnthropicInbound),
-        EndpointType::OpenAiEmbedding | EndpointType::OpenAiImages => Some(&openai_chat::OpenAiChatInbound),
+        EndpointType::OpenAiEmbedding | EndpointType::OpenAiImages => {
+            Some(&openai_chat::OpenAiChatInbound)
+        }
         EndpointType::Gemini => None,
     }
 }

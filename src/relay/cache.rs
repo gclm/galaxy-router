@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
-use crate::proxy::{GroupInfo};
+use crate::proxy::GroupInfo;
 use crate::relay::channel::ChannelInfo;
 
 /// 缓存大小限制

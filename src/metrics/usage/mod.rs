@@ -1,10 +1,10 @@
 pub mod estimator;
 
 use crate::api::handlers::admin::channels::EndpointType;
+use crate::metrics::model::ModelRegistry;
 use crate::proxy::prepare::{
     estimate_tokens, extract_request_text, extract_response_text, extract_usage,
 };
-use crate::metrics::model::ModelRegistry;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct UsageSnapshot {

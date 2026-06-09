@@ -206,9 +206,11 @@ fn inbound_for(endpoint: &EndpointType) -> Result<&'static dyn Inbound, RelayPip
 }
 
 fn outbound_for(endpoint: &EndpointType) -> Result<&'static dyn Outbound, RelayPipelineError> {
-    crate::protocol::outbound::outbound_for(endpoint).ok_or(RelayPipelineError::UnsupportedEndpoint {
-        endpoint: endpoint.clone(),
-    })
+    crate::protocol::outbound::outbound_for(endpoint).ok_or(
+        RelayPipelineError::UnsupportedEndpoint {
+            endpoint: endpoint.clone(),
+        },
+    )
 }
 
 #[cfg(test)]

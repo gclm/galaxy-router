@@ -3,6 +3,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[allow(dead_code)]
 pub struct ChannelLoadSnapshot {
     pub channel_id: String,
     pub current_concurrency: u32,
@@ -50,6 +51,7 @@ impl ChannelCapacityManager {
         }
     }
 
+    #[allow(dead_code)]
     pub fn load_snapshot(&self, channel_id: &str, max_concurrency: u32) -> ChannelLoadSnapshot {
         let current = if max_concurrency == 0 {
             0

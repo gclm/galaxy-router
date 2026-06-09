@@ -113,11 +113,13 @@ fn compare_scored_candidates(a: &ScoredCandidate, b: &ScoredCandidate) -> Orderi
 }
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 struct SelectionRng {
     state: u64,
 }
 
 impl SelectionRng {
+    #[allow(dead_code)]
     fn new(seed: u64) -> Self {
         Self {
             state: if seed == 0 {
@@ -128,6 +130,7 @@ impl SelectionRng {
         }
     }
 
+    #[allow(dead_code)]
     fn next_u64(&mut self) -> u64 {
         let mut x = self.state;
         x ^= x >> 12;
@@ -137,6 +140,7 @@ impl SelectionRng {
         x.wrapping_mul(2_685_821_657_736_338_717)
     }
 
+    #[allow(dead_code)]
     fn next_f64(&mut self) -> f64 {
         ((self.next_u64() >> 11) as f64) / ((1u64 << 53) as f64)
     }
@@ -148,6 +152,7 @@ impl SelectionRng {
 /// into a positive range so lower-scored top-K candidates still have a chance, avoiding
 /// permanent monopoly by the best candidate while keeping better candidates more likely
 /// to appear earlier.
+#[allow(dead_code)]
 pub fn build_weighted_selection_order(
     candidates: &[ScoredCandidate],
     seed: u64,

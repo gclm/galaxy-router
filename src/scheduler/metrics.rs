@@ -41,6 +41,7 @@ impl SchedulerMetrics {
         self.inner.channel_switches.fetch_add(1, Ordering::Relaxed);
     }
 
+    #[allow(dead_code)]
     pub fn snapshot(&self) -> SchedulerMetricsSnapshot {
         SchedulerMetricsSnapshot {
             sticky_hits: self.inner.sticky_hits.load(Ordering::Relaxed),
@@ -58,6 +59,7 @@ impl Default for SchedulerMetrics {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[allow(dead_code)]
 pub struct SchedulerMetricsSnapshot {
     pub sticky_hits: u64,
     pub load_balance_selects: u64,

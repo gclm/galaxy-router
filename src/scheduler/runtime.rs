@@ -33,6 +33,7 @@ impl Default for ChannelRuntimeStats {
 }
 
 impl ChannelRuntimeStats {
+    #[allow(dead_code)]
     pub fn new() -> Self {
         Self::default()
     }
@@ -83,6 +84,7 @@ impl ChannelRuntimeStats {
         self.health
     }
 
+    #[allow(dead_code)]
     pub fn request_count(&self) -> u64 {
         self.request_count
     }
@@ -112,6 +114,7 @@ pub struct ChannelRuntimeManager {
 }
 
 impl ChannelRuntimeManager {
+    #[allow(dead_code)]
     pub fn new() -> Self {
         Self::default()
     }

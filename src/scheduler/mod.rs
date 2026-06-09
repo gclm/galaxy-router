@@ -1,12 +1,9 @@
-#[allow(dead_code)]
 pub mod capacity;
 pub mod circuit;
-#[allow(dead_code)]
 pub mod metrics;
-#[allow(dead_code)]
 pub mod runtime;
-#[allow(dead_code)]
 pub mod scoring;
+pub mod selector;
 pub mod state;
-#[allow(dead_code)]
+pub mod sticky;
 pub mod trace;

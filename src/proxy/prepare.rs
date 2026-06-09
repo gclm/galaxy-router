@@ -1,10 +1,10 @@
 use axum::http::HeaderMap;
 
-use super::selection::SelectionResult;
 use crate::api::handlers::admin::channels::EndpointType;
+use crate::metrics::usage::estimator::TokenEstimator;
 use crate::proxy::{ProxyError, get_outbound};
 use crate::relay::pipeline::{RelayPipeline, RelayPipelineRequest};
-use crate::metrics::usage::estimator::TokenEstimator;
+use crate::scheduler::selector::SelectionResult;
 
 /// 准备好的代理请求
 pub(super) struct PreparedProxyRequest {

@@ -3,13 +3,13 @@ use std::sync::{Arc, Mutex};
 
 use crate::api::handlers::admin::channels::EndpointType;
 use crate::metrics::attempt::AttemptStats;
-use crate::proxy::selection::SelectionResult;
 use crate::proxy::{ProxyError, ProxyState};
 use crate::relay::run::{
     RelayAttemptError, RelayCandidate, RelayRequest, RelayStreamAttemptExecutor,
     RelayStreamAttemptResult, RelayStreamSuccess,
 };
 use crate::relay::stream::execute_once;
+use crate::scheduler::selector::SelectionResult;
 
 /// 流式代理执行器：将 RelayStreamRun 的候选迭代与真实 SSE 执行连接。
 #[derive(Clone)]

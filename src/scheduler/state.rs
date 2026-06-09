@@ -6,6 +6,7 @@ use std::time::Instant;
 use tokio::sync::RwLock;
 
 use super::circuit::{CircuitBreaker, CircuitConfig};
+use super::sticky::StickySessionManager;
 use crate::scheduler::capacity::ChannelCapacityManager;
 use crate::scheduler::metrics::SchedulerMetrics;
 use crate::scheduler::runtime::{ChannelRuntimeManager, ChannelRuntimeStats};
@@ -140,30 +141,19 @@ impl ChannelStatus {
     }
 }
 
-/// 粘性会话
-#[derive(Debug, Clone)]
-pub struct StickySession {
-    pub channel_id: String,
-    pub expires_at: DateTime<Utc>,
-}
-
 /// 负载均衡状态
 #[derive(Clone)]
 pub struct LoadBalancerState {
     /// 渠道状态
     pub channel_states: Arc<RwLock<HashMap<String, ChannelStatus>>>,
-    /// 粘性会话
-    pub sticky_sessions: Arc<RwLock<HashMap<String, StickySession>>>,
+    /// 粘性会话管理器
+    sticky_manager: StickySessionManager,
     /// 熔断器（新增）
     pub circuit_breaker: CircuitBreaker,
-    /// 粘性会话 TTL（秒）
-    pub sticky_ttl_secs: i64,
     /// 拉黑阈值（连续失败次数）
     pub blacklist_threshold: u64,
     /// 拉黑时长（分钟）
     pub blacklist_minutes: i64,
-    /// 粘性会话最大容量
-    max_sticky_sessions: usize,
     /// 容量管理器（RAII permit 方式跟踪并发）
     capacity_manager: ChannelCapacityManager,
     /// 调度器运行时指标
@@ -182,12 +172,10 @@ impl LoadBalancerState {
     pub fn new() -> Self {
         Self {
             channel_states: Arc::new(RwLock::new(HashMap::new())),
-            sticky_sessions: Arc::new(RwLock::new(HashMap::new())),
+            sticky_manager: StickySessionManager::default(),
             circuit_breaker: CircuitBreaker::new(CircuitConfig::default()),
-            sticky_ttl_secs: 3600,
             blacklist_threshold: 3,
             blacklist_minutes: 10,
-            max_sticky_sessions: 10000,
             capacity_manager: ChannelCapacityManager::new(),
             scheduler_metrics: SchedulerMetrics::new(),
             runtime_manager: ChannelRuntimeManager::new(),
@@ -321,43 +309,12 @@ impl LoadBalancerState {
 
     /// 获取粘性会话
     pub async fn get_sticky_session(&self, session_hash: &str) -> Option<String> {
-        let sessions = self.sticky_sessions.read().await;
-        if let Some(session) = sessions.get(session_hash)
-            && Utc::now() < session.expires_at
-        {
-            return Some(session.channel_id.clone());
-        }
-        None
+        self.sticky_manager.get(session_hash).await
     }
 
     /// 设置粘性会话
     pub async fn set_sticky_session(&self, session_hash: &str, channel_id: &str) {
-        let mut sessions = self.sticky_sessions.write().await;
-
-        // 容量检查：超过上限时清理过期条目
-        if sessions.len() >= self.max_sticky_sessions {
-            let now = Utc::now();
-            sessions.retain(|_, session| now < session.expires_at);
-
-            // 清理后仍然满，拒绝新 session
-            if sessions.len() >= self.max_sticky_sessions {
-                tracing::warn!(
-                    "粘性会话已满（{}），拒绝新 session: {}",
-                    self.max_sticky_sessions,
-                    session_hash
-                );
-                return;
-            }
-        }
-
-        let now = Utc::now();
-        sessions.insert(
-            session_hash.to_string(),
-            StickySession {
-                channel_id: channel_id.to_string(),
-                expires_at: now + chrono::Duration::seconds(self.sticky_ttl_secs),
-            },
-        );
+        self.sticky_manager.set(session_hash, channel_id).await
     }
 
     /// 记录 monitor 探测成功
@@ -372,9 +329,7 @@ impl LoadBalancerState {
 
     /// 清理过期的粘性会话
     pub async fn cleanup_expired_sessions(&self) {
-        let mut sessions = self.sticky_sessions.write().await;
-        let now = Utc::now();
-        sessions.retain(|_, session| now < session.expires_at);
+        self.sticky_manager.cleanup_expired().await
     }
 
     /// 清理过期的拉黑

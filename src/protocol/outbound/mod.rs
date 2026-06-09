@@ -49,7 +49,9 @@ pub fn outbound_for(endpoint: &EndpointType) -> Option<&'static dyn Outbound> {
         EndpointType::OpenAiChat => Some(&openai_chat::OpenAiChatOutbound),
         EndpointType::OpenAiResponse => Some(&openai_responses::OpenAiResponsesOutbound),
         EndpointType::Anthropic => Some(&anthropic::AnthropicOutbound),
-        EndpointType::OpenAiEmbedding | EndpointType::OpenAiImages => Some(&openai_chat::OpenAiChatOutbound),
+        EndpointType::OpenAiEmbedding | EndpointType::OpenAiImages => {
+            Some(&openai_chat::OpenAiChatOutbound)
+        }
         EndpointType::Gemini => None,
     }
 }

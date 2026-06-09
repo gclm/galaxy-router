@@ -2,10 +2,10 @@ use axum::body::Bytes;
 use axum::http::{HeaderMap, StatusCode};
 
 use super::prepare::{extract_request_text, prepare_proxy_request};
-use super::selection::SelectionResult;
 use super::{ProxyError, ProxyState, ProxySuccess};
 use crate::api::handlers::admin::channels::EndpointType;
 use crate::metrics::attempt::AttemptStats;
+use crate::metrics::recorder::redaction::sanitize_json_content;
 use crate::metrics::recorder::{
     channel_attempts_snapshot, record_stream_completion, save_request_record,
 };
@@ -16,7 +16,7 @@ use crate::protocol::sse::{
 };
 use crate::protocol::thinking_normalizer::{PassthroughNormalizer, ThinkingTagExtractor};
 use crate::relay::pipeline::RelayPipeline;
-use crate::metrics::recorder::redaction::sanitize_json_content;
+use crate::scheduler::selector::SelectionResult;
 
 /// 从渠道 extras JSON Map 读取 `extras.thinking.<key>` 布尔开关
 fn thinking_flag(extras: &Option<serde_json::Map<String, serde_json::Value>>, key: &str) -> bool {
@@ -959,8 +959,8 @@ mod tests {
     // ============================================================
 
     use crate::db::Database;
-    use crate::proxy::ProxyState;
     use crate::metrics::model::ModelRegistry;
+    use crate::proxy::ProxyState;
     use axum::{Router, routing::post};
 
     async fn spawn_mock_upstream() -> String {

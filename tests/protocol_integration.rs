@@ -3,17 +3,17 @@
 //! 覆盖 protocol/inbound、protocol/outbound 各种组合的请求/响应转换。
 
 use axum::http::HeaderMap;
-use galaxy_router::protocol::inbound::anthropic::AnthropicInbound;
-use galaxy_router::protocol::outbound::anthropic::AnthropicOutbound;
 use galaxy_router::protocol::inbound::Inbound;
+use galaxy_router::protocol::inbound::anthropic::AnthropicInbound;
+use galaxy_router::protocol::inbound::openai_chat::OpenAiChatInbound;
+use galaxy_router::protocol::inbound::openai_responses::OpenAiResponsesInbound;
 use galaxy_router::protocol::model::{
     Content, ContentPart, LlmRequest, LlmResponse, Message, Role,
 };
-use galaxy_router::protocol::inbound::openai_chat::OpenAiChatInbound;
-use galaxy_router::protocol::outbound::openai_chat::OpenAiChatOutbound;
-use galaxy_router::protocol::inbound::openai_responses::OpenAiResponsesInbound;
-use galaxy_router::protocol::outbound::openai_responses::OpenAiResponsesOutbound;
 use galaxy_router::protocol::outbound::Outbound;
+use galaxy_router::protocol::outbound::anthropic::AnthropicOutbound;
+use galaxy_router::protocol::outbound::openai_chat::OpenAiChatOutbound;
+use galaxy_router::protocol::outbound::openai_responses::OpenAiResponsesOutbound;
 
 #[allow(unused_imports)]
 use serde_json::json;

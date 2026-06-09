@@ -6,8 +6,8 @@ use std::pin::Pin;
 
 use crate::api::handlers::admin::channels::EndpointType;
 use crate::metrics::attempt::AttemptStats;
-use crate::proxy::selection::SelectionResult;
 use crate::proxy::{ProxyError, ProxyState};
+use crate::scheduler::selector::SelectionResult;
 
 pub(crate) type RelayBodyStream = Pin<Box<dyn Stream<Item = Result<Bytes, Infallible>> + Send>>;
 

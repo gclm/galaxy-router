@@ -17,7 +17,8 @@ pub struct ModelInfoState {
 /// 获取所有模型信息
 pub async fn list(
     State(state): State<ModelInfoState>,
-) -> Result<Json<ApiResponse<Vec<crate::metrics::model::ModelInfo>>>, (StatusCode, Json<ApiError>)> {
+) -> Result<Json<ApiResponse<Vec<crate::metrics::model::ModelInfo>>>, (StatusCode, Json<ApiError>)>
+{
     let models = state.model_registry.get_all_models().await;
     Ok(Json(ApiResponse::success(models)))
 }

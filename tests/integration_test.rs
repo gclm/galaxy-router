@@ -322,8 +322,8 @@ fn test_openai_chat_transform() {
 
 #[test]
 fn test_anthropic_transform() {
-    use galaxy_router::protocol::inbound::anthropic::AnthropicInbound;
     use galaxy_router::protocol::inbound::Inbound;
+    use galaxy_router::protocol::inbound::anthropic::AnthropicInbound;
 
     let inbound = AnthropicInbound;
     let headers = axum::http::HeaderMap::new();

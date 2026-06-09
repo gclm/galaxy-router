@@ -1,28 +1,27 @@
 pub mod execute;
 pub mod prepare;
 pub mod ratelimit;
-pub mod selection;
 
 pub use crate::relay::cache::ProxyCache;
 pub use crate::relay::channel::ChannelInfo;
 pub use crate::relay::queue::RequestQueue;
+pub use crate::scheduler::selector::{GroupInfo, GroupItemInfo};
 pub use ratelimit::RateLimiter;
-pub use selection::{GroupInfo, GroupItemInfo};
 
-use crate::scheduler::state::LoadBalancerState;
 use crate::api::handlers::admin::channels::{
     CustomHeader, EndpointConfig, EndpointType, UpstreamApiKey, parse_api_keys,
 };
+use crate::metrics::model::ModelRegistry;
+use crate::metrics::recorder::StatsRecorder;
 use crate::metrics::recorder::save_request_record;
 use crate::protocol::outbound::Outbound;
-use crate::proxy::execute::proxy_request;
 use crate::protocol::sse::sanitize_upstream_error;
+use crate::proxy::execute::proxy_request;
 use crate::relay::run::RelayCandidate;
 use crate::scheduler::scoring::{
     CandidateScoreInput, SchedulerScoreWeights, ScoredCandidate, select_top_k_candidates,
 };
-use crate::metrics::model::ModelRegistry;
-use crate::metrics::recorder::StatsRecorder;
+use crate::scheduler::state::LoadBalancerState;
 use axum::body::Bytes;
 use axum::http::{HeaderMap, StatusCode};
 use sqlx::SqlitePool;
