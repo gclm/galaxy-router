@@ -6,7 +6,7 @@ use axum::{
 use serde::Deserialize;
 
 use crate::api::{ApiError, ApiResponse};
-use crate::stats::model::ModelRegistry;
+use crate::metrics::model::ModelRegistry;
 
 /// 定价 API 状态
 #[derive(Clone)]
@@ -17,7 +17,7 @@ pub struct ModelInfoState {
 /// 获取所有模型信息
 pub async fn list(
     State(state): State<ModelInfoState>,
-) -> Result<Json<ApiResponse<Vec<crate::stats::model::ModelInfo>>>, (StatusCode, Json<ApiError>)> {
+) -> Result<Json<ApiResponse<Vec<crate::metrics::model::ModelInfo>>>, (StatusCode, Json<ApiError>)> {
     let models = state.model_registry.get_all_models().await;
     Ok(Json(ApiResponse::success(models)))
 }
@@ -26,7 +26,7 @@ pub async fn list(
 pub async fn get(
     State(state): State<ModelInfoState>,
     Path(model): Path<String>,
-) -> Result<Json<ApiResponse<crate::stats::model::ModelInfo>>, (StatusCode, Json<ApiError>)> {
+) -> Result<Json<ApiResponse<crate::metrics::model::ModelInfo>>, (StatusCode, Json<ApiError>)> {
     match state.model_registry.get_model_info(&model).await {
         Some(info) => Ok(Json(ApiResponse::success(info))),
         None => Err(ApiError::not_found(format!("模型 {} 不存在", model))),
@@ -58,10 +58,10 @@ pub struct UpdateModelRequest {
 pub async fn update(
     State(state): State<ModelInfoState>,
     Json(req): Json<UpdateModelRequest>,
-) -> Result<Json<ApiResponse<crate::stats::model::ModelInfo>>, (StatusCode, Json<ApiError>)> {
+) -> Result<Json<ApiResponse<crate::metrics::model::ModelInfo>>, (StatusCode, Json<ApiError>)> {
     // 先获取现有信息用于合并
     let existing = state.model_registry.get_model_info(&req.model).await;
-    let existing = existing.unwrap_or_else(|| crate::stats::model::ModelInfo {
+    let existing = existing.unwrap_or_else(|| crate::metrics::model::ModelInfo {
         model: req.model.clone(),
         provider: String::new(),
         mode: "chat".to_string(),
@@ -80,7 +80,7 @@ pub async fn update(
         supports_tool_choice: None,
     });
 
-    let info = crate::stats::model::ModelInfo {
+    let info = crate::metrics::model::ModelInfo {
         model: req.model,
         provider: req.provider.unwrap_or(existing.provider),
         mode: req.mode.unwrap_or(existing.mode),

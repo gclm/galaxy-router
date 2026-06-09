@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::AssertSqlSafe;
 
 use crate::api::{ApiError, ApiResponse};
-use crate::stats::{StatsState, tz_modifier};
+use crate::metrics::query::{StatsState, tz_modifier};
 
 /// 查询参数
 #[derive(Debug, Deserialize)]
@@ -116,7 +116,7 @@ pub async fn logs(
 
     let result = state
         .stats
-        .get_logs(crate::stats::LogsFilter {
+        .get_logs(crate::metrics::query::LogsFilter {
             offset,
             limit: page_size,
             model: query.model,

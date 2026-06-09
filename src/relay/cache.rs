@@ -2,7 +2,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
-use super::{ChannelInfo, GroupInfo};
+use crate::proxy::{GroupInfo};
+use crate::relay::channel::ChannelInfo;
 
 /// 缓存大小限制
 const CACHE_MAX_SIZE: usize = 1000;
@@ -131,7 +132,7 @@ impl ProxyCache {
     }
 
     /// 获取或编译正则（缓存编译结果）
-    pub(super) async fn get_compiled_regex(&self, pattern: &str) -> Option<regex::Regex> {
+    pub(crate) async fn get_compiled_regex(&self, pattern: &str) -> Option<regex::Regex> {
         {
             let cache = self.compiled_regex.read().await;
             if let Some(re) = cache.get(pattern) {

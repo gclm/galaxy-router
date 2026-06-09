@@ -25,7 +25,7 @@ use crate::api::middleware::require_admin_auth;
 use crate::config::{AppConfig, QueuingConfig};
 use crate::proxy::{ProxyCache, ProxyState};
 use crate::static_assets;
-use crate::stats::StatsState;
+use crate::metrics::query::StatsState;
 
 /// 创建应用路由
 pub async fn create_router(
@@ -34,7 +34,7 @@ pub async fn create_router(
     queuing: &QueuingConfig,
     _server_addr: &str,
     config: AppConfig,
-    model_registry: crate::stats::model::ModelRegistry,
+    model_registry: crate::metrics::model::ModelRegistry,
 ) -> Router {
     let token_expiry_hours = config.auth.token_expiry_hours;
     let auth_state = AuthState {

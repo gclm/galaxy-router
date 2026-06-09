@@ -2,7 +2,7 @@ use async_trait::async_trait;
 use std::sync::{Arc, Mutex};
 
 use crate::api::handlers::admin::channels::EndpointType;
-use crate::proxy::execute::AttemptStats;
+use crate::metrics::attempt::AttemptStats;
 use crate::proxy::selection::SelectionResult;
 use crate::proxy::{ProxyError, ProxyState};
 use crate::relay::run::{

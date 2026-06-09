@@ -11,7 +11,7 @@ use super::types::{
 };
 use crate::api::response::generate_id;
 use crate::api::{ApiError, ApiResponse};
-use crate::stats::tz_modifier;
+use crate::metrics::query::tz_modifier;
 
 /// 获取渠道列表（支持搜索、筛选、排序、分页）
 pub async fn list(

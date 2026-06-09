@@ -1,6 +1,6 @@
 use crate::api::handlers::admin::channels::EndpointConfig;
 
-use super::channel::ChannelInfo;
+use crate::relay::channel::ChannelInfo;
 
 /// 分组信息
 #[derive(Debug, Clone)]

@@ -4,7 +4,7 @@ use super::selection::SelectionResult;
 use crate::api::handlers::admin::channels::EndpointType;
 use crate::proxy::{ProxyError, get_outbound};
 use crate::relay::pipeline::{RelayPipeline, RelayPipelineRequest};
-use crate::stats::token_estimator::TokenEstimator;
+use crate::metrics::usage::estimator::TokenEstimator;
 
 /// 准备好的代理请求
 pub(super) struct PreparedProxyRequest {
@@ -19,7 +19,7 @@ pub(super) struct PreparedProxyRequest {
 }
 
 /// 从响应体提取 usage 数据
-pub(super) fn extract_usage(
+pub(crate) fn extract_usage(
     body: &serde_json::Value,
     endpoint_type: &EndpointType,
 ) -> (i32, i32, i32, i32) {
@@ -54,18 +54,18 @@ pub(super) fn extract_usage(
 
 /// 估算 token 数（当上游不返回 usage 时作为兜底）
 /// 使用多维度加权估算，区分不同厂商和字符类型
-pub(super) fn estimate_tokens(text: &str) -> i32 {
+pub(crate) fn estimate_tokens(text: &str) -> i32 {
     if text.is_empty() {
         return 0;
     }
     // 默认使用 OpenAI 权重
     let estimator = TokenEstimator::new();
-    estimator.estimate(text, &crate::stats::token_estimator::Provider::OpenAI)
+    estimator.estimate(text, &crate::metrics::usage::estimator::Provider::OpenAI)
 }
 
 /// 估算 token 数（指定模型）
 #[allow(dead_code)]
-pub(super) fn estimate_tokens_for_model(text: &str, model: &str) -> i32 {
+pub(crate) fn estimate_tokens_for_model(text: &str, model: &str) -> i32 {
     if text.is_empty() {
         return 0;
     }
@@ -74,7 +74,7 @@ pub(super) fn estimate_tokens_for_model(text: &str, model: &str) -> i32 {
 }
 
 /// 从请求体提取文本（兼容 OpenAI Chat / Anthropic / OpenAI Responses 格式）
-pub(super) fn extract_request_text(body: &serde_json::Value) -> String {
+pub(crate) fn extract_request_text(body: &serde_json::Value) -> String {
     let mut text = String::new();
     if let Some(sys) = body["system"].as_str() {
         text.push_str(sys);
@@ -125,7 +125,7 @@ pub(super) fn extract_request_text(body: &serde_json::Value) -> String {
 }
 
 /// 从非流式响应体提取文本（兼容 OpenAI Chat / Anthropic / OpenAI Responses 格式）
-pub(super) fn extract_response_text(body: &serde_json::Value) -> String {
+pub(crate) fn extract_response_text(body: &serde_json::Value) -> String {
     let mut text = String::new();
     // OpenAI Chat: choices[].message.content
     if let Some(choices) = body["choices"].as_array() {
@@ -413,7 +413,7 @@ mod tests {
             "stream": false
         });
         let selection = SelectionResult {
-            channel: crate::proxy::channel::ChannelInfo {
+            channel: crate::relay::channel::ChannelInfo {
                 id: "ch-1".into(),
                 name: "anthropic".into(),
                 api_keys: vec![],

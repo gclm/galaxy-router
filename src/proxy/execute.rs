@@ -1,21 +1,22 @@
 use axum::body::Bytes;
 use axum::http::{HeaderMap, StatusCode};
 
-use super::prepare::{
-    estimate_tokens, extract_request_text, extract_response_text, extract_usage,
-    prepare_proxy_request,
-};
+use super::prepare::{extract_request_text, prepare_proxy_request};
 use super::selection::SelectionResult;
 use super::{ProxyError, ProxyState, ProxySuccess};
 use crate::api::handlers::admin::channels::EndpointType;
-use crate::proxy::sse::{
+use crate::metrics::attempt::AttemptStats;
+use crate::metrics::recorder::{
+    channel_attempts_snapshot, record_stream_completion, save_request_record,
+};
+use crate::metrics::usage::{calculate_cost, resolve_non_stream_usage, resolve_stream_usage};
+use crate::protocol::sse::{
     apply_sse_usage, collect_sse_content, extract_error_from_sse, extract_usage_from_sse,
     find_sse_boundary, format_stream_error_event, sanitize_upstream_error,
 };
-use crate::proxy::thinking_normalizer::{PassthroughNormalizer, ThinkingTagExtractor};
+use crate::protocol::thinking_normalizer::{PassthroughNormalizer, ThinkingTagExtractor};
 use crate::relay::pipeline::RelayPipeline;
-use crate::scheduler::trace::{AttemptStatus, AttemptTrace};
-use crate::stats::redaction::sanitize_json_content;
+use crate::metrics::recorder::redaction::sanitize_json_content;
 
 /// 从渠道 extras JSON Map 读取 `extras.thinking.<key>` 布尔开关
 fn thinking_flag(extras: &Option<serde_json::Map<String, serde_json::Value>>, key: &str) -> bool {
@@ -25,56 +26,6 @@ fn thinking_flag(extras: &Option<serde_json::Map<String, serde_json::Value>>, ke
         .and_then(|v| v.get(key))
         .and_then(|v| v.as_bool())
         .unwrap_or(false)
-}
-
-/// 单次尝试的统计信息
-pub(crate) struct AttemptStats {
-    channel_id: String,
-    target_model: String,
-    upstream_endpoint: EndpointType,
-    needs_conversion: bool,
-    latency_ms: i64,
-    status_code: u16,
-    input_tokens: i32,
-    output_tokens: i32,
-    cache_read: i32,
-    cache_creation: i32,
-    cost: Option<f64>,
-    error_message: Option<String>,
-    upstream_key_hint: String,
-}
-
-impl AttemptStats {
-    /// 转换为 scheduler::trace::AttemptTrace（M2-S1 adapter）
-    /// 桥接代码：RelayRun 接入真实 proxy 后将直接使用 AttemptTrace
-    #[allow(dead_code)]
-    pub(super) fn to_trace(
-        &self,
-        attempt_no: u32,
-        requested_model: &str,
-        client_endpoint: &EndpointType,
-    ) -> AttemptTrace {
-        AttemptTrace {
-            attempt_no,
-            channel_id: Some(self.channel_id.clone()),
-            channel_name: None,
-            upstream_key_hint: Some(self.upstream_key_hint.clone()),
-            requested_model: requested_model.to_string(),
-            upstream_model: Some(self.target_model.clone()),
-            client_endpoint: Some(client_endpoint.as_str().to_string()),
-            upstream_endpoint: Some(self.upstream_endpoint.as_str().to_string()),
-            status: if (200..400).contains(&self.status_code) {
-                AttemptStatus::Success
-            } else {
-                AttemptStatus::Failed
-            },
-            reason: self.error_message.clone(),
-            duration_ms: Some(self.latency_ms),
-            queue_wait_ms: None,
-            sticky: false,
-            score: None,
-        }
-    }
 }
 
 /// RAII guard：确保函数退出时自动递减活跃请求数
@@ -114,183 +65,6 @@ fn decrement_active_once(
         tokio::spawn(async move {
             state.lb_state.decrement_active(&channel_id).await;
         });
-    }
-}
-
-impl crate::stats::recorder::RequestRecord {
-    /// 从最后一次尝试构造完整记录
-    #[allow(clippy::too_many_arguments)]
-    fn from_last_attempt(
-        last: &AttemptStats,
-        request_id: Option<String>,
-        api_key_id: Option<&str>,
-        group_id: Option<&str>,
-        model: &str,
-        request_content: Option<String>,
-        response_content: Option<String>,
-        channel_attempts: Vec<crate::stats::recorder::ChannelAttempt>,
-        ttft_ms: Option<i32>,
-        is_stream: bool,
-        user_agent: Option<String>,
-    ) -> Self {
-        Self {
-            request_id,
-            api_key_id: api_key_id.map(str::to_string),
-            channel_id: Some(last.channel_id.clone()),
-            group_id: group_id.map(str::to_string),
-            requested_model: model.to_string(),
-            actual_model: Some(last.target_model.clone()),
-            input_tokens: last.input_tokens,
-            output_tokens: last.output_tokens,
-            cache_read_tokens: last.cache_read,
-            cache_creation_tokens: last.cache_creation,
-            cost: last.cost,
-            latency_ms: Some(last.latency_ms as i32),
-            ttft_ms,
-            status_code: Some(last.status_code as i32),
-            error_message: last.error_message.clone(),
-            endpoint_type: Some(last.upstream_endpoint.as_str().to_string()),
-            request_type: if last.needs_conversion {
-                "conversion".to_string()
-            } else {
-                "passthrough".to_string()
-            },
-            request_content,
-            response_content,
-            is_stream,
-            upstream_key_hint: Some(last.upstream_key_hint.clone()),
-            attempts: channel_attempts,
-            user_agent,
-        }
-    }
-
-    /// 构造选择阶段失败时的最小记录（503 + "请求未到达上游"）
-    #[allow(clippy::too_many_arguments)]
-    fn minimal_for_select_failure(
-        request_id: Option<String>,
-        api_key_id: Option<&str>,
-        group_id: Option<&str>,
-        model: &str,
-        request_content: Option<String>,
-        response_content: Option<String>,
-        channel_attempts: Vec<crate::stats::recorder::ChannelAttempt>,
-        is_stream: bool,
-        user_agent: Option<String>,
-        status_code: i32,
-        error_message: &str,
-    ) -> Self {
-        Self {
-            request_id,
-            api_key_id: api_key_id.map(str::to_string),
-            channel_id: None,
-            group_id: group_id.map(str::to_string),
-            requested_model: model.to_string(),
-            actual_model: None,
-            input_tokens: 0,
-            output_tokens: 0,
-            cache_read_tokens: 0,
-            cache_creation_tokens: 0,
-            cost: None,
-            latency_ms: None,
-            ttft_ms: None,
-            status_code: Some(status_code),
-            error_message: Some(error_message.to_string()),
-            endpoint_type: None,
-            request_type: "unknown".to_string(),
-            request_content,
-            response_content,
-            is_stream,
-            upstream_key_hint: None,
-            attempts: channel_attempts,
-            user_agent,
-        }
-    }
-}
-
-/// 保存单条请求日志（汇总所有尝试）
-#[allow(clippy::too_many_arguments)]
-pub(super) async fn save_request_record(
-    state: &ProxyState,
-    request_id: Option<String>,
-    api_key_id: Option<&str>,
-    group_id: Option<&str>,
-    model: &str,
-    request_content: Option<String>,
-    response_content: Option<String>,
-    attempts: &[AttemptStats],
-    ttft_ms: Option<i32>,
-    is_stream: bool,
-    user_agent: Option<String>,
-    select_error: Option<&ProxyError>,
-) {
-    // 构造 attempts 快照（用于记录日志）
-    let channel_attempts: Vec<crate::stats::recorder::ChannelAttempt> = attempts
-        .iter()
-        .map(|a| crate::stats::recorder::ChannelAttempt {
-            channel_id: a.channel_id.clone(),
-            channel_name: None,
-            status: if (200..400).contains(&a.status_code) {
-                "success".to_string()
-            } else {
-                "failed".to_string()
-            },
-            duration_ms: a.latency_ms,
-            error: a.error_message.clone(),
-            upstream_key_hint: Some(a.upstream_key_hint.clone()),
-        })
-        .collect();
-
-    let record = match attempts.last() {
-        Some(last) => crate::stats::recorder::RequestRecord::from_last_attempt(
-            last,
-            request_id,
-            api_key_id,
-            group_id,
-            model,
-            request_content,
-            response_content,
-            channel_attempts,
-            ttft_ms,
-            is_stream,
-            user_agent,
-        ),
-        None => {
-            let (status, msg) = select_error
-                .map(|e| match e {
-                    ProxyError::ModelNotFound(m) => (404, m.clone()),
-                    ProxyError::NoAvailableChannel(m) => (503, m.clone()),
-                    ProxyError::ModelNotSupported(m) => (400, m.clone()),
-                    _ => (502, e.to_string()),
-                })
-                .unwrap_or((503, "请求未到达上游".to_string()));
-            crate::stats::recorder::RequestRecord::minimal_for_select_failure(
-                request_id,
-                api_key_id,
-                group_id,
-                model,
-                request_content,
-                response_content,
-                channel_attempts,
-                is_stream,
-                user_agent,
-                status,
-                &msg,
-            )
-        }
-    };
-
-    let _ = state.stats_recorder.record_request(record).await;
-
-    // 速率限制：更新 TPM 计数
-    if let Some(key_id) = api_key_id {
-        let total_input: i32 = attempts.iter().map(|a| a.input_tokens).sum();
-        let total_output: i32 = attempts.iter().map(|a| a.output_tokens).sum();
-        if total_input > 0 || total_output > 0 {
-            state
-                .rate_limiter
-                .record_tokens(key_id, total_input as u64, total_output as u64)
-                .await;
-        }
     }
 }
 
@@ -342,40 +116,13 @@ pub(crate) async fn execute_proxy_request(
     let body_value: serde_json::Value = serde_json::from_str(&response_body).unwrap_or_default();
     let status_u16 = status.as_u16();
 
-    let (input_tokens, output_tokens, cache_read, cache_creation) =
-        if (200..400).contains(&status_u16) {
-            let (i, o, cr, cc) = extract_usage(&body_value, &prepared.upstream_endpoint);
-            if i == 0 && o == 0 {
-                let req_text = extract_request_text(body);
-                let resp_text = extract_response_text(&body_value);
-                (
-                    estimate_tokens(&req_text),
-                    estimate_tokens(&resp_text),
-                    cr,
-                    cc,
-                )
-            } else {
-                (i, o, cr, cc)
-            }
-        } else {
-            (0, 0, 0, 0)
-        };
-    let cost = if input_tokens > 0 || output_tokens > 0 {
-        Some(
-            state
-                .model_registry
-                .calculate_cost(
-                    &prepared.target_model,
-                    input_tokens,
-                    output_tokens,
-                    cache_read,
-                    cache_creation,
-                )
-                .await,
-        )
-    } else {
-        None
-    };
+    let usage =
+        resolve_non_stream_usage(body, &body_value, &prepared.upstream_endpoint, status_u16);
+    let cost = calculate_cost(&state.model_registry, &prepared.target_model, usage).await;
+    let input_tokens = usage.input_tokens;
+    let output_tokens = usage.output_tokens;
+    let cache_read = usage.cache_read;
+    let cache_creation = usage.cache_creation;
 
     attempts.push(AttemptStats {
         channel_id: prepared.channel_id.clone(),
@@ -770,21 +517,7 @@ pub(crate) async fn execute_proxy_stream(
 
     let stats_recorder = state.stats_recorder.clone();
     let rate_limiter = state.rate_limiter.clone();
-    let attempts_snapshot: Vec<crate::stats::recorder::ChannelAttempt> = attempts
-        .iter()
-        .map(|a| crate::stats::recorder::ChannelAttempt {
-            channel_id: a.channel_id.clone(),
-            channel_name: None,
-            status: if (200..400).contains(&a.status_code) {
-                "success".to_string()
-            } else {
-                "failed".to_string()
-            },
-            duration_ms: a.latency_ms,
-            error: a.error_message.clone(),
-            upstream_key_hint: Some(a.upstream_key_hint.clone()),
-        })
-        .collect();
+    let attempts_snapshot = channel_attempts_snapshot(attempts);
 
     // === SSE 流式背压：使用有界 mpsc channel 替代 async_stream ===
     const STREAM_BUFFER_SIZE: usize = 16;
@@ -1109,72 +842,18 @@ pub(crate) async fn execute_proxy_stream(
         drop(stream_tx); // 关闭 channel，通知 ReceiverStream 结束
 
         let latency_ms = start_time.elapsed().as_millis() as i64;
-        let (mut input_tokens, mut output_tokens, cache_read, cache_creation) =
-            match &upstream_endpoint_clone {
-                EndpointType::Anthropic => {
-                    let input = input_usage
-                        .as_ref()
-                        .and_then(|u| u["input_tokens"].as_i64())
-                        .filter(|&v| v > 0)
-                        .or_else(|| {
-                            last_usage
-                                .as_ref()
-                                .and_then(|u| u["usage"]["input_tokens"].as_i64())
-                        })
-                        .unwrap_or(0) as i32;
-                    let output = last_usage
-                        .as_ref()
-                        .and_then(|u| u["usage"]["output_tokens"].as_i64())
-                        .unwrap_or(0) as i32;
-                    let cache_read = input_usage
-                        .as_ref()
-                        .and_then(|u| u["cache_read_input_tokens"].as_i64())
-                        .filter(|&v| v > 0)
-                        .or_else(|| {
-                            last_usage
-                                .as_ref()
-                                .and_then(|u| u["usage"]["cache_read_input_tokens"].as_i64())
-                        })
-                        .unwrap_or(0) as i32;
-                    let cache_creation = input_usage
-                        .as_ref()
-                        .and_then(|u| u["cache_creation_input_tokens"].as_i64())
-                        .filter(|&v| v > 0)
-                        .or_else(|| {
-                            last_usage
-                                .as_ref()
-                                .and_then(|u| u["usage"]["cache_creation_input_tokens"].as_i64())
-                        })
-                        .unwrap_or(0) as i32;
-                    (input, output, cache_read, cache_creation)
-                }
-                _ => last_usage
-                    .map(|u| extract_usage(&u, &upstream_endpoint_clone))
-                    .unwrap_or((0, 0, 0, 0)),
-            };
-
-        // 兜底估算
-        if input_tokens == 0 && output_tokens == 0 {
-            input_tokens = estimate_tokens(&req_text_for_estimation);
-            output_tokens = estimate_tokens(&collected_text);
-        }
-
-        let cost = if input_tokens > 0 || output_tokens > 0 {
-            Some(
-                state_clone
-                    .model_registry
-                    .calculate_cost(
-                        &target_model_clone,
-                        input_tokens,
-                        output_tokens,
-                        cache_read,
-                        cache_creation,
-                    )
-                    .await,
-            )
-        } else {
-            None
-        };
+        let usage = resolve_stream_usage(
+            &upstream_endpoint_clone,
+            last_usage,
+            input_usage,
+            &req_text_for_estimation,
+            &collected_text,
+        );
+        let cost = calculate_cost(&state_clone.model_registry, &target_model_clone, usage).await;
+        let input_tokens = usage.input_tokens;
+        let output_tokens = usage.output_tokens;
+        let cache_read = usage.cache_read;
+        let cache_creation = usage.cache_creation;
 
         let (status_code, error_message, response_content) = if let Some(error) = stream_error {
             state_clone
@@ -1220,64 +899,34 @@ pub(crate) async fn execute_proxy_stream(
         };
 
         // 直接写入统计（不再需要 stats_tx/stats_rx）
-        let mut channel_attempts = attempts_snapshot;
-        channel_attempts.push(crate::stats::recorder::ChannelAttempt {
-            channel_id: sc_channel_id.clone(),
-            channel_name: None,
-            status: if (200..400).contains(&status_code) {
-                "success".into()
-            } else {
-                "failed".into()
-            },
-            duration_ms: latency_ms,
-            error: error_message.clone(),
-            upstream_key_hint: Some(sc_upstream_key_hint.clone()),
-        });
-
-        let rate_limit_key = sc_api_key_id.clone();
         let decrement_channel_id = sc_channel_id.clone();
-        let record = crate::stats::recorder::RequestRecord {
-            request_id: Some(request_id_clone),
-            api_key_id: sc_api_key_id,
-            channel_id: Some(sc_channel_id),
+        record_stream_completion(
+            stats_recorder,
+            rate_limiter,
+            request_id_clone,
+            sc_api_key_id,
+            sc_channel_id,
             group_id,
-            requested_model: sc_model,
-            actual_model: Some(sc_target_model),
+            sc_model,
+            sc_target_model,
             input_tokens,
             output_tokens,
-            cache_read_tokens: cache_read,
-            cache_creation_tokens: cache_creation,
+            cache_read,
+            cache_creation,
             cost,
-            latency_ms: Some(latency_ms as i32),
+            latency_ms,
             ttft_ms,
-            status_code: Some(status_code),
+            status_code,
             error_message,
-            endpoint_type: Some(sc_client_endpoint.as_str().to_string()),
-            request_type: if sc_needs_conversion {
-                "conversion".into()
-            } else {
-                "passthrough".into()
-            },
-            request_content: sc_request_content,
+            sc_client_endpoint.as_str().to_string(),
+            sc_needs_conversion,
+            sc_request_content,
             response_content,
-            is_stream: true,
-            upstream_key_hint: Some(sc_upstream_key_hint),
-            attempts: channel_attempts,
-            user_agent: sc_user_agent,
-        };
-
-        match stats_recorder.record_request(record).await {
-            Ok(()) => {
-                if let Some(ref key_id) = rate_limit_key
-                    && (input_tokens > 0 || output_tokens > 0)
-                {
-                    rate_limiter
-                        .record_tokens(key_id, input_tokens as u64, output_tokens as u64)
-                        .await;
-                }
-            }
-            Err(e) => tracing::warn!("Failed to save stream stats: {}", e),
-        }
+            sc_upstream_key_hint,
+            attempts_snapshot,
+            sc_user_agent,
+        )
+        .await;
 
         // 流结束，递减活跃请求数
         if !active_decremented_spawn.load(std::sync::atomic::Ordering::Relaxed) {
@@ -1305,237 +954,13 @@ pub(crate) async fn execute_proxy_stream(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::stats::recorder::{ChannelAttempt, RequestRecord};
-
-    fn sample_attempt(status_code: u16) -> AttemptStats {
-        AttemptStats {
-            channel_id: "ch-1".into(),
-            target_model: "gpt-4o".into(),
-            upstream_endpoint: EndpointType::OpenAiChat,
-            needs_conversion: false,
-            latency_ms: 123,
-            status_code,
-            input_tokens: 10,
-            output_tokens: 20,
-            cache_read: 3,
-            cache_creation: 0,
-            cost: Some(0.001),
-            error_message: None,
-            upstream_key_hint: "sk-abcde...mnop".into(),
-        }
-    }
-
-    fn sample_attempts() -> Vec<ChannelAttempt> {
-        vec![ChannelAttempt {
-            channel_id: "ch-1".into(),
-            channel_name: None,
-            status: "failed".into(),
-            duration_ms: 100,
-            error: Some("upstream 500".into()),
-            upstream_key_hint: Some("sk-abcde...mnop".into()),
-        }]
-    }
-
-    #[test]
-    fn from_last_attempt_propagates_all_fields() {
-        let last = sample_attempt(200);
-        let record = RequestRecord::from_last_attempt(
-            &last,
-            Some("req-1".into()),
-            Some("key-1"),
-            Some("grp-1"),
-            "gpt-4o",
-            Some("hi".into()),
-            Some("hello".into()),
-            sample_attempts(),
-            Some(45),
-            false,
-            Some("ua/1.0".into()),
-        );
-        assert_eq!(record.api_key_id.as_deref(), Some("key-1"));
-        assert_eq!(record.channel_id.as_deref(), Some("ch-1"));
-        assert_eq!(record.group_id.as_deref(), Some("grp-1"));
-        assert_eq!(record.requested_model, "gpt-4o");
-        assert_eq!(record.actual_model.as_deref(), Some("gpt-4o"));
-        assert_eq!(record.input_tokens, 10);
-        assert_eq!(record.output_tokens, 20);
-        assert_eq!(record.cache_read_tokens, 3);
-        assert_eq!(record.cost, Some(0.001));
-        assert_eq!(record.latency_ms, Some(123));
-        assert_eq!(record.ttft_ms, Some(45));
-        assert_eq!(record.status_code, Some(200));
-        assert_eq!(record.error_message, None);
-        assert_eq!(record.endpoint_type.as_deref(), Some("openai_chat"));
-        assert_eq!(record.request_type, "passthrough");
-        assert!(!record.is_stream);
-        assert_eq!(record.upstream_key_hint.as_deref(), Some("sk-abcde...mnop"));
-        assert_eq!(record.attempts.len(), 1);
-        assert_eq!(record.user_agent.as_deref(), Some("ua/1.0"));
-    }
-
-    #[test]
-    fn from_last_attempt_marks_conversion_path() {
-        let mut last = sample_attempt(200);
-        last.needs_conversion = true;
-        let record = RequestRecord::from_last_attempt(
-            &last,
-            None,
-            None,
-            None,
-            "claude-sonnet",
-            None,
-            None,
-            vec![],
-            None,
-            false,
-            None,
-        );
-        assert_eq!(record.request_type, "conversion");
-    }
-
-    #[test]
-    fn from_last_attempt_marks_passthrough_path() {
-        let last = sample_attempt(200);
-        let record = RequestRecord::from_last_attempt(
-            &last,
-            None,
-            None,
-            None,
-            "gpt-4o",
-            None,
-            None,
-            vec![],
-            None,
-            true,
-            None,
-        );
-        assert_eq!(record.request_type, "passthrough");
-        assert!(record.is_stream);
-    }
-
-    #[test]
-    fn from_last_attempt_preserves_error_message_on_failed_status() {
-        let mut last = sample_attempt(503);
-        last.error_message = Some("upstream timeout".into());
-        let record = RequestRecord::from_last_attempt(
-            &last,
-            None,
-            None,
-            None,
-            "gpt-4o",
-            None,
-            None,
-            vec![],
-            None,
-            false,
-            None,
-        );
-        assert_eq!(record.status_code, Some(503));
-        assert_eq!(record.error_message.as_deref(), Some("upstream timeout"));
-    }
-
-    #[test]
-    fn minimal_for_select_failure_fills_503_and_marker_text() {
-        let record = RequestRecord::minimal_for_select_failure(
-            None,
-            Some("key-1"),
-            Some("grp-1"),
-            "gpt-4o",
-            Some("hi".into()),
-            None,
-            sample_attempts(),
-            false,
-            Some("ua/1.0".into()),
-            503,
-            "请求未到达上游",
-        );
-        assert_eq!(record.status_code, Some(503));
-        assert_eq!(record.error_message.as_deref(), Some("请求未到达上游"));
-        assert!(record.channel_id.is_none());
-        assert!(record.actual_model.is_none());
-        assert_eq!(record.input_tokens, 0);
-        assert_eq!(record.output_tokens, 0);
-        assert!(record.cost.is_none());
-        assert!(record.latency_ms.is_none());
-        assert!(record.ttft_ms.is_none());
-        assert!(record.endpoint_type.is_none());
-        assert!(record.upstream_key_hint.is_none());
-        assert_eq!(record.request_type, "unknown");
-        assert_eq!(record.attempts.len(), 1);
-    }
-
-    // ============================================================
-    // M2-S1: AttemptStats → AttemptTrace adapter characterization
-    // ============================================================
-
-    /// 验证成功的 AttemptStats 映射到 AttemptTrace 时字段正确
-    #[test]
-    fn attempt_trace_log_adapter_success_maps_fields_and_serializes() {
-        use crate::scheduler::trace::{AttemptStatus, AttemptTrace};
-
-        let stats = AttemptStats {
-            channel_id: "ch-1".into(),
-            target_model: "gpt-4o".into(),
-            upstream_endpoint: EndpointType::OpenAiChat,
-            needs_conversion: false,
-            latency_ms: 150,
-            status_code: 200,
-            input_tokens: 10,
-            output_tokens: 5,
-            cache_read: 0,
-            cache_creation: 0,
-            cost: Some(0.001),
-            error_message: None,
-            upstream_key_hint: "sk-abc...xyz".into(),
-        };
-
-        let trace: AttemptTrace = stats.to_trace(1, "gpt-4o", &EndpointType::OpenAiChat);
-
-        assert_eq!(trace.attempt_no, 1);
-        assert_eq!(trace.status, AttemptStatus::Success);
-        assert!(trace.reason.is_none());
-        assert_eq!(trace.channel_id.as_deref(), Some("ch-1"));
-        assert_eq!(trace.upstream_model.as_deref(), Some("gpt-4o"));
-        assert_eq!(trace.upstream_endpoint.as_deref(), Some("openai_chat"));
-        assert_eq!(trace.duration_ms, Some(150));
-        assert_eq!(trace.upstream_key_hint.as_deref(), Some("sk-abc...xyz"));
-
-        // JSON 序列化验证 snake_case 和关键字段
-        let json = serde_json::to_string(&trace).unwrap();
-        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
-        assert_eq!(parsed["attempt_no"], 1);
-        assert_eq!(parsed["status"], "success");
-        assert_eq!(parsed["reason"], serde_json::Value::Null);
-        assert_eq!(parsed["upstream_endpoint"], "openai_chat");
-    }
-
-    /// 验证失败的 AttemptStats 映射到 AttemptTrace 时 reason 和 status 正确
-    #[test]
-    fn attempt_trace_log_adapter_failure_maps_reason_and_status() {
-        use crate::scheduler::trace::{AttemptStatus, AttemptTrace};
-
-        let mut stats = sample_attempt(500);
-        stats.error_message = Some("upstream timeout".into());
-
-        let trace: AttemptTrace = stats.to_trace(3, "gpt-4o", &EndpointType::OpenAiChat);
-
-        assert_eq!(trace.attempt_no, 3);
-        assert_eq!(trace.status, AttemptStatus::Failed);
-        assert_eq!(trace.reason.as_deref(), Some("upstream timeout"));
-
-        let json = serde_json::to_string(&trace).unwrap();
-        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
-        assert_eq!(parsed["status"], "failed");
-        assert_eq!(parsed["reason"], "upstream timeout");
-    }
-
     // ============================================================
     // 端到端：mock 本地 upstream + 真实 ProxyState 调 proxy_request
     // ============================================================
 
     use crate::db::Database;
     use crate::proxy::ProxyState;
-    use crate::stats::model::ModelRegistry;
+    use crate::metrics::model::ModelRegistry;
     use axum::{Router, routing::post};
 
     async fn spawn_mock_upstream() -> String {

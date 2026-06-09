@@ -9,12 +9,12 @@ mod api;
 mod auth;
 mod config;
 mod db;
+mod metrics;
 mod protocol;
 mod proxy;
 mod relay;
 mod scheduler;
 mod static_assets;
-mod stats;
 
 use config::AppConfig;
 use db::Database;
@@ -61,7 +61,7 @@ async fn main() -> Result<()> {
     // 初始化模型注册表：从 DB 加载，空则回退缓存文件
     let cache_path = PathBuf::from(&config.pricing.cache_path);
     let providers = config.pricing.providers.clone();
-    let model_registry = stats::model::ModelRegistry::new(database.pool().clone());
+    let model_registry = metrics::model::ModelRegistry::new(database.pool().clone());
 
     model_registry
         .load_from_db()
@@ -93,9 +93,9 @@ async fn main() -> Result<()> {
     info!("Model registry initialized");
 
     // 启动后台调度器
-    let lb_state = proxy::state::LoadBalancerState::new();
+    let lb_state = scheduler::state::LoadBalancerState::new();
     let rate_limiter = proxy::ratelimit::RateLimiter::new();
-    let scheduler = Arc::new(proxy::scheduler::Scheduler::new(
+    let scheduler = Arc::new(relay::scheduler_task::Scheduler::new(
         lb_state,
         rate_limiter.clone(),
         database.pool().clone(),
@@ -104,7 +104,7 @@ async fn main() -> Result<()> {
     info!("Scheduler started");
 
     // 模型信息定时刷新
-    let pricing_refresher = Arc::new(stats::pricing_refresher::PricingRefresher::new(
+    let pricing_refresher = Arc::new(metrics::pricing::PricingRefresher::new(
         model_registry.clone(),
         PathBuf::from(&config.pricing.cache_path),
         config.pricing.providers.clone(),

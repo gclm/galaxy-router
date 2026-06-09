@@ -5,7 +5,7 @@ use std::convert::Infallible;
 use std::pin::Pin;
 
 use crate::api::handlers::admin::channels::EndpointType;
-use crate::proxy::execute::AttemptStats;
+use crate::metrics::attempt::AttemptStats;
 use crate::proxy::selection::SelectionResult;
 use crate::proxy::{ProxyError, ProxyState};
 

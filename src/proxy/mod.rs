@@ -1,35 +1,28 @@
-pub mod cache;
-pub mod channel;
-pub mod circuit;
 pub mod execute;
 pub mod prepare;
-pub mod queue;
 pub mod ratelimit;
-pub mod scheduler;
 pub mod selection;
-pub mod sse;
-pub mod state;
-pub mod thinking_normalizer;
 
-pub use cache::ProxyCache;
-pub use channel::ChannelInfo;
-pub use queue::RequestQueue;
+pub use crate::relay::cache::ProxyCache;
+pub use crate::relay::channel::ChannelInfo;
+pub use crate::relay::queue::RequestQueue;
 pub use ratelimit::RateLimiter;
 pub use selection::{GroupInfo, GroupItemInfo};
 
-use self::state::LoadBalancerState;
+use crate::scheduler::state::LoadBalancerState;
 use crate::api::handlers::admin::channels::{
     CustomHeader, EndpointConfig, EndpointType, UpstreamApiKey, parse_api_keys,
 };
+use crate::metrics::recorder::save_request_record;
 use crate::protocol::outbound::Outbound;
-use crate::proxy::execute::{proxy_request, save_request_record};
-use crate::proxy::sse::sanitize_upstream_error;
+use crate::proxy::execute::proxy_request;
+use crate::protocol::sse::sanitize_upstream_error;
 use crate::relay::run::RelayCandidate;
 use crate::scheduler::scoring::{
     CandidateScoreInput, SchedulerScoreWeights, ScoredCandidate, select_top_k_candidates,
 };
-use crate::stats::model::ModelRegistry;
-use crate::stats::recorder::StatsRecorder;
+use crate::metrics::model::ModelRegistry;
+use crate::metrics::recorder::StatsRecorder;
 use axum::body::Bytes;
 use axum::http::{HeaderMap, StatusCode};
 use sqlx::SqlitePool;

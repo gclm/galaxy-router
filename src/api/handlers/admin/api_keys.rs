@@ -8,7 +8,7 @@ use sqlx::{AssertSqlSafe, SqlitePool};
 
 use crate::api::middleware::ApiKeyCache;
 use crate::api::{ApiError, ApiResponse, response::generate_id};
-use crate::stats::{now_local_str, tz_modifier};
+use crate::metrics::query::{now_local_str, tz_modifier};
 
 /// API Key
 #[derive(Debug, Serialize, Deserialize, Clone)]
