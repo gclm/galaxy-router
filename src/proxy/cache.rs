@@ -124,6 +124,7 @@ impl ProxyCache {
     }
 
     /// 查找包含指定模型的渠道 ID 列表
+    #[allow(dead_code)]
     pub async fn find_channels_by_model(&self, model: &str) -> Vec<String> {
         let idx = self.model_index.read().await;
         idx.get(model).cloned().unwrap_or_default()

@@ -76,9 +76,7 @@ pub fn extract_usage_from_sse(text: &str, endpoint_type: &EndpointType) -> Optio
             if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(data) {
                 // response.completed 事件：usage 在 parsed["response"]["usage"]
                 if event_type == "response.completed"
-                    && let Some(usage) = parsed
-                        .get("response")
-                        .and_then(|r| r.get("usage"))
+                    && let Some(usage) = parsed.get("response").and_then(|r| r.get("usage"))
                 {
                     return Some(SseUsageSource::OpenAi(usage.clone()));
                 }
@@ -270,8 +268,7 @@ pub fn collect_sse_content(
                                 let idx = tc["index"].as_u64().unwrap_or(0) as usize;
                                 let id = tc["id"].as_str().unwrap_or("");
                                 let name = tc["function"]["name"].as_str().unwrap_or("");
-                                let arguments =
-                                    tc["function"]["arguments"].as_str().unwrap_or("");
+                                let arguments = tc["function"]["arguments"].as_str().unwrap_or("");
 
                                 // 确保 Vec 足够长
                                 while tool_calls.len() <= idx {
@@ -284,17 +281,16 @@ pub fn collect_sse_content(
 
                                 let entry = &mut tool_calls[idx];
                                 if !id.is_empty() {
-                                    entry["id"] =
-                                        serde_json::Value::String(id.to_string());
+                                    entry["id"] = serde_json::Value::String(id.to_string());
                                 }
                                 if !name.is_empty() {
-                                    entry["name"] =
-                                        serde_json::Value::String(name.to_string());
+                                    entry["name"] = serde_json::Value::String(name.to_string());
                                 }
                                 if let Some(existing) = entry["arguments"].as_str() {
-                                    entry["arguments"] = serde_json::Value::String(
-                                        format!("{}{}", existing, arguments),
-                                    );
+                                    entry["arguments"] = serde_json::Value::String(format!(
+                                        "{}{}",
+                                        existing, arguments
+                                    ));
                                 }
                             }
                         }
@@ -345,13 +341,11 @@ pub fn collect_sse_content(
                             .find(|tc| tc["id"].as_str() == Some(call_id))
                         {
                             if !name.is_empty() {
-                                existing["name"] =
-                                    serde_json::Value::String(name.to_string());
+                                existing["name"] = serde_json::Value::String(name.to_string());
                             }
                             if let Some(args) = existing["arguments"].as_str() {
-                                existing["arguments"] = serde_json::Value::String(
-                                    format!("{}{}", args, delta),
-                                );
+                                existing["arguments"] =
+                                    serde_json::Value::String(format!("{}{}", args, delta));
                             }
                         } else {
                             tool_calls.push(serde_json::json!({

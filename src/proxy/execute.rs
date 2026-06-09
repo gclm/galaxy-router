@@ -3,23 +3,22 @@ use axum::http::{HeaderMap, StatusCode};
 
 use super::prepare::{
     estimate_tokens, extract_request_text, extract_response_text, extract_usage,
-    prepare_proxy_request, select_channel_for_proxy,
+    prepare_proxy_request,
 };
 use super::selection::SelectionResult;
-use super::{ProxyError, ProxyState, ProxySuccess, get_inbound, get_outbound};
+use super::{ProxyError, ProxyState, ProxySuccess};
 use crate::api::handlers::admin::channels::EndpointType;
 use crate::proxy::sse::{
     apply_sse_usage, collect_sse_content, extract_error_from_sse, extract_usage_from_sse,
     find_sse_boundary, format_stream_error_event, sanitize_upstream_error,
 };
 use crate::proxy::thinking_normalizer::{PassthroughNormalizer, ThinkingTagExtractor};
+use crate::relay::pipeline::RelayPipeline;
+use crate::scheduler::trace::{AttemptStatus, AttemptTrace};
 use crate::stats::redaction::sanitize_json_content;
 
 /// 从渠道 extras JSON Map 读取 `extras.thinking.<key>` 布尔开关
-fn thinking_flag(
-    extras: &Option<serde_json::Map<String, serde_json::Value>>,
-    key: &str,
-) -> bool {
+fn thinking_flag(extras: &Option<serde_json::Map<String, serde_json::Value>>, key: &str) -> bool {
     extras
         .as_ref()
         .and_then(|e| e.get("thinking"))
@@ -45,6 +44,39 @@ pub(super) struct AttemptStats {
     upstream_key_hint: String,
 }
 
+impl AttemptStats {
+    /// 转换为 scheduler::trace::AttemptTrace（M2-S1 adapter）
+    /// 桥接代码：RelayRun 接入真实 proxy 后将直接使用 AttemptTrace
+    #[allow(dead_code)]
+    pub(super) fn to_trace(
+        &self,
+        attempt_no: u32,
+        requested_model: &str,
+        client_endpoint: &EndpointType,
+    ) -> AttemptTrace {
+        AttemptTrace {
+            attempt_no,
+            channel_id: Some(self.channel_id.clone()),
+            channel_name: None,
+            upstream_key_hint: Some(self.upstream_key_hint.clone()),
+            requested_model: requested_model.to_string(),
+            upstream_model: Some(self.target_model.clone()),
+            client_endpoint: Some(client_endpoint.as_str().to_string()),
+            upstream_endpoint: Some(self.upstream_endpoint.as_str().to_string()),
+            status: if (200..400).contains(&self.status_code) {
+                AttemptStatus::Success
+            } else {
+                AttemptStatus::Failed
+            },
+            reason: self.error_message.clone(),
+            duration_ms: Some(self.latency_ms),
+            queue_wait_ms: None,
+            sticky: false,
+            score: None,
+        }
+    }
+}
+
 /// RAII guard：确保函数退出时自动递减活跃请求数
 struct ActiveRequestGuard {
     state: ProxyState,
@@ -68,12 +100,15 @@ fn decrement_active_once(
     channel_id: &str,
     done: &std::sync::Arc<std::sync::atomic::AtomicBool>,
 ) {
-    if done.compare_exchange(
-        false,
-        true,
-        std::sync::atomic::Ordering::Relaxed,
-        std::sync::atomic::Ordering::Relaxed,
-    ).is_ok() {
+    if done
+        .compare_exchange(
+            false,
+            true,
+            std::sync::atomic::Ordering::Relaxed,
+            std::sync::atomic::Ordering::Relaxed,
+        )
+        .is_ok()
+    {
         let state = state.clone();
         let channel_id = channel_id.to_string();
         tokio::spawn(async move {
@@ -251,7 +286,10 @@ pub(super) async fn save_request_record(
         let total_input: i32 = attempts.iter().map(|a| a.input_tokens).sum();
         let total_output: i32 = attempts.iter().map(|a| a.output_tokens).sum();
         if total_input > 0 || total_output > 0 {
-            state.rate_limiter.record_tokens(key_id, total_input as u64, total_output as u64).await;
+            state
+                .rate_limiter
+                .record_tokens(key_id, total_input as u64, total_output as u64)
+                .await;
         }
     }
 }
@@ -271,7 +309,10 @@ pub(super) async fn execute_proxy_request(
 ) -> Result<ProxySuccess, ProxyError> {
     // 追踪活跃请求数
     let channel_id = selection.channel.id.clone();
-    state.lb_state.ensure_channel_status(&channel_id, selection.channel.max_concurrency).await;
+    state
+        .lb_state
+        .ensure_channel_status(&channel_id, selection.channel.max_concurrency)
+        .await;
     state.lb_state.increment_active(&channel_id).await;
     let _guard = ActiveRequestGuard {
         state: state.clone(),
@@ -285,7 +326,9 @@ pub(super) async fn execute_proxy_request(
     let response = state
         .http_client
         .post(&prepared.url)
-        .timeout(std::time::Duration::from_secs(selection.channel.timeout_secs))
+        .timeout(std::time::Duration::from_secs(
+            selection.channel.timeout_secs,
+        ))
         .headers(prepared.headers)
         .body(prepared.body)
         .send()
@@ -373,15 +416,15 @@ pub(super) async fn execute_proxy_request(
         .await;
 
     let final_body = if prepared.needs_conversion {
-        let inbound = get_inbound(client_endpoint);
-        let outbound = get_outbound(&prepared.upstream_endpoint);
-        let llm_response = outbound
-            .transform_response(response_body.as_bytes(), status.as_u16())
-            .await
-            .map_err(|e| ProxyError::TransformError(e.to_string()))?;
-        inbound
-            .transform_response(&llm_response)
-            .map_err(|e| ProxyError::TransformError(e.to_string()))?
+        let finalized = RelayPipeline::finalize_response_async(
+            client_endpoint.clone(),
+            prepared.upstream_endpoint.clone(),
+            body_value,
+            status.as_u16(),
+        )
+        .await
+        .map_err(|e| ProxyError::TransformError(e.to_string()))?;
+        serde_json::to_vec(&finalized.body).unwrap_or_default()
     } else {
         response_body.into_bytes()
     };
@@ -420,147 +463,119 @@ pub async fn proxy_request(
         .get("user-agent")
         .and_then(|v| v.to_str().ok())
         .map(|s| s.to_string());
-    let max_retries = 3;
-    let mut exclude_ids = Vec::new();
-    let mut last_error = None;
-    let mut attempts = Vec::new();
+    let session_hash = headers
+        .get("x-session-hash")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string());
 
-    for attempt in 0..max_retries {
-        let selection =
-            match select_channel_for_proxy(state, headers, body, client_endpoint, &exclude_ids)
-                .await
-            {
-                Ok(s) => s,
-                Err(e) => {
-                    // 渠道选择失败时也记录日志
-                    save_request_record(
-                        state,
-                        Some(request_id.to_string()),
-                        api_key_id,
-                        None,
-                        &model,
-                        request_content.clone(),
-                        None,
-                        &attempts,
-                        None,
-                        false,
-                        user_agent.clone(),
-                        Some(&e),
-                    )
-                    .await;
-                    return Err(e);
-                }
-            };
-        let channel_id = selection.channel.id.clone();
-        let group_id = selection.group_id.clone();
-        let api_key_attempts = state.api_key_attempts(&selection.channel);
+    let sticky_channel_id = if let Some(hash) = session_hash.as_deref() {
+        state.lb_state.get_sticky_session(hash).await
+    } else {
+        None
+    };
 
-        for (key_idx, upstream_api_key) in api_key_attempts.iter().enumerate() {
-            let key_hint = selection.channel.key_hint(upstream_api_key);
-            match execute_proxy_request(
+    // 1. 构建候选列表（sticky + scored group items）
+    let candidates = match super::build_relay_candidates(
+        state,
+        &model,
+        client_endpoint,
+        session_hash.as_deref(),
+    )
+    .await
+    {
+        Ok(c) => c,
+        Err(e) => {
+            save_request_record(
                 state,
+                Some(request_id.to_string()),
                 api_key_id,
-                upstream_api_key,
-                &key_hint,
-                headers,
-                body,
-                client_endpoint,
-                &selection,
-                &mut attempts,
+                None,
+                &model,
+                request_content,
+                None,
+                &[],
+                None,
+                false,
+                user_agent,
+                Some(&e),
             )
-            .await
-            {
-                Ok(result) => {
-                    save_request_record(
-                        state,
-                        Some(request_id.to_string()),
-                        api_key_id,
-                        group_id.as_deref(),
-                        &model,
-                        request_content.clone(),
-                        Some(String::from_utf8_lossy(&result.body).to_string()),
-                        &attempts,
-                        None,
-                        false,
-                        user_agent.clone(),
-                        None,
-                    )
-                    .await;
-                    return Ok(result);
-                }
-                Err(ProxyError::UpstreamError { status, body }) => {
-                    let can_try_next_key = key_idx + 1 < api_key_attempts.len()
-                        && ProxyError::UpstreamError {
-                            status,
-                            body: body.clone(),
-                        }
-                        .is_key_retryable();
+            .await;
+            return Err(e);
+        }
+    };
 
-                    if can_try_next_key {
-                        tracing::warn!(
-                            "请求失败(第{}次), channel={}, status={}, 尝试同渠道下一个 key",
-                            attempt + 1,
-                            channel_id,
-                            status
-                        );
-                        last_error = Some(ProxyError::UpstreamError { status, body });
-                        continue;
-                    }
+    // 2. 创建 executor + RelayRun
+    let executor = super::relay_executor::ProxyRelayExecutor::new(
+        state.clone(),
+        headers.clone(),
+        body.clone(),
+        client_endpoint.clone(),
+        api_key_id.map(|s| s.to_string()),
+    );
 
-                    tracing::warn!(
-                        "请求失败(第{}次), channel={}, status={}, 排除后重试",
-                        attempt + 1,
-                        channel_id,
-                        status
-                    );
-                    state
-                        .lb_state
-                        .record_failure(&channel_id, status.is_server_error())
-                        .await;
-                    exclude_ids.push(channel_id);
-                    last_error = Some(ProxyError::UpstreamError { status, body });
-                    break;
-                }
-                Err(e) => {
-                    save_request_record(
-                        state,
-                        Some(request_id.to_string()),
-                        api_key_id,
-                        group_id.as_deref(),
-                        &model,
-                        request_content.clone(),
-                        None,
-                        &attempts,
-                        None,
-                        false,
-                        user_agent.clone(),
-                        Some(&e),
-                    )
-                    .await;
-                    return Err(e);
-                }
+    let capacity = state.lb_state.capacity_manager();
+    let run = crate::relay::run::RelayRun::new(capacity, executor.clone());
+    let relay_request = crate::relay::run::RelayRequest::new(&model);
+
+    // 3. 执行
+    let candidate_snapshot = candidates.clone();
+    let outcome = run.execute(relay_request, candidates).await;
+    let attempt_stats = executor.take_attempt_stats();
+
+    // 4. 记录日志 + 返回结果
+    if let Some(response_body) = outcome.response {
+        if let Some(channel_id) = outcome.selected_channel_id.as_deref() {
+            let selected_was_sticky = candidate_snapshot
+                .iter()
+                .any(|c| c.channel_id == channel_id && c.sticky);
+            state.lb_state.record_scheduler_selection(
+                channel_id,
+                selected_was_sticky,
+                sticky_channel_id.as_deref(),
+            );
+            if let Some(hash) = session_hash.as_deref() {
+                state.lb_state.set_sticky_session(hash, channel_id).await;
             }
         }
-    }
+        save_request_record(
+            state,
+            Some(request_id.to_string()),
+            api_key_id,
+            None,
+            &model,
+            request_content,
+            Some(response_body.clone()),
+            &attempt_stats,
+            None,
+            false,
+            user_agent,
+            None,
+        )
+        .await;
 
-    tracing::error!("所有重试耗尽, model={}", model);
-    save_request_record(
-        state,
-        Some(request_id.to_string()),
-        api_key_id,
-        None,
-        &model,
-        request_content,
-        None,
-        &attempts,
-        None,
-        false,
-        user_agent,
-        None,
-    )
-    .await;
-    Err(last_error
-        .unwrap_or_else(|| ProxyError::NoAvailableChannel("所有渠道都不可用".to_string())))
+        Ok(ProxySuccess {
+            status: StatusCode::OK,
+            body: response_body.into_bytes(),
+        })
+    } else {
+        let error = ProxyError::from_relay_outcome(&outcome);
+        save_request_record(
+            state,
+            Some(request_id.to_string()),
+            api_key_id,
+            None,
+            &model,
+            request_content,
+            None,
+            &attempt_stats,
+            None,
+            false,
+            user_agent,
+            Some(&error),
+        )
+        .await;
+        Err(error)
+    }
 }
 
 /// 执行单次流式代理请求
@@ -595,7 +610,10 @@ pub(super) async fn execute_proxy_stream(
 > {
     // 追踪活跃请求数
     let channel_id = selection.channel.id.clone();
-    state.lb_state.ensure_channel_status(&channel_id, selection.channel.max_concurrency).await;
+    state
+        .lb_state
+        .ensure_channel_status(&channel_id, selection.channel.max_concurrency)
+        .await;
     state.lb_state.increment_active(&channel_id).await;
     // 流式请求的 guard 需要在 spawned task 中手动 decrement，因为流的生命周期超出本函数
     // 但如果本函数在发送前就返回 Err，需要确保 decrement
@@ -611,13 +629,19 @@ pub(super) async fn execute_proxy_stream(
     let response = state
         .http_client
         .post(&prepared.url)
-        .timeout(std::time::Duration::from_secs(selection.channel.timeout_secs))
+        .timeout(std::time::Duration::from_secs(
+            selection.channel.timeout_secs,
+        ))
         .headers(prepared.headers)
         .body(prepared.body)
         .send()
         .await
         .map_err(|e| {
-            decrement_active_once(&state_for_decrement, &channel_id_for_decrement, &active_decremented_clone);
+            decrement_active_once(
+                &state_for_decrement,
+                &channel_id_for_decrement,
+                &active_decremented_clone,
+            );
             ProxyError::RequestError(e.to_string())
         })?;
 
@@ -642,7 +666,11 @@ pub(super) async fn execute_proxy_stream(
             upstream_key_hint: upstream_key_hint.clone(),
         });
 
-        decrement_active_once(&state_for_decrement, &channel_id_for_decrement, &active_decremented_clone);
+        decrement_active_once(
+            &state_for_decrement,
+            &channel_id_for_decrement,
+            &active_decremented_clone,
+        );
         return Err(ProxyError::UpstreamError {
             status,
             body: response_body,
@@ -663,7 +691,11 @@ pub(super) async fn execute_proxy_stream(
                 }
             }
             Err(e) => {
-                decrement_active_once(&state_for_decrement, &channel_id_for_decrement, &active_decremented_clone);
+                decrement_active_once(
+                    &state_for_decrement,
+                    &channel_id_for_decrement,
+                    &active_decremented_clone,
+                );
                 return Err(ProxyError::RequestError(e.to_string()));
             }
         }
@@ -692,7 +724,11 @@ pub(super) async fn execute_proxy_stream(
             upstream_key_hint: upstream_key_hint.clone(),
         });
 
-        decrement_active_once(&state_for_decrement, &channel_id_for_decrement, &active_decremented_clone);
+        decrement_active_once(
+            &state_for_decrement,
+            &channel_id_for_decrement,
+            &active_decremented_clone,
+        );
         return Err(ProxyError::UpstreamError {
             status: StatusCode::BAD_GATEWAY,
             body: error,
@@ -752,10 +788,14 @@ pub(super) async fn execute_proxy_stream(
 
     // === SSE 流式背压：使用有界 mpsc channel 替代 async_stream ===
     const STREAM_BUFFER_SIZE: usize = 16;
-    let (stream_tx, stream_rx) = tokio::sync::mpsc::channel::<Result<Bytes, std::convert::Infallible>>(STREAM_BUFFER_SIZE);
+    let (stream_tx, stream_rx) =
+        tokio::sync::mpsc::channel::<Result<Bytes, std::convert::Infallible>>(STREAM_BUFFER_SIZE);
 
     // 辅助：发送数据，客户端断开时返回 false
-    async fn stream_send(tx: &tokio::sync::mpsc::Sender<Result<Bytes, std::convert::Infallible>>, data: Bytes) -> bool {
+    async fn stream_send(
+        tx: &tokio::sync::mpsc::Sender<Result<Bytes, std::convert::Infallible>>,
+        data: Bytes,
+    ) -> bool {
         tx.send(Ok(data)).await.is_ok()
     }
 
@@ -792,9 +832,12 @@ pub(super) async fn execute_proxy_stream(
         };
 
         if needs_conversion {
-            let inbound = get_inbound(&client_endpoint_clone);
-            let outbound = get_outbound(&upstream_endpoint_clone);
-            let mut converter = inbound.create_stream_converter();
+            let mut converter = RelayPipeline::create_stream_converter(
+                &client_endpoint_clone,
+                &upstream_endpoint_clone,
+            )
+            .expect("stream converter creation should not fail for conversion path")
+            .expect("conversion path should return Some converter");
 
             while let Some(chunk) = stream.next().await {
                 match chunk {
@@ -810,22 +853,30 @@ pub(super) async fn execute_proxy_stream(
                             }
 
                             if let Ok(text) = std::str::from_utf8(&event_bytes)
-                                && let Some(source) = extract_usage_from_sse(text, &upstream_endpoint_clone) {
-                                    apply_sse_usage(source, &mut last_usage, &mut input_usage);
-                                }
+                                && let Some(source) =
+                                    extract_usage_from_sse(text, &upstream_endpoint_clone)
+                            {
+                                apply_sse_usage(source, &mut last_usage, &mut input_usage);
+                            }
                             let mut is_error_event = false;
                             if stream_error.is_none()
                                 && let Ok(text) = std::str::from_utf8(&event_bytes)
-                                && let Some(error) = extract_error_from_sse(text, &upstream_endpoint_clone) {
-                                    stream_error = Some(error);
-                                    is_error_event = true;
-                                }
+                                && let Some(error) =
+                                    extract_error_from_sse(text, &upstream_endpoint_clone)
+                            {
+                                stream_error = Some(error);
+                                is_error_event = true;
+                            }
                             if is_error_event {
                                 if let Some(error) = stream_error.as_deref()
-                                    && !stream_send(&stream_tx, Bytes::from(format_stream_error_event(
-                                        error,
-                                        &client_endpoint_clone,
-                                    ))).await
+                                    && !stream_send(
+                                        &stream_tx,
+                                        Bytes::from(format_stream_error_event(
+                                            error,
+                                            &client_endpoint_clone,
+                                        )),
+                                    )
+                                    .await
                                 {
                                     break;
                                 }
@@ -837,7 +888,10 @@ pub(super) async fn execute_proxy_stream(
                                 first_token_seen = true;
                             }
 
-                            match outbound.transform_stream_event(&event_bytes) {
+                            match RelayPipeline::decode_stream_event(
+                                &upstream_endpoint_clone,
+                                &event_bytes,
+                            ) {
                                 Ok(Some(mut llm_stream)) => {
                                     // 思维链规范化先于 stats：让 stats 看到的是清理后的内容
                                     if let Some(ref mut extractor) = conversion_extractor {
@@ -845,10 +899,12 @@ pub(super) async fn execute_proxy_stream(
                                     }
                                     // 收集内容用于统计
                                     if let Some(choice) = llm_stream.first_choice() {
-                                        if let Some(crate::protocol::model::Content::Text(t)) = &choice.delta.content
-                                            && !t.is_empty() {
-                                                collected_text.push_str(t);
-                                            }
+                                        if let Some(crate::protocol::model::Content::Text(t)) =
+                                            &choice.delta.content
+                                            && !t.is_empty()
+                                        {
+                                            collected_text.push_str(t);
+                                        }
                                         if let Some(r) = &choice.delta.reasoning_content {
                                             collected_reasoning.push_str(r);
                                         }
@@ -856,28 +912,22 @@ pub(super) async fn execute_proxy_stream(
                                             for tc in tcs {
                                                 if !tc.id.is_empty() {
                                                     // 新 tool call
-                                                    collected_tool_calls.push(
-                                                        serde_json::json!({
-                                                            "id": tc.id,
-                                                            "name": tc.function.name,
-                                                            "arguments": tc.function.arguments,
-                                                        }),
-                                                    );
+                                                    collected_tool_calls.push(serde_json::json!({
+                                                        "id": tc.id,
+                                                        "name": tc.function.name,
+                                                        "arguments": tc.function.arguments,
+                                                    }));
                                                 } else if let Some(last) =
                                                     collected_tool_calls.last_mut()
                                                 {
                                                     // 续传 chunk — 追加 arguments
-                                                    if let Some(args) =
-                                                        last["arguments"].as_str()
-                                                    {
+                                                    if let Some(args) = last["arguments"].as_str() {
                                                         let combined = format!(
                                                             "{}{}",
                                                             args, tc.function.arguments
                                                         );
                                                         last["arguments"] =
-                                                            serde_json::Value::String(
-                                                                combined,
-                                                            );
+                                                            serde_json::Value::String(combined);
                                                     }
                                                 }
                                             }
@@ -887,7 +937,9 @@ pub(super) async fn execute_proxy_stream(
                                     match converter.convert(&llm_stream) {
                                         Ok(converted_events) => {
                                             for converted in converted_events {
-                                                if !stream_send(&stream_tx, Bytes::from(converted)).await {
+                                                if !stream_send(&stream_tx, Bytes::from(converted))
+                                                    .await
+                                                {
                                                     break;
                                                 }
                                             }
@@ -913,18 +965,22 @@ pub(super) async fn execute_proxy_stream(
 
             if !buffer.is_empty() && !buffer.iter().all(|b| *b == b'\n' || *b == b'\r') {
                 if let Ok(text) = std::str::from_utf8(&buffer)
-                    && let Some(source) = extract_usage_from_sse(text, &upstream_endpoint_clone) {
-                        apply_sse_usage(source, &mut last_usage, &mut input_usage);
-                    }
+                    && let Some(source) = extract_usage_from_sse(text, &upstream_endpoint_clone)
+                {
+                    apply_sse_usage(source, &mut last_usage, &mut input_usage);
+                }
                 let mut is_error_event = false;
                 if stream_error.is_none()
                     && let Ok(text) = std::str::from_utf8(&buffer)
-                    && let Some(error) = extract_error_from_sse(text, &upstream_endpoint_clone) {
-                        stream_error = Some(error);
-                        is_error_event = true;
-                    }
+                    && let Some(error) = extract_error_from_sse(text, &upstream_endpoint_clone)
+                {
+                    stream_error = Some(error);
+                    is_error_event = true;
+                }
                 if !is_error_event {
-                    if let Ok(Some(llm_stream)) = outbound.transform_stream_event(&buffer) {
+                    if let Ok(Some(llm_stream)) =
+                        RelayPipeline::decode_stream_event(&upstream_endpoint_clone, &buffer)
+                    {
                         match converter.convert(&llm_stream) {
                             Ok(converted_events) => {
                                 for converted in converted_events {
@@ -937,10 +993,11 @@ pub(super) async fn execute_proxy_stream(
                         }
                     }
                 } else if let Some(error) = stream_error.as_deref() {
-                    stream_send(&stream_tx, Bytes::from(format_stream_error_event(
-                        error,
-                        &client_endpoint_clone,
-                    ))).await;
+                    stream_send(
+                        &stream_tx,
+                        Bytes::from(format_stream_error_event(error, &client_endpoint_clone)),
+                    )
+                    .await;
                 }
             }
 
@@ -977,19 +1034,30 @@ pub(super) async fn execute_proxy_stream(
                             }
 
                             if let Ok(text) = std::str::from_utf8(&event_bytes) {
-                                if let Some(source) = extract_usage_from_sse(text, &upstream_endpoint_clone) {
+                                if let Some(source) =
+                                    extract_usage_from_sse(text, &upstream_endpoint_clone)
+                                {
                                     apply_sse_usage(source, &mut last_usage, &mut input_usage);
                                 }
                                 if stream_error.is_none()
-                                    && let Some(error) = extract_error_from_sse(text, &upstream_endpoint_clone) {
+                                    && let Some(error) =
+                                        extract_error_from_sse(text, &upstream_endpoint_clone)
+                                {
                                     stream_error = Some(error);
                                 }
-                                collect_sse_content(text, &upstream_endpoint_clone, &mut collected_text, &mut collected_reasoning, &mut collected_tool_calls);
+                                collect_sse_content(
+                                    text,
+                                    &upstream_endpoint_clone,
+                                    &mut collected_text,
+                                    &mut collected_reasoning,
+                                    &mut collected_tool_calls,
+                                );
                             }
 
                             // 直通路径：可选的 thinking 规范化
                             if let Some(ref mut normalizer) = passthrough_normalizer {
-                                let events = normalizer.process_sse(&event_bytes, &upstream_endpoint_clone);
+                                let events =
+                                    normalizer.process_sse(&event_bytes, &upstream_endpoint_clone);
                                 for evt in events {
                                     if !stream_send(&stream_tx, Bytes::from(evt)).await {
                                         client_disconnected = true;
@@ -1015,51 +1083,75 @@ pub(super) async fn execute_proxy_stream(
             }
 
             // 处理 buffer 中残余的最后一个事件
-            if !buffer.is_empty() && !buffer.iter().all(|b| *b == b'\n' || *b == b'\r')
-                && let Ok(text) = std::str::from_utf8(&buffer) {
-                    if let Some(source) = extract_usage_from_sse(text, &upstream_endpoint_clone) {
-                        apply_sse_usage(source, &mut last_usage, &mut input_usage);
-                    }
-                    if stream_error.is_none()
-                        && let Some(error) = extract_error_from_sse(text, &upstream_endpoint_clone) {
-                        stream_error = Some(error);
-                    }
-                    collect_sse_content(text, &upstream_endpoint_clone, &mut collected_text, &mut collected_reasoning, &mut collected_tool_calls);
+            if !buffer.is_empty()
+                && !buffer.iter().all(|b| *b == b'\n' || *b == b'\r')
+                && let Ok(text) = std::str::from_utf8(&buffer)
+            {
+                if let Some(source) = extract_usage_from_sse(text, &upstream_endpoint_clone) {
+                    apply_sse_usage(source, &mut last_usage, &mut input_usage);
                 }
+                if stream_error.is_none()
+                    && let Some(error) = extract_error_from_sse(text, &upstream_endpoint_clone)
+                {
+                    stream_error = Some(error);
+                }
+                collect_sse_content(
+                    text,
+                    &upstream_endpoint_clone,
+                    &mut collected_text,
+                    &mut collected_reasoning,
+                    &mut collected_tool_calls,
+                );
+            }
         }
 
         // === 流结束：统计记录（即使客户端断开也会执行） ===
         drop(stream_tx); // 关闭 channel，通知 ReceiverStream 结束
 
         let latency_ms = start_time.elapsed().as_millis() as i64;
-        let (mut input_tokens, mut output_tokens, cache_read, cache_creation) = match &upstream_endpoint_clone {
-            EndpointType::Anthropic => {
-                let input = input_usage.as_ref()
-                    .and_then(|u| u["input_tokens"].as_i64())
-                    .filter(|&v| v > 0)
-                    .or_else(|| last_usage.as_ref().and_then(|u| u["usage"]["input_tokens"].as_i64()))
-                    .unwrap_or(0) as i32;
-                let output = last_usage.as_ref()
-                    .and_then(|u| u["usage"]["output_tokens"].as_i64())
-                    .unwrap_or(0) as i32;
-                let cache_read = input_usage.as_ref()
-                    .and_then(|u| u["cache_read_input_tokens"].as_i64())
-                    .filter(|&v| v > 0)
-                    .or_else(|| last_usage.as_ref().and_then(|u| u["usage"]["cache_read_input_tokens"].as_i64()))
-                    .unwrap_or(0) as i32;
-                let cache_creation = input_usage.as_ref()
-                    .and_then(|u| u["cache_creation_input_tokens"].as_i64())
-                    .filter(|&v| v > 0)
-                    .or_else(|| last_usage.as_ref().and_then(|u| u["usage"]["cache_creation_input_tokens"].as_i64()))
-                    .unwrap_or(0) as i32;
-                (input, output, cache_read, cache_creation)
-            }
-            _ => {
-                last_usage
+        let (mut input_tokens, mut output_tokens, cache_read, cache_creation) =
+            match &upstream_endpoint_clone {
+                EndpointType::Anthropic => {
+                    let input = input_usage
+                        .as_ref()
+                        .and_then(|u| u["input_tokens"].as_i64())
+                        .filter(|&v| v > 0)
+                        .or_else(|| {
+                            last_usage
+                                .as_ref()
+                                .and_then(|u| u["usage"]["input_tokens"].as_i64())
+                        })
+                        .unwrap_or(0) as i32;
+                    let output = last_usage
+                        .as_ref()
+                        .and_then(|u| u["usage"]["output_tokens"].as_i64())
+                        .unwrap_or(0) as i32;
+                    let cache_read = input_usage
+                        .as_ref()
+                        .and_then(|u| u["cache_read_input_tokens"].as_i64())
+                        .filter(|&v| v > 0)
+                        .or_else(|| {
+                            last_usage
+                                .as_ref()
+                                .and_then(|u| u["usage"]["cache_read_input_tokens"].as_i64())
+                        })
+                        .unwrap_or(0) as i32;
+                    let cache_creation = input_usage
+                        .as_ref()
+                        .and_then(|u| u["cache_creation_input_tokens"].as_i64())
+                        .filter(|&v| v > 0)
+                        .or_else(|| {
+                            last_usage
+                                .as_ref()
+                                .and_then(|u| u["usage"]["cache_creation_input_tokens"].as_i64())
+                        })
+                        .unwrap_or(0) as i32;
+                    (input, output, cache_read, cache_creation)
+                }
+                _ => last_usage
                     .map(|u| extract_usage(&u, &upstream_endpoint_clone))
-                    .unwrap_or((0, 0, 0, 0))
-            }
-        };
+                    .unwrap_or((0, 0, 0, 0)),
+            };
 
         // 兜底估算
         if input_tokens == 0 && output_tokens == 0 {
@@ -1068,24 +1160,42 @@ pub(super) async fn execute_proxy_stream(
         }
 
         let cost = if input_tokens > 0 || output_tokens > 0 {
-            Some(state_clone.model_registry.calculate_cost(
-                &target_model_clone,
-                input_tokens,
-                output_tokens,
-                cache_read,
-                cache_creation,
-            ).await)
+            Some(
+                state_clone
+                    .model_registry
+                    .calculate_cost(
+                        &target_model_clone,
+                        input_tokens,
+                        output_tokens,
+                        cache_read,
+                        cache_creation,
+                    )
+                    .await,
+            )
         } else {
             None
         };
 
         let (status_code, error_message, response_content) = if let Some(error) = stream_error {
-            state_clone.lb_state.record_failure(&channel_id_clone, false).await;
+            state_clone
+                .lb_state
+                .record_failure(&channel_id_clone, false)
+                .await;
             (502i32, Some(sanitize_upstream_error(&error)), Some(error))
         } else {
-            state_clone.lb_state.record_success(&channel_id_clone, latency_ms as f64).await;
-            let resp = if collected_text.is_empty() && collected_reasoning.is_empty()
-                && collected_tool_calls.is_empty() && input_tokens == 0 && output_tokens == 0
+            state_clone
+                .lb_state
+                .record_success_with_ttft(
+                    &channel_id_clone,
+                    latency_ms as f64,
+                    ttft_ms.map(|v| v as f64),
+                )
+                .await;
+            let resp = if collected_text.is_empty()
+                && collected_reasoning.is_empty()
+                && collected_tool_calls.is_empty()
+                && input_tokens == 0
+                && output_tokens == 0
             {
                 None
             } else {
@@ -1114,7 +1224,11 @@ pub(super) async fn execute_proxy_stream(
         channel_attempts.push(crate::stats::recorder::ChannelAttempt {
             channel_id: sc_channel_id.clone(),
             channel_name: None,
-            status: if (200..400).contains(&status_code) { "success".into() } else { "failed".into() },
+            status: if (200..400).contains(&status_code) {
+                "success".into()
+            } else {
+                "failed".into()
+            },
             duration_ms: latency_ms,
             error: error_message.clone(),
             upstream_key_hint: Some(sc_upstream_key_hint.clone()),
@@ -1139,7 +1253,11 @@ pub(super) async fn execute_proxy_stream(
             status_code: Some(status_code),
             error_message,
             endpoint_type: Some(sc_client_endpoint.as_str().to_string()),
-            request_type: if sc_needs_conversion { "conversion".into() } else { "passthrough".into() },
+            request_type: if sc_needs_conversion {
+                "conversion".into()
+            } else {
+                "passthrough".into()
+            },
             request_content: sc_request_content,
             response_content,
             is_stream: true,
@@ -1150,8 +1268,12 @@ pub(super) async fn execute_proxy_stream(
 
         match stats_recorder.record_request(record).await {
             Ok(()) => {
-                if let Some(ref key_id) = rate_limit_key && (input_tokens > 0 || output_tokens > 0) {
-                    rate_limiter.record_tokens(key_id, input_tokens as u64, output_tokens as u64).await;
+                if let Some(ref key_id) = rate_limit_key
+                    && (input_tokens > 0 || output_tokens > 0)
+                {
+                    rate_limiter
+                        .record_tokens(key_id, input_tokens as u64, output_tokens as u64)
+                        .await;
                 }
             }
             Err(e) => tracing::warn!("Failed to save stream stats: {}", e),
@@ -1161,7 +1283,10 @@ pub(super) async fn execute_proxy_stream(
         if !active_decremented_spawn.load(std::sync::atomic::Ordering::Relaxed) {
             active_decremented_spawn.store(true, std::sync::atomic::Ordering::Relaxed);
         }
-        state_clone.lb_state.decrement_active(&decrement_channel_id).await;
+        state_clone
+            .lb_state
+            .decrement_active(&decrement_channel_id)
+            .await;
     });
 
     // 将 mpsc Receiver 转换为 Stream 返回给 axum
@@ -1340,6 +1465,71 @@ mod tests {
     }
 
     // ============================================================
+    // M2-S1: AttemptStats → AttemptTrace adapter characterization
+    // ============================================================
+
+    /// 验证成功的 AttemptStats 映射到 AttemptTrace 时字段正确
+    #[test]
+    fn attempt_trace_log_adapter_success_maps_fields_and_serializes() {
+        use crate::scheduler::trace::{AttemptStatus, AttemptTrace};
+
+        let stats = AttemptStats {
+            channel_id: "ch-1".into(),
+            target_model: "gpt-4o".into(),
+            upstream_endpoint: EndpointType::OpenAiChat,
+            needs_conversion: false,
+            latency_ms: 150,
+            status_code: 200,
+            input_tokens: 10,
+            output_tokens: 5,
+            cache_read: 0,
+            cache_creation: 0,
+            cost: Some(0.001),
+            error_message: None,
+            upstream_key_hint: "sk-abc...xyz".into(),
+        };
+
+        let trace: AttemptTrace = stats.to_trace(1, "gpt-4o", &EndpointType::OpenAiChat);
+
+        assert_eq!(trace.attempt_no, 1);
+        assert_eq!(trace.status, AttemptStatus::Success);
+        assert!(trace.reason.is_none());
+        assert_eq!(trace.channel_id.as_deref(), Some("ch-1"));
+        assert_eq!(trace.upstream_model.as_deref(), Some("gpt-4o"));
+        assert_eq!(trace.upstream_endpoint.as_deref(), Some("openai_chat"));
+        assert_eq!(trace.duration_ms, Some(150));
+        assert_eq!(trace.upstream_key_hint.as_deref(), Some("sk-abc...xyz"));
+
+        // JSON 序列化验证 snake_case 和关键字段
+        let json = serde_json::to_string(&trace).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed["attempt_no"], 1);
+        assert_eq!(parsed["status"], "success");
+        assert_eq!(parsed["reason"], serde_json::Value::Null);
+        assert_eq!(parsed["upstream_endpoint"], "openai_chat");
+    }
+
+    /// 验证失败的 AttemptStats 映射到 AttemptTrace 时 reason 和 status 正确
+    #[test]
+    fn attempt_trace_log_adapter_failure_maps_reason_and_status() {
+        use crate::scheduler::trace::{AttemptStatus, AttemptTrace};
+
+        let mut stats = sample_attempt(500);
+        stats.error_message = Some("upstream timeout".into());
+
+        let trace: AttemptTrace = stats.to_trace(3, "gpt-4o", &EndpointType::OpenAiChat);
+
+        assert_eq!(trace.attempt_no, 3);
+        assert_eq!(trace.status, AttemptStatus::Failed);
+        assert_eq!(trace.reason.as_deref(), Some("upstream timeout"));
+
+        let json = serde_json::to_string(&trace).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed["status"], "failed");
+        assert_eq!(parsed["reason"], "upstream timeout");
+    }
+
+    // ============================================================
     // 端到端：mock 本地 upstream + 真实 ProxyState 调 proxy_request
     // ============================================================
 
@@ -1504,11 +1694,7 @@ mod tests {
             Ok(_) => panic!("expected NoAvailableChannel, got Ok"),
             Err(e) => e,
         };
-        assert!(
-            matches!(err, ProxyError::ModelNotFound(_)),
-            "got {:?}",
-            err
-        );
+        assert!(matches!(err, ProxyError::ModelNotFound(_)), "got {:?}", err);
 
         // 失败也应记录日志（minimal_for_select_failure 路径）
         let count: i32 = sqlx::query_scalar("SELECT COUNT(*) FROM usage_logs")

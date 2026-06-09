@@ -19,8 +19,16 @@ pub struct Scheduler {
 }
 
 impl Scheduler {
-    pub fn new(lb_state: LoadBalancerState, rate_limiter: RateLimiter, pool: sqlx::SqlitePool) -> Self {
-        Self { lb_state, rate_limiter, pool }
+    pub fn new(
+        lb_state: LoadBalancerState,
+        rate_limiter: RateLimiter,
+        pool: sqlx::SqlitePool,
+    ) -> Self {
+        Self {
+            lb_state,
+            rate_limiter,
+            pool,
+        }
     }
 
     /// 启动定时任务
@@ -51,7 +59,10 @@ impl Scheduler {
             self.lb_state.cleanup_expired_sessions().await;
             self.lb_state.cleanup_expired_blacklists().await;
             self.rate_limiter.cleanup().await;
-            self.lb_state.circuit_breaker.cleanup_expired(Duration::from_secs(3600)).await;
+            self.lb_state
+                .circuit_breaker
+                .cleanup_expired(Duration::from_secs(3600))
+                .await;
         }
     }
 
@@ -111,14 +122,26 @@ impl Scheduler {
 
                 match result {
                     Ok(latency_ms) => {
-                        tracing::debug!("健康探测成功: channel={}, latency={}ms", channel_id, latency_ms);
+                        tracing::debug!(
+                            "健康探测成功: channel={}, latency={}ms",
+                            channel_id,
+                            latency_ms
+                        );
                         lb_state.record_success(&channel_id, latency_ms).await;
-                        lb_state.circuit_breaker.record_success(&channel_id, "health").await;
+                        lb_state.record_monitor_success(&channel_id);
+                        lb_state
+                            .circuit_breaker
+                            .record_success(&channel_id, "health")
+                            .await;
                     }
                     Err(e) => {
                         tracing::warn!("健康探测失败: channel={}, error={}", channel_id, e);
                         lb_state.record_failure(&channel_id, false).await;
-                        lb_state.circuit_breaker.record_failure(&channel_id, "health").await;
+                        lb_state.record_monitor_failure(&channel_id);
+                        lb_state
+                            .circuit_breaker
+                            .record_failure(&channel_id, "health")
+                            .await;
                     }
                 }
             }));
@@ -189,7 +212,12 @@ async fn probe_single_channel(
     let model = models.first().map(|m| m.as_str()).unwrap_or("gpt-4o-mini");
 
     // 构造最小化探测请求
-    let (url, body, auth_header) = build_probe_request(&endpoint.base_url, &endpoint.endpoint_type, &api_key.key, model);
+    let (url, body, auth_header) = build_probe_request(
+        &endpoint.base_url,
+        &endpoint.endpoint_type,
+        &api_key.key,
+        model,
+    );
 
     let start = std::time::Instant::now();
     let mut req_builder = client
@@ -198,7 +226,10 @@ async fn probe_single_channel(
         .header("Authorization", &auth_header);
 
     // Anthropic 兼容
-    if matches!(endpoint.endpoint_type, crate::api::handlers::admin::channels::EndpointType::Anthropic) {
+    if matches!(
+        endpoint.endpoint_type,
+        crate::api::handlers::admin::channels::EndpointType::Anthropic
+    ) {
         req_builder = req_builder
             .header("x-api-key", api_key.key.as_str())
             .header("anthropic-version", "2023-06-01");

@@ -2,7 +2,8 @@ use axum::http::HeaderMap;
 
 use super::selection::SelectionResult;
 use crate::api::handlers::admin::channels::EndpointType;
-use crate::proxy::{ProxyError, ProxyState, get_inbound, get_outbound};
+use crate::proxy::{ProxyError, get_outbound};
+use crate::relay::pipeline::{RelayPipeline, RelayPipelineRequest};
 use crate::stats::token_estimator::TokenEstimator;
 
 /// 准备好的代理请求
@@ -157,87 +158,6 @@ pub(super) fn extract_response_text(body: &serde_json::Value) -> String {
     text
 }
 
-/// 选择渠道（支持重试排除）
-pub(super) async fn select_channel_for_proxy(
-    state: &ProxyState,
-    headers: &HeaderMap,
-    body: &serde_json::Value,
-    client_endpoint: &EndpointType,
-    exclude_ids: &[String],
-) -> Result<SelectionResult, ProxyError> {
-    let model = body["model"].as_str().unwrap_or("unknown");
-    let session_hash = headers
-        .get("x-session-hash")
-        .and_then(|v| v.to_str().ok())
-        .map(|s| s.to_string())
-        .or_else(|| body["session_hash"].as_str().map(|s| s.to_string()));
-
-    tracing::debug!(
-        "选择渠道: model={}, endpoint={}, excluded={:?}",
-        model,
-        client_endpoint.as_str(),
-        exclude_ids
-    );
-
-    match state
-        .select_channel_with_exclude(
-            model,
-            client_endpoint.clone(),
-            session_hash.as_deref(),
-            exclude_ids,
-        )
-        .await
-    {
-        Ok(sel) => {
-            tracing::debug!(
-                "选中渠道: channel={} ({}), target_model={}, url={}{}",
-                sel.channel.name,
-                sel.channel.id,
-                sel.target_model,
-                sel.endpoint.base_url,
-                sel.endpoint.endpoint_type.path()
-            );
-            Ok(sel)
-        }
-        Err(e) => {
-            match &e {
-                ProxyError::ModelNotFound(msg) => {
-                    tracing::warn!("模型不存在: model={}, {}", model, msg);
-                }
-                ProxyError::NoAvailableChannel(msg) => {
-                    tracing::warn!("精确端点匹配失败: model={}, {}, 尝试跨协议匹配", model, msg);
-                }
-                _ => {
-                    tracing::warn!("渠道选择失败: model={}, {}, 尝试跨协议匹配", model, e);
-                }
-            };
-            let result = state
-                .select_channel_for_model_with_exclude(model, session_hash.as_deref(), exclude_ids)
-                .await;
-            match &result {
-                Ok(sel) => {
-                    tracing::debug!(
-                        "跨协议选中: channel={} ({}), endpoint={}",
-                        sel.channel.name,
-                        sel.channel.id,
-                        sel.endpoint.endpoint_type.as_str()
-                    );
-                }
-                Err(ProxyError::ModelNotFound(msg)) => {
-                    tracing::warn!("模型不存在(跨协议): model={}, {}", model, msg);
-                }
-                Err(ProxyError::NoAvailableChannel(msg)) => {
-                    tracing::warn!("跨协议匹配也无可用渠道: model={}, {}", model, msg);
-                }
-                Err(e) => {
-                    tracing::warn!("跨协议匹配失败: model={}, {}", model, e);
-                }
-            }
-            result
-        }
-    }
-}
-
 /// 准备代理请求（共享逻辑）
 pub(super) async fn prepare_proxy_request(
     headers: &HeaderMap,
@@ -257,22 +177,17 @@ pub(super) async fn prepare_proxy_request(
             EndpointType::OpenAiChat | EndpointType::OpenAiResponse
         );
 
-    let mut request_body = if needs_conversion {
-        let inbound = get_inbound(client_endpoint);
-        let outbound = get_outbound(&upstream_endpoint);
-        let body_bytes =
-            serde_json::to_vec(body).map_err(|e| ProxyError::TransformError(e.to_string()))?;
-        let llm_request = inbound
-            .transform_request(&body_bytes, headers)
-            .await
-            .map_err(|e| ProxyError::TransformError(e.to_string()))?;
-        outbound
-            .transform_request(&llm_request)
-            .map_err(|e| ProxyError::TransformError(e.to_string()))?
-    } else {
-        let body = body.clone();
-        serde_json::to_vec(&body).map_err(|e| ProxyError::TransformError(e.to_string()))?
-    };
+    let prepared_pipeline = RelayPipeline::prepare_request_async(RelayPipelineRequest {
+        client_endpoint: client_endpoint.clone(),
+        upstream_endpoint: upstream_endpoint.clone(),
+        requested_model: model.clone(),
+        upstream_model: selection.target_model.clone(),
+        body: body.clone(),
+    })
+    .await
+    .map_err(|e| ProxyError::TransformError(e.to_string()))?;
+    let mut request_body = serde_json::to_vec(&prepared_pipeline.body)
+        .map_err(|e| ProxyError::TransformError(e.to_string()))?;
 
     // 协议转换和非转换路径统一注入 stream_options
     if needs_usage_injection
@@ -484,6 +399,55 @@ mod tests {
         let text = extract_request_text(&body);
         assert!(text.contains("Hi there"));
         assert!(text.contains("plain text"));
+    }
+
+    #[tokio::test]
+    async fn prepare_proxy_request_conversion_uses_selection_target_model() {
+        let body = json!({
+            "model": "alias-claude",
+            "messages": [
+                {"role": "system", "content": "Be concise"},
+                {"role": "user", "content": "hello"}
+            ],
+            "max_completion_tokens": 123,
+            "stream": false
+        });
+        let selection = SelectionResult {
+            channel: crate::proxy::channel::ChannelInfo {
+                id: "ch-1".into(),
+                name: "anthropic".into(),
+                api_keys: vec![],
+                endpoints: vec![],
+                models: vec!["alias-claude".into()],
+                custom_headers: vec![],
+                timeout_secs: 300,
+                max_concurrency: 0,
+                extras: None,
+            },
+            target_model: "claude-3-5-sonnet".into(),
+            endpoint: crate::api::handlers::admin::channels::EndpointConfig {
+                endpoint_type: EndpointType::Anthropic,
+                base_url: "https://api.anthropic.com".into(),
+                enabled: true,
+            },
+            group_id: None,
+        };
+
+        let prepared = prepare_proxy_request(
+            &HeaderMap::new(),
+            &body,
+            &EndpointType::OpenAiChat,
+            &selection,
+            "sk-test",
+        )
+        .await
+        .expect("prepare succeeds");
+        let upstream_body: serde_json::Value = serde_json::from_slice(&prepared.body).unwrap();
+
+        assert!(prepared.needs_conversion);
+        assert_eq!(upstream_body["model"], "claude-3-5-sonnet");
+        assert_eq!(upstream_body["system"], "Be concise");
+        assert_eq!(upstream_body["messages"][0]["content"], "hello");
     }
 
     #[test]

@@ -4,7 +4,7 @@ use axum::{
     http::StatusCode,
 };
 use serde::{Deserialize, Serialize};
-use sqlx::{SqlitePool, AssertSqlSafe};
+use sqlx::{AssertSqlSafe, SqlitePool};
 
 use crate::api::middleware::ApiKeyCache;
 use crate::api::{ApiError, ApiResponse, response::generate_id};
@@ -83,7 +83,18 @@ pub async fn list(
     let result: Vec<ApiKey> = keys
         .into_iter()
         .map(
-            |(id, name, api_key, enabled, supported_models, rate_limit_rpm, rate_limit_tpm, allowed_groups, created_at, updated_at)| ApiKey {
+            |(
+                id,
+                name,
+                api_key,
+                enabled,
+                supported_models,
+                rate_limit_rpm,
+                rate_limit_tpm,
+                allowed_groups,
+                created_at,
+                updated_at,
+            )| ApiKey {
                 id,
                 name,
                 api_key,
@@ -175,8 +186,18 @@ pub async fn get(
     .await
     .map_err(|e| ApiError::internal_error(e.to_string()))?;
 
-    let (id, name, api_key, enabled, supported_models, rate_limit_rpm, rate_limit_tpm, allowed_groups, created_at, updated_at) =
-        result.ok_or_else(|| ApiError::not_found("API Key 不存在"))?;
+    let (
+        id,
+        name,
+        api_key,
+        enabled,
+        supported_models,
+        rate_limit_rpm,
+        rate_limit_tpm,
+        allowed_groups,
+        created_at,
+        updated_at,
+    ) = result.ok_or_else(|| ApiError::not_found("API Key 不存在"))?;
 
     Ok(Json(ApiResponse::success(ApiKey {
         id,

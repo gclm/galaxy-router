@@ -1,0 +1,266 @@
+refactor: proxy-relay-migration
+status: in_progress
+strategy: tdd
+steps:
+  - id: M1-S1
+    status: green
+    name: migrate prepare request conversion to relay pipeline
+    phase: prepare
+    tdd:
+      red: add characterization test that converted upstream request uses selection.target_model
+      green: make prepare_proxy_request delegate body conversion to relay::pipeline
+      refactor: keep header/auth/url/stream_options logic unchanged
+    validation:
+      - cargo test prepare_proxy_request_conversion --lib
+  - id: M1-S2
+    status: green
+    name: migrate non-stream response finalization to relay pipeline
+    phase: response
+    tdd:
+      red: add characterization test that converted upstream response is finalized by RelayPipeline
+      green: replace direct outbound->inbound response conversion with relay::pipeline
+      refactor: keep usage/text extraction behavior stable
+    validation:
+      - cargo test response_pipeline_conversion --lib
+  - id: M2-S1
+    status: green
+    name: migrate attempts log snapshot to AttemptTrace-compatible adapter
+    phase: trace
+    tdd:
+      red: add log serialization test for attempt_no/status/reason compatibility
+      green: add adapter from AttemptStats to scheduler::trace::AttemptTrace
+      refactor: keep stats::recorder::ChannelAttempt backward compatible
+    validation:
+      - cargo test attempt_trace_log_adapter --lib
+  - id: M3-S1
+    status: green
+    name: integrate scheduler capacity/scoring into selection edge
+    phase: scheduler-integration
+    tdd:
+      red: add selection ordering/capacity characterization test
+      green: apply scheduler scoring/capacity without changing proxy API response shape
+      refactor: preserve ProxyCache invalidation rules
+    validation:
+      - cargo test scheduler_selection_integration --lib
+  - id: P5.2
+    status: green
+    name: circuit-open candidate emits circuit_break trace
+    phase: scheduler-integration
+    tdd:
+      red: relay_run_skips_circuit_broken_candidate_and_records_trace
+      green: add is_channel_available to RelayAttemptExecutor trait; RelayRun checks before try_acquire
+    validation:
+      - cargo test relay_run_skips_circuit_broken --test relay_run_tdd
+  - id: P5.4
+    status: green
+    name: network error triggers retry and failure feedback
+    phase: scheduler-integration
+    tdd:
+      red: relay_run_calls_failure_feedback_on_each_failed_attempt
+      green: add on_attempt_failed to RelayAttemptExecutor trait; RelayRun calls after failed attempt
+    validation:
+      - cargo test relay_run_calls_failure_feedback --test relay_run_tdd
+  - id: P5.1
+    status: green
+    name: session sticky priority with trace flag
+    phase: scheduler-integration
+    tdd:
+      red: relay_run_records_sticky_flag_in_success_trace / relay_run_records_sticky_flag_when_circuit_broken
+      green: add sticky:bool to RelayCandidate; RelayRun passes sticky flag to all traces
+    validation:
+      - cargo test relay_run_records_sticky --test relay_run_tdd
+  - id: P6.1
+    status: green
+    name: error EWMA - success lowers error rate but not zero
+    phase: monitoring
+    tdd:
+      red: runtime_error_ewma_decreases_after_success_but_not_zero
+      green: ChannelRuntimeStats with EWMA (alpha=0.3); record_success/failure update error_ewma
+    validation:
+      - cargo test scheduler::runtime --lib
+  - id: P6.2
+    status: green
+    name: TTFT EWMA feeds into latency scoring
+    phase: monitoring
+    tdd:
+      red: runtime_ttft_ewma_tracks_first_token_latency
+      green: record_success(latency_ms, Some(ttft_ms)) updates ttft_ewma; non-streaming leaves ttft at 0
+    validation:
+      - cargo test scheduler::runtime --lib
+  - id: P6.3
+    status: green
+    name: scheduler metrics count sticky/loadbalance/switch
+    phase: monitoring
+    tdd:
+      red: scheduler_metrics_updates_different_counters_per_layer
+      green: SchedulerMetrics with atomic counters; record_sticky_hit/load_balance/channel_switch; snapshot
+    validation:
+      - cargo test scheduler::metrics --lib
+  - id: P6.4
+    status: green
+    name: monitor failure lowers health factor
+    phase: monitoring
+    tdd:
+      red: runtime_monitor_failure_lowers_health
+      green: ChannelRuntimeStats health factor; record_monitor_success/failure update asymmetrically
+    validation:
+      - cargo test scheduler::runtime --lib
+  - id: P7.1
+    status: green
+    name: delete dead code in proxy modules
+    phase: cleanup
+    tdd:
+      red: N/A (pure dead code removal, compiler-verified)
+      green: delete get_inbound (replaced by RelayPipeline), delete get_channel_load_info/calculate_score/ChannelLoadInfo (replaced by score_candidates)
+    validation:
+      - cargo build (zero warnings)
+  - id: P7.2
+    status: green
+    name: suppress warnings for bridge code and new modules
+    phase: cleanup
+    tdd:
+      red: N/A (warning suppression)
+      green: "#[allow(dead_code)] on to_trace/needs_stream_conversion/weight; module-level #[allow(dead_code)] on relay/* and scheduler/*"
+    validation:
+      - cargo build (zero warnings)
+  - id: P8B
+    status: green
+    name: migrate streaming proxy retry loop to RelayRun
+    phase: scheduler-integration
+    tdd:
+      red: add stream characterization tests for retry/no-retry-after-response-written/attempt trace
+      green: introduce streaming RelayAttemptExecutor wrapping execute_proxy_stream and replace legacy streaming retry loop
+      refactor: keep SSE native protocol format, key rotation, request logging, and permit release behavior stable
+    validation:
+      - cargo test relay_run_stops_on_response_written --test relay_run_tdd
+      - cargo test sse_integration
+      - cargo test
+      - make check
+  - id: P8C
+    status: green
+    name: remove legacy proxy selection path after RelayRun migration
+    phase: cleanup
+    tdd:
+      red: compiler/clippy exposes unused legacy selection APIs after non-stream and stream paths migrated
+      green: delete select_channel_for_proxy and ProxyState legacy select_channel*/select_group_item/find_channel_by_model/apply_model_mapping helpers
+      refactor: persist session sticky after successful RelayRun/RelayStreamRun outcome so sticky behavior survives old selector removal
+    validation:
+      - rg "select_channel_for_proxy|select_channel_with_exclude|select_group_item|find_channel_by_model" src tests
+      - cargo check
+      - make check
+  - id: P9
+    status: green
+    name: wire SchedulerMetrics into production selection feedback
+    phase: monitoring
+    tdd:
+      red: scheduler_metrics_records_sticky_and_load_balance_selections / scheduler_metrics_records_channel_switch_from_sticky
+      green: add SchedulerMetrics to LoadBalancerState and record actual RelayRun/RelayStreamRun success selections
+      refactor: record sticky hit vs load-balance from selected candidate snapshot; record channel switch when sticky existed but selected channel differs
+    validation:
+      - cargo test scheduler_metrics_records --lib
+      - make check
+  - id: P10
+    status: green
+    name: wire ChannelRuntimeManager into production feedback and scoring
+    phase: monitoring
+    tdd:
+      red: runtime_manager_updates_on_production_success_and_failure / runtime_manager_tracks_ttft_and_monitor_health
+      green: add ChannelRuntimeManager to LoadBalancerState; production success/failure/stream TTFT/monitor feedback update runtime stats
+      refactor: score_candidates reads runtime error EWMA, latency/TTFT EWMA, and health factor while preserving legacy active load input
+    validation:
+      - cargo test runtime_manager_updates --lib
+      - cargo test runtime_manager_tracks --lib
+      - make check
+  - id: P11
+    status: green
+    name: migration acceptance and proxy decomposition roadmap
+    phase: planning
+    tdd:
+      red: N/A (documentation/planning checkpoint)
+      green: add proxy-decomposition-roadmap.md and extend checklist for P12-P16
+      refactor: explicitly define why src/proxy still exists and how it will be reduced to gateway adapter
+    validation:
+      - test -f .gclm-harness/solutions/optimizations/proxy-decomposition-roadmap.md
+      - rg "P12|P13|P14|P15|P16" .gclm-harness/solutions/optimizations/proxy-relay-migration-checklist.yaml
+  - id: P12
+    status: pending
+    name: move proxy executors and single-attempt HTTP execution into relay modules
+    phase: module-decomposition
+    tdd:
+      red: add characterization coverage for non-stream and stream executor behavior before moving files
+      green: move ProxyRelayExecutor/ProxyStreamRelayExecutor and execute_proxy_request/execute_proxy_stream toward relay::{executor,http,stream}
+      refactor: keep behavior stable; allow temporary bridge to ProxyState but document it
+    validation:
+      - cargo test relay_run --test relay_run_tdd
+      - cargo test sse_integration
+      - make check
+  - id: P13
+    status: pending
+    name: move request stats glue into observability modules
+    phase: module-decomposition
+    tdd:
+      red: characterization tests for attempts JSON, request log persistence, rate-limit token recording
+      green: move AttemptStats/save_request_record/usage-cost glue to observability::{attempt,recorder,usage}
+      refactor: preserve stats::recorder::RequestRecord schema and admin log response shape
+    validation:
+      - cargo test stats::recorder --lib
+      - cargo test sse_integration
+      - make check
+  - id: P14
+    status: pending
+    name: move stream SSE and thinking processing out of proxy
+    phase: module-decomposition
+    tdd:
+      red: characterization tests for SSE boundary, error event formatting, usage extraction, thinking normalization
+      green: move proxy::sse and proxy::thinking_normalizer into relay or stream modules
+      refactor: keep OpenAI/Anthropic native stream formats stable
+    validation:
+      - cargo test sse_integration
+      - cargo test protocol_integration
+      - make check
+  - id: P15
+    status: pending
+    name: split ProxyState responsibilities into gateway relay scheduler state
+    phase: state-decomposition
+    tdd:
+      red: state construction/handler initialization tests or compile-time characterization
+      green: introduce RelayState/SchedulerState or equivalent while preserving handler behavior
+      refactor: remove temporary relay -> proxy state bridge introduced in P12
+    validation:
+      - rg "ProxyState" src/proxy src/relay src/scheduler src/observability
+      - make check
+  - id: P16
+    status: pending
+    name: reduce proxy module to gateway adapter
+    phase: cleanup
+    tdd:
+      red: final module-boundary audit shows no execute/SSE/stats/scheduler core in proxy
+      green: leave only route adapter, native error formatting, and gateway-level checks in proxy (or rename to gateway)
+      refactor: remove stale bridge/dead_code annotations
+    validation:
+      - find src/proxy -maxdepth 2 -type f -print
+      - rg "execute_proxy_request|execute_proxy_stream|AttemptStats|score_candidates" src/proxy
+      - make check
+notes:
+  - 2026-06-09: P11 completed; added proxy-decomposition-roadmap.md and planned P12-P16 to reduce src/proxy to a thin gateway adapter. Recommendation: commit current P1-P11 checkpoint before module-move iterations.
+  - 2026-06-09: P10 completed; ChannelRuntimeManager is now owned by LoadBalancerState. record_success/record_failure/stream TTFT/monitor health update runtime EWMA, and score_candidates uses runtime error/latency/TTFT/health while retaining active load from ChannelStatus.
+  - 2026-06-09: P9 completed; SchedulerMetrics is now owned by LoadBalancerState and production RelayRun/RelayStreamRun success paths record sticky hits, load-balance selections, and channel switches. Added state-level tests for metrics behavior.
+  - 2026-06-09: P8C completed; removed legacy proxy selector helpers from proxy/mod.rs and prepare.rs. Sticky sessions are now written after successful RelayRun/RelayStreamRun outcomes. Cache model index helper remains for cache tests and future index consumers.
+  - 2026-06-09: make check restored after clippy cleanup in build_relay_candidates, scheduler runtime, and scheduler scoring.
+  - 2026-06-09: P8B completed; proxy_stream legacy retry loop replaced by RelayStreamRun + ProxyStreamRelayExecutor. Stream success keeps scheduler capacity permit alive by capturing it in returned stream wrapper; existing execute_proxy_stream still owns SSE conversion/stat persistence. make check passes.
+  - 2026-06-08: Created after relay-scheduler-tdd checklist completed; migration must keep proxy API native protocol response shape.
+  - 2026-06-09: M1-S2 completed; execute_proxy_request non-stream response finalization now delegates to RelayPipeline::finalize_response_async; passthrough path unchanged (raw bytes).
+  - 2026-06-09: M2-S1 completed; AttemptStats::to_trace() adapter maps to scheduler::trace::AttemptTrace with JSON serialization; ChannelAttempt backward compatible.
+  - 2026-06-09: M3-S1 completed; select_group_item unified to use scheduler multi-factor scoring (priority/load/error_rate/latency/health); removed select_by_layered_filtering and select_by_weighted_random.
+  - 2026-06-09: P2.4 completed; capacity_permit_stream_release test verifies RAII permit drop in spawned task.
+  - 2026-06-09: P3.3 completed; RelayAttemptExecutor returns RelayAttemptResult with response_written flag; RelayRun stops retrying when response is already written.
+  - 2026-06-09: P4.4a completed; RelayPipeline gains needs_stream_conversion/create_stream_converter/decode_stream_event methods.
+  - 2026-06-09: P4.4b completed; execute_proxy_stream uses RelayPipeline for stream event decode+convert; get_inbound/get_outbound removed from execute.rs.
+  - 2026-06-09: P5.2 completed; is_channel_available added to RelayAttemptExecutor trait (default: true); RelayRun checks circuit before try_acquire; CircuitBreak trace emitted with reason "circuit open".
+  - 2026-06-09: P5.4 completed; on_attempt_failed added to RelayAttemptExecutor trait (default: no-op); RelayRun calls feedback after each failed attempt with (channel_id, status_code, is_server_error).
+  - 2026-06-09: P5.1 completed; sticky:bool added to RelayCandidate; RelayRun passes sticky flag to all trace records (circuit_break/skipped/success/failed).
+  - 2026-06-09: P6.1+P6.2+P6.4 completed; src/scheduler/runtime.rs with ChannelRuntimeStats (EWMA error_rate alpha=0.3, EWMA latency/TTFT alpha=0.2, asymmetric health penalty/recovery); ChannelRuntimeManager for multi-channel tracking.
+  - 2026-06-09: P6.3 completed; src/scheduler/metrics.rs with SchedulerMetrics (atomic counters for sticky_hits/load_balance_selects/channel_switches); clone shares state.
+  - 2026-06-09: P7.1 completed; deleted get_inbound (proxy/mod.rs), get_channel_load_info/calculate_score/ChannelLoadInfo (proxy/state.rs); removed unused Inbound import.
+  - 2026-06-09: P7.2 completed; #[allow(dead_code)] on bridge code (to_trace, needs_stream_conversion, weight); module-level #[allow(dead_code)] on relay/* and scheduler/*; zero compiler warnings.
+  - 2026-06-09: P8A completed; proxy_request retry loop replaced by RelayRun::execute + ProxyRelayExecutor. New files: src/proxy/relay_executor.rs (executor wrapping execute_proxy_request with key rotation), build_relay_candidates in mod.rs (sticky + scored candidates). Added ChannelCapacityManager to LoadBalancerState, ProxyError::from_relay_outcome. 215 lib tests + 9 relay_run TDD tests pass. Zero warnings.

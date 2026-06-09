@@ -4,5 +4,7 @@ pub mod config;
 pub mod db;
 pub mod protocol;
 pub mod proxy;
+pub mod relay;
+pub mod scheduler;
 pub mod static_assets;
 pub mod stats;

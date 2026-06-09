@@ -61,12 +61,30 @@ impl ApiKeyCache {
         cache
             .get(key)
             .filter(|e| e.cached_at.elapsed().as_secs() < CACHE_TTL_SECS)
-            .map(|e| (e.id.clone(), e.name.clone(), e.enabled, e.rate_limit_rpm, e.rate_limit_tpm, e.allowed_groups.clone()))
+            .map(|e| {
+                (
+                    e.id.clone(),
+                    e.name.clone(),
+                    e.enabled,
+                    e.rate_limit_rpm,
+                    e.rate_limit_tpm,
+                    e.allowed_groups.clone(),
+                )
+            })
     }
 
     /// 设置 API Key 缓存
     #[allow(clippy::too_many_arguments)]
-    async fn set(&self, key: String, id: String, name: String, enabled: bool, rate_limit_rpm: u64, rate_limit_tpm: u64, allowed_groups: String) {
+    async fn set(
+        &self,
+        key: String,
+        id: String,
+        name: String,
+        enabled: bool,
+        rate_limit_rpm: u64,
+        rate_limit_tpm: u64,
+        allowed_groups: String,
+    ) {
         let mut cache = self.keys.write().await;
         if cache.len() >= 1000 {
             cache.retain(|_, e| e.cached_at.elapsed().as_secs() < CACHE_TTL_SECS);
@@ -164,7 +182,12 @@ impl<S: Send + Sync> FromRequestParts<S> for ApiKeyAuth {
                     })),
                 ));
             }
-            return Ok(ApiKeyAuth { key_id: id, rate_limit_rpm: rpm, rate_limit_tpm: tpm, allowed_groups: groups });
+            return Ok(ApiKeyAuth {
+                key_id: id,
+                rate_limit_rpm: rpm,
+                rate_limit_tpm: tpm,
+                allowed_groups: groups,
+            });
         }
 
         // 2. 缓存未命中，查询数据库
@@ -197,7 +220,17 @@ impl<S: Send + Sync> FromRequestParts<S> for ApiKeyAuth {
                 let rpm = rpm as u64;
                 let tpm = tpm as u64;
                 if let Some(cache) = parts.extensions.get::<ApiKeyCache>() {
-                    cache.set(api_key, id.clone(), name.clone(), enabled, rpm, tpm, groups.clone()).await;
+                    cache
+                        .set(
+                            api_key,
+                            id.clone(),
+                            name.clone(),
+                            enabled,
+                            rpm,
+                            tpm,
+                            groups.clone(),
+                        )
+                        .await;
                 }
                 if !enabled {
                     return Err((
@@ -207,7 +240,12 @@ impl<S: Send + Sync> FromRequestParts<S> for ApiKeyAuth {
                         })),
                     ));
                 }
-                Ok(ApiKeyAuth { key_id: id, rate_limit_rpm: rpm, rate_limit_tpm: tpm, allowed_groups: groups })
+                Ok(ApiKeyAuth {
+                    key_id: id,
+                    rate_limit_rpm: rpm,
+                    rate_limit_tpm: tpm,
+                    allowed_groups: groups,
+                })
             }
             None => Err((
                 StatusCode::UNAUTHORIZED,

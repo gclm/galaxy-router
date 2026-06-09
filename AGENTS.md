@@ -23,7 +23,7 @@
 
 - 不要把错误处理统一到 `error.rs`（不存在），错误类型在各模块内定义
 - `protocol/inbound/` 和 `protocol/outbound/` 是**空目录**待重构，不要往里放文件
-- `scheduler/` 已合并到 `proxy/scheduler.rs`，不要新建独立目录
+- `relay/` 与 `scheduler/` 已作为重构后的独立根模块启用；`proxy/` 仅保留过渡入口与兼容逻辑
 
 ---
 

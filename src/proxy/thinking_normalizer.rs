@@ -162,7 +162,9 @@ impl ThinkTagParser {
                         let new_n = n + 1;
                         if (new_n as usize) == OPEN_TARGET.len() {
                             (
-                                ParseState::OpenClosing { pending: String::new() },
+                                ParseState::OpenClosing {
+                                    pending: String::new(),
+                                },
                                 false,
                             )
                         } else {
@@ -217,7 +219,9 @@ impl ThinkTagParser {
                             append_thinking(&mut out.thinking, thinking);
                             // 进入 CloseClosing 等待 `>`
                             (
-                                ParseState::CloseClosing { pending: String::new() },
+                                ParseState::CloseClosing {
+                                    pending: String::new(),
+                                },
                                 true,
                             )
                         } else {
@@ -235,7 +239,9 @@ impl ThinkTagParser {
                     }
                 } else {
                     (
-                        ParseState::CloseClosing { pending: String::new() },
+                        ParseState::CloseClosing {
+                            pending: String::new(),
+                        },
                         false,
                     )
                 }
@@ -498,8 +504,7 @@ impl PassthroughNormalizer {
                     && let Some(sig) = parsed["content_block"]["signature"].as_str()
                 {
                     self.pending_signature = Some(sig.to_string());
-                    self.signature_block_index =
-                        parsed["index"].as_u64().map(|i| i as u32);
+                    self.signature_block_index = parsed["index"].as_u64().map(|i| i as u32);
                     // 移除 signature 后原样转发
                     let mut cleaned = parsed.clone();
                     if let Some(cb) = cleaned
@@ -512,11 +517,8 @@ impl PassthroughNormalizer {
                         Ok(s) => s,
                         Err(_) => return vec![raw_bytes.to_vec()],
                     };
-                    let new_event = format!(
-                        "event: content_block_start\ndata: {}\n\n",
-                        new_data
-                    )
-                    .into_bytes();
+                    let new_event =
+                        format!("event: content_block_start\ndata: {}\n\n", new_data).into_bytes();
                     return vec![new_event];
                 }
             }
@@ -708,15 +710,12 @@ mod tests {
         let start = b"event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"thinking\",\"signature\":\"3d93fc8d26ce411e81f4c34d\"}}\n\n";
         norm.process_sse(start, &EndpointType::Anthropic);
 
-        let stop = b"event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n";
+        let stop =
+            b"event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n";
         let result = norm.process_sse(stop, &EndpointType::Anthropic);
         assert_eq!(result.len(), 2);
         let sig_event = String::from_utf8_lossy(&result[0]);
-        assert!(
-            sig_event.contains("signature_delta"),
-            "got: {}",
-            sig_event
-        );
+        assert!(sig_event.contains("signature_delta"), "got: {}", sig_event);
         assert!(
             sig_event.contains("3d93fc8d26ce411e81f4c34d"),
             "got: {}",
@@ -761,9 +760,7 @@ mod tests {
                 index: 0,
                 delta: Message {
                     role: Role::Assistant,
-                    content: Some(Content::Text(
-                        "<think>thinking</think> actual".to_string(),
-                    )),
+                    content: Some(Content::Text("<think>thinking</think> actual".to_string())),
                     name: None,
                     tool_calls: None,
                     tool_call_id: None,

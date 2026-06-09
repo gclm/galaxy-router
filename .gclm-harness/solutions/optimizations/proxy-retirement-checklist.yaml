@@ -1,0 +1,277 @@
+refactor: proxy-retirement
+status: planned
+strategy: tdd-characterization-first
+created_at: 2026-06-09
+owner_goal: reduce src/proxy to thin gateway adapter
+invariants:
+  - /v1/* keeps native OpenAI/Anthropic protocol response format
+  - /api/v1/admin/* keeps {code,message,data} envelope
+  - do not add files under src/protocol/inbound or src/protocol/outbound
+  - do not create global src/error.rs
+  - make check must pass at every phase boundary
+  - ProxyCache invalidation behavior must remain intact after business config changes
+phases:
+  - id: P11
+    status: green
+    name: acceptance checkpoint and complete proxy retirement pathmap
+    objective: document current middle state, why src/proxy remains, and exact P12-P16 path
+    deliverables:
+      - .gclm-harness/solutions/optimizations/proxy-decomposition-roadmap.md
+      - .gclm-harness/solutions/optimizations/proxy-retirement-pathmap.md
+      - .gclm-harness/solutions/optimizations/proxy-retirement-checklist.yaml
+    validation:
+      - test -f .gclm-harness/solutions/optimizations/proxy-retirement-pathmap.md
+      - test -f .gclm-harness/solutions/optimizations/proxy-retirement-checklist.yaml
+      - make check
+    notes:
+      - Current main path is already RelayRun/RelayStreamRun + scheduler runtime/metrics.
+      - src/proxy still owns gateway adapter, HTTP execution, SSE, observability glue, and aggregate state.
+      - Commit is recommended before P12 module moves.
+
+  - id: P12
+    status: pending
+    name: move executors and single-attempt HTTP execution into relay
+    objective: move real relay attempt execution out of src/proxy while preserving behavior
+    write_scope:
+      - src/relay/executor.rs
+      - src/relay/stream_executor.rs
+      - src/relay/http.rs
+      - src/relay/stream.rs
+      - src/relay/mod.rs
+      - src/proxy/relay_executor.rs
+      - src/proxy/stream_relay_executor.rs
+      - src/proxy/execute.rs
+      - src/proxy/mod.rs
+    tasks:
+      - id: P12.1
+        status: pending
+        name: add or confirm executor characterization coverage
+        details:
+          - cover successful non-stream attempt updates scheduler feedback and returns native response
+          - cover failed attempt calls failure feedback and keeps retry behavior
+          - cover stream response_written behavior and capacity permit lifetime
+      - id: P12.2
+        status: pending
+        name: move non-stream executor type to relay::executor
+        details:
+          - move ProxyRelayExecutor implementation with minimal rename
+          - keep temporary compatibility re-export if needed
+      - id: P12.3
+        status: pending
+        name: move stream executor type to relay::stream_executor
+        details:
+          - move ProxyStreamRelayExecutor implementation with minimal rename
+          - preserve no-retry-after-response-written semantics
+      - id: P12.4
+        status: pending
+        name: expose non-stream execute_once under relay::http
+        details:
+          - wrap or rename execute_proxy_request to relay::http::execute_once
+          - keep old proxy function as bridge only if necessary
+      - id: P12.5
+        status: pending
+        name: expose stream execute_once under relay::stream
+        details:
+          - wrap or rename execute_proxy_stream to relay::stream::execute_once
+          - do not rewrite SSE loop in this phase
+      - id: P12.6
+        status: pending
+        name: remove stale proxy executor ownership
+        details:
+          - no business logic should remain in proxy/relay_executor.rs or proxy/stream_relay_executor.rs except optional re-export
+          - document any relay -> ProxyState bridge for P15 removal
+    validation:
+      - cargo test relay_run --test relay_run_tdd
+      - cargo test sse_integration
+      - make check
+    commit_recommendation: refactor: move relay executors out of proxy
+
+  - id: P13
+    status: pending
+    name: move request stats and usage glue into observability
+    objective: remove request log, attempt stats, usage/cost aggregation from proxy execution code
+    write_scope:
+      - src/observability/mod.rs
+      - src/observability/attempt.rs
+      - src/observability/recorder.rs
+      - src/observability/usage.rs
+      - src/observability/cost.rs
+      - src/relay/http.rs
+      - src/relay/stream.rs
+      - src/proxy/execute.rs
+      - src/stats/mod.rs
+    tasks:
+      - id: P13.1
+        status: pending
+        name: characterize attempts JSON and request log shape
+        details:
+          - ensure stats::recorder::ChannelAttempt compatibility
+          - ensure admin stats/log response shape unchanged
+      - id: P13.2
+        status: pending
+        name: move AttemptStats to observability::attempt
+        details:
+          - preserve fields and serialization behavior
+          - keep adapter to scheduler::trace::AttemptTrace if currently used
+      - id: P13.3
+        status: pending
+        name: move save_request_record to observability::recorder
+        details:
+          - keep database schema and inserted fields unchanged
+      - id: P13.4
+        status: pending
+        name: extract non-stream completion recording helper
+        details:
+          - keep latency, status, tokens, cost, response_content behavior
+      - id: P13.5
+        status: pending
+        name: extract stream completion and drop recording helper
+        details:
+          - preserve TTFT, final usage extraction, drop behavior, and error status
+      - id: P13.6
+        status: pending
+        name: extract usage/cost/token fallback helpers
+        details:
+          - do not change model pricing lookup behavior
+          - do not change rate-limit token accounting
+    validation:
+      - cargo test stats::recorder --lib
+      - cargo test sse_integration
+      - make check
+    commit_recommendation: refactor: move proxy observability glue to observability
+
+  - id: P14
+    status: pending
+    name: move SSE and thinking processing out of proxy
+    objective: make stream protocol processing owned by relay modules
+    write_scope:
+      - src/relay/sse.rs
+      - src/relay/thinking.rs
+      - src/relay/stream.rs
+      - src/relay/mod.rs
+      - src/proxy/sse.rs
+      - src/proxy/thinking_normalizer.rs
+      - tests
+    tasks:
+      - id: P14.1
+        status: pending
+        name: characterize SSE event boundaries and error event formatting
+        details:
+          - cover OpenAI and Anthropic stream error response shapes if available
+          - cover passthrough and conversion paths
+      - id: P14.2
+        status: pending
+        name: move proxy::sse to relay::sse
+        details:
+          - keep function names first, rename only after tests are green
+      - id: P14.3
+        status: pending
+        name: move thinking_normalizer to relay::thinking
+        details:
+          - preserve signature repair and extraction behavior
+      - id: P14.4
+        status: pending
+        name: update relay::stream to own stream helper calls
+        details:
+          - proxy should not import or re-export stream protocol internals after this phase
+      - id: P14.5
+        status: pending
+        name: delete or reduce old proxy SSE/thinking files
+        details:
+          - only temporary re-export is allowed, and must be removed before P16
+    validation:
+      - cargo test sse_integration
+      - cargo test protocol_integration
+      - make check
+    commit_recommendation: refactor: move stream protocol helpers to relay
+
+  - id: P15
+    status: pending
+    name: split ProxyState into gateway relay scheduler state
+    objective: remove temporary bridge dependencies and assign state ownership to correct modules
+    write_scope:
+      - src/proxy/mod.rs
+      - src/proxy/state.rs
+      - src/relay/state.rs
+      - src/scheduler/state.rs
+      - src/main.rs
+      - src/lib.rs
+      - tests
+    tasks:
+      - id: P15.1
+        status: pending
+        name: introduce RelayState and SchedulerState wrappers
+        details:
+          - start with non-invasive wrappers around existing fields
+          - avoid large constructor churn in first step
+      - id: P15.2
+        status: pending
+        name: move LoadBalancerState or its internals to scheduler ownership
+        details:
+          - runtime, metrics, capacity, circuit, sticky should be scheduler-owned
+      - id: P15.3
+        status: pending
+        name: make relay executors depend on RelayState instead of ProxyState
+        details:
+          - remove P12 temporary bridge
+      - id: P15.4
+        status: pending
+        name: keep gateway handler depending only on gateway-level aggregate state
+        details:
+          - ProxyState may remain as type alias temporarily if external route wiring benefits
+      - id: P15.5
+        status: pending
+        name: update tests and constructors
+        details:
+          - centralize test state builders if repeated setup grows
+    validation:
+      - rg "ProxyState" src/proxy src/relay src/scheduler src/observability
+      - make check
+    commit_recommendation: refactor: split proxy relay scheduler state
+
+  - id: P16
+    status: pending
+    name: reduce proxy to thin gateway adapter
+    objective: final audit and cleanup so src/proxy no longer owns core relay/scheduler/observability behavior
+    write_scope:
+      - src/proxy
+      - src/relay
+      - src/scheduler
+      - src/observability
+      - .gclm-harness/solutions/optimizations
+    tasks:
+      - id: P16.1
+        status: pending
+        name: audit src/proxy file list and responsibilities
+        details:
+          - list remaining files and classify each as gateway adapter or leftover core behavior
+      - id: P16.2
+        status: pending
+        name: remove temporary re-exports and bridge functions
+        details:
+          - remove old execute_proxy_request/execute_proxy_stream aliases if still present
+          - remove proxy SSE/thinking aliases if still present
+      - id: P16.3
+        status: pending
+        name: remove dead_code allowances introduced for bridge code
+        details:
+          - only keep allows with explicit justification
+      - id: P16.4
+        status: pending
+        name: update architecture docs and roadmap status
+        details:
+          - update module design docs to describe final ownership
+          - mark proxy retirement checklist complete if validation passes
+      - id: P16.5
+        status: pending
+        name: decide whether to rename proxy to gateway
+        details:
+          - default is do not rename in same phase unless src/proxy is already minimal and tests are stable
+    validation:
+      - find src/proxy -maxdepth 2 -type f -print
+      - rg "execute_proxy_request|execute_proxy_stream|AttemptStats|score_candidates|thinking_normalizer" src/proxy
+      - make check
+    commit_recommendation: refactor: reduce proxy to gateway adapter
+notes:
+  - 2026-06-09: Created complete proxy retirement pathmap/checklist after P11 planning discussion.
+  - 2026-06-09: Recommended next action is commit current P1-P11 checkpoint before P12 begins.

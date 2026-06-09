@@ -54,11 +54,13 @@ impl RateLimiter {
         let mut windows = self.windows.write().await;
         let now = Instant::now();
 
-        let state = windows.entry(key_id.to_string()).or_insert_with(|| WindowState {
-            window_start: now,
-            request_count: 0,
-            token_count: 0,
-        });
+        let state = windows
+            .entry(key_id.to_string())
+            .or_insert_with(|| WindowState {
+                window_start: now,
+                request_count: 0,
+                token_count: 0,
+            });
 
         // 窗口过期 → 重置
         if now.duration_since(state.window_start).as_secs() >= WINDOW_SECS {
@@ -108,11 +110,13 @@ impl RateLimiter {
         let mut windows = self.windows.write().await;
         let now = Instant::now();
 
-        let state = windows.entry(key_id.to_string()).or_insert_with(|| WindowState {
-            window_start: now,
-            request_count: 0,
-            token_count: 0,
-        });
+        let state = windows
+            .entry(key_id.to_string())
+            .or_insert_with(|| WindowState {
+                window_start: now,
+                request_count: 0,
+                token_count: 0,
+            });
 
         // 只在当前窗口内累加
         if now.duration_since(state.window_start).as_secs() < WINDOW_SECS {
@@ -124,16 +128,17 @@ impl RateLimiter {
     #[allow(dead_code)]
     pub async fn get_usage(&self, key_id: &str) -> Option<(u64, u64)> {
         let windows = self.windows.read().await;
-        windows.get(key_id).map(|s| (s.request_count, s.token_count))
+        windows
+            .get(key_id)
+            .map(|s| (s.request_count, s.token_count))
     }
 
     /// 清理过期的窗口条目
     pub async fn cleanup(&self) {
         let mut windows = self.windows.write().await;
         let now = Instant::now();
-        windows.retain(|_, state| {
-            now.duration_since(state.window_start).as_secs() < WINDOW_SECS * 2
-        });
+        windows
+            .retain(|_, state| now.duration_since(state.window_start).as_secs() < WINDOW_SECS * 2);
     }
 }
 

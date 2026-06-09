@@ -11,6 +11,8 @@ mod config;
 mod db;
 mod protocol;
 mod proxy;
+mod relay;
+mod scheduler;
 mod static_assets;
 mod stats;
 
@@ -152,15 +154,14 @@ fn init_logging(
             .file_stem()
             .and_then(|s| s.to_str())
             .unwrap_or("galaxy-router");
-        let extension = path
-            .extension()
-            .and_then(|s| s.to_str())
-            .unwrap_or("log");
+        let extension = path.extension().and_then(|s| s.to_str()).unwrap_or("log");
         let directory = path.parent().unwrap_or_else(|| std::path::Path::new("."));
 
         let file_appender = match logging_config.rotation.as_str() {
             "hourly" => tracing_appender::rolling::hourly(directory, prefix),
-            "never" => tracing_appender::rolling::never(directory, path.file_name().unwrap_or_default()),
+            "never" => {
+                tracing_appender::rolling::never(directory, path.file_name().unwrap_or_default())
+            }
             _ => tracing_appender::rolling::daily(directory, prefix),
         };
         // 如果配置了扩展名且不是 "never" 模式，tracing_appender 会自动追加日期后缀

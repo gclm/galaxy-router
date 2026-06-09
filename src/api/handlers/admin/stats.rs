@@ -236,14 +236,12 @@ pub async fn set_budget(
     let enabled = req.enabled.unwrap_or(true);
 
     // 验证 API Key 存在
-    let exists: bool = sqlx::query_scalar::<_, i32>(
-        "SELECT COUNT(*) FROM api_keys WHERE id = ?",
-    )
-    .bind(&req.api_key_id)
-    .fetch_one(&state.stats.pool)
-    .await
-    .map_err(|e| ApiError::internal_error(e.to_string()))
-    .map(|c| c > 0)?;
+    let exists: bool = sqlx::query_scalar::<_, i32>("SELECT COUNT(*) FROM api_keys WHERE id = ?")
+        .bind(&req.api_key_id)
+        .fetch_one(&state.stats.pool)
+        .await
+        .map_err(|e| ApiError::internal_error(e.to_string()))
+        .map(|c| c > 0)?;
 
     if !exists {
         return Err(ApiError::not_found("API Key 不存在"));

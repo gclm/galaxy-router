@@ -16,6 +16,8 @@ pub struct GroupItemInfo {
     pub channel_id: String,
     pub model_name: String,
     pub priority: i32,
+    /// DB 字段：group_items.weight，保留供未来加权随机使用
+    #[allow(dead_code)]
     pub weight: i32,
 }
 

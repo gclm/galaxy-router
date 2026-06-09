@@ -257,7 +257,10 @@ impl StatsState {
     }
 
     /// 计算延迟百分位（p50/p95/p99）
-    pub async fn get_latency_percentiles(&self, days: i32) -> Result<(Option<f64>, Option<f64>, Option<f64>), sqlx::Error> {
+    pub async fn get_latency_percentiles(
+        &self,
+        days: i32,
+    ) -> Result<(Option<f64>, Option<f64>, Option<f64>), sqlx::Error> {
         let start_date = (self.now_local() - chrono::Duration::days(days as i64))
             .format("%Y-%m-%d")
             .to_string();
@@ -572,8 +575,8 @@ impl StatsState {
         let total: (i64,) = count_builder.build_query_as().fetch_one(&self.pool).await?;
 
         let tz = self.tz_modifier();
-        let mut data_builder = QueryBuilder::new(
-            format!(r#"SELECT ul.id, ul.api_key_id, ak.name as api_key_name,
+        let mut data_builder = QueryBuilder::new(format!(
+            r#"SELECT ul.id, ul.api_key_id, ak.name as api_key_name,
                       ul.channel_id, c.name as channel_name,
                       ul.group_id, ul.requested_model, ul.actual_model,
                       ul.input_tokens, ul.output_tokens,
@@ -583,8 +586,9 @@ impl StatsState {
                FROM usage_logs ul
                LEFT JOIN api_keys ak ON ul.api_key_id = ak.id
                LEFT JOIN channels c ON ul.channel_id = c.id
-               WHERE 1=1"#, tz),
-        );
+               WHERE 1=1"#,
+            tz
+        ));
         if let Some(ref model) = filter.model {
             data_builder.push(" AND ul.requested_model = ");
             data_builder.push_bind(model.clone());
@@ -700,8 +704,8 @@ impl StatsState {
 
         Ok(rows
             .into_iter()
-            .map(|(api_key_id, api_key_name, request_count, success_count, failure_count, input_tokens, output_tokens, total_cost, avg_latency_ms)| {
-                ApiKeyStats {
+            .map(
+                |(
                     api_key_id,
                     api_key_name,
                     request_count,
@@ -711,8 +715,20 @@ impl StatsState {
                     output_tokens,
                     total_cost,
                     avg_latency_ms,
-                }
-            })
+                )| {
+                    ApiKeyStats {
+                        api_key_id,
+                        api_key_name,
+                        request_count,
+                        success_count,
+                        failure_count,
+                        input_tokens,
+                        output_tokens,
+                        total_cost,
+                        avg_latency_ms,
+                    }
+                },
+            )
             .collect())
     }
 

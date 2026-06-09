@@ -57,15 +57,27 @@ galaxy-router/
 │   │   ├── openai_responses.rs     # OpenAI Responses 协议处理
 │   │   └── anthropic.rs            # Anthropic Messages 协议处理
 │   │
-│   ├── proxy/                      # 代理核心
-│   │   ├── mod.rs                  # 主入口，handle_proxy_request
+│   ├── relay/                      # 代理请求生命周期（重构目标模块）
+│   │   ├── mod.rs                  # Relay 对外入口
+│   │   ├── run.rs                  # RelayRun：一次客户端请求生命周期
+│   │   ├── attempt.rs              # RelayAttempt：一次上游尝试生命周期
+│   │   └── pipeline.rs             # 统一协议转换与上游执行 pipeline
+│   │
+│   ├── scheduler/                  # 自动负载均衡与准入（重构目标模块）
+│   │   ├── mod.rs                  # Scheduler 模块入口
+│   │   ├── scoring.rs              # priority/load/error/latency/health 打分
+│   │   ├── capacity.rs             # per-channel 并发 permit
+│   │   └── trace.rs                # attempt trace（规划中）
+│   │
+│   ├── proxy/                      # 过渡期代理核心与兼容入口
+│   │   ├── mod.rs                  # 当前 handle_proxy_request，后续转调 relay
 │   │   ├── cache.rs                # ProxyCache，模型索引，渠道缓存
-│   │   ├── channel.rs              # 渠道选择逻辑
-│   │   ├── selection.rs            # 模型选择策略
-│   │   ├── scheduler.rs            # API Key 轮询调度
+│   │   ├── channel.rs              # 渠道信息与 key 选择辅助
+│   │   ├── selection.rs            # 当前模型与分组选择策略（后续迁入 scheduler）
+│   │   ├── scheduler.rs            # 当前定时任务调度器（清理/健康探测）
 │   │   ├── circuit.rs              # 三态熔断器
-│   │   ├── prepare.rs              # 请求准备（认证、Header 构建）
-│   │   ├── execute.rs              # 请求执行（流式/非流式）
+│   │   ├── prepare.rs              # 过渡期请求准备（后续迁入 relay pipeline）
+│   │   ├── execute.rs              # 过渡期请求执行（后续迁入 relay pipeline）
 │   │   ├── queue.rs                # 并发队列控制
 │   │   ├── state.rs                # 代理状态管理
 │   │   └── sse.rs                  # SSE 解析与字段处理
@@ -109,7 +121,9 @@ galaxy-router/
 | `api::proxy` | 代理 API（/v1/* 端点） | `handlers/proxy/*.rs` |
 | `auth` | 密码哈希、JWT 认证 | `password.rs`, `jwt.rs` |
 | `protocol` | 协议转换（OpenAI Chat / Responses / Anthropic） | `inbound.rs`, `outbound.rs`, `openai_chat.rs`, `openai_responses.rs`, `anthropic.rs` |
-| `proxy` | 代理核心（缓存、选路、执行、熔断、排队） | `mod.rs`, `cache.rs`, `channel.rs`, `selection.rs`, `scheduler.rs`, `execute.rs`, `circuit.rs` |
+| `relay` | 代理请求生命周期、attempt 生命周期、统一 pipeline | `run.rs`, `attempt.rs`, `pipeline.rs` |
+| `scheduler` | 自动负载均衡、评分、top-K、并发 permit、attempt trace | `scoring.rs`, `capacity.rs`, `trace.rs` |
+| `proxy` | 过渡期代理入口与兼容逻辑（后续瘦身） | `mod.rs`, `cache.rs`, `selection.rs`, `execute.rs`, `circuit.rs` |
 | `stats` | 统计记录、Token 估算、定价刷新、日志脱敏 | `recorder.rs`, `token_estimator.rs`, `pricing_refresher.rs` |
 | `db` | 数据库连接、迁移 | `mod.rs` |
 | `config` | TOML 配置加载 | `config.rs` |
@@ -124,7 +138,7 @@ galaxy-router/
 api::handlers::proxy::*    # HTTP 处理器入口（chat/responses/messages）
     │
     ▼
-proxy::mod::handle_proxy_request  # 统一代理入口
+proxy::mod::handle_proxy_request  # 过渡入口，后续转调 relay
     │
     ▼
 proxy::cache               # 获取渠道缓存、模型索引
@@ -133,7 +147,7 @@ proxy::cache               # 获取渠道缓存、模型索引
 proxy::selection            # 选择渠道（模型匹配）
     │
     ▼
-proxy::scheduler            # API Key 轮询调度
+scheduler / proxy::scheduler  # 自动调度与过渡期 key 调度
     │
     ▼
 proxy::prepare              # 构建请求（认证、Header）

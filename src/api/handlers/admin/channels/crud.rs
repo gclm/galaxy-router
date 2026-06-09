@@ -42,9 +42,10 @@ pub async fn list(
     let total: i64 = sqlx::Row::get(&count_row, 0);
 
     let tz = tz_modifier(state.timezone_offset);
-    let mut data_builder = sqlx::QueryBuilder::new(
-        format!("SELECT id, name, api_keys, endpoints, models, rate_limit_rpm, rate_limit_tpm, failure_threshold, blacklist_minutes, concurrency, timeout_secs, max_concurrency, custom_headers, extras, enabled, datetime(created_at, '{}') as created_at, datetime(updated_at, '{}') as updated_at FROM channels", tz, tz),
-    );
+    let mut data_builder = sqlx::QueryBuilder::new(format!(
+        "SELECT id, name, api_keys, endpoints, models, rate_limit_rpm, rate_limit_tpm, failure_threshold, blacklist_minutes, concurrency, timeout_secs, max_concurrency, custom_headers, extras, enabled, datetime(created_at, '{}') as created_at, datetime(updated_at, '{}') as updated_at FROM channels",
+        tz, tz
+    ));
     push_where(&mut data_builder, &query);
     data_builder.push(format!(" ORDER BY {} {} ", order_field, order_dir));
     data_builder.push(" LIMIT ");
@@ -224,7 +225,9 @@ pub async fn update(
     }
     if let Some(ref extras) = req.extras {
         separated.push("extras = ");
-        separated.push_bind_unseparated(serde_json::to_string(extras).unwrap_or_else(|_| "{}".to_string()));
+        separated.push_bind_unseparated(
+            serde_json::to_string(extras).unwrap_or_else(|_| "{}".to_string()),
+        );
         has_update = true;
     }
     if let Some(enabled) = req.enabled {

@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use super::inbound::{Inbound, InboundError};
 use super::model::*;
 use super::outbound::{Outbound, OutboundError};
-use super::stream_converter::{StreamConverter, StreamConvertError};
+use super::stream_converter::{StreamConvertError, StreamConverter};
 
 /// OpenAI Responses 入站转换器
 pub struct OpenAiResponsesInbound;
@@ -709,14 +709,20 @@ impl ResponsesStreamConverter {
         });
 
         vec![
-            Self::sse_event("response.created", serde_json::json!({
-                "type": "response.created",
-                "response": &response
-            })),
-            Self::sse_event("response.in_progress", serde_json::json!({
-                "type": "response.in_progress",
-                "response": response
-            })),
+            Self::sse_event(
+                "response.created",
+                serde_json::json!({
+                    "type": "response.created",
+                    "response": &response
+                }),
+            ),
+            Self::sse_event(
+                "response.in_progress",
+                serde_json::json!({
+                    "type": "response.in_progress",
+                    "response": response
+                }),
+            ),
         ]
     }
 
@@ -732,16 +738,19 @@ impl ResponsesStreamConverter {
         self.has_reasoning_summary_part = false;
 
         let item_id = format!("rs_{}", self.output_index);
-        events.push(Self::sse_event("response.output_item.added", serde_json::json!({
-            "type": "response.output_item.added",
-            "output_index": self.output_index,
-            "item": {
-                "id": item_id,
-                "type": "reasoning",
-                "status": "in_progress",
-                "summary": []
-            }
-        })));
+        events.push(Self::sse_event(
+            "response.output_item.added",
+            serde_json::json!({
+                "type": "response.output_item.added",
+                "output_index": self.output_index,
+                "item": {
+                    "id": item_id,
+                    "type": "reasoning",
+                    "status": "in_progress",
+                    "summary": []
+                }
+            }),
+        ));
 
         events
     }
@@ -753,23 +762,29 @@ impl ResponsesStreamConverter {
         // 启动 reasoning summary part
         if !self.has_reasoning_summary_part {
             self.has_reasoning_summary_part = true;
-            events.push(Self::sse_event("response.reasoning_summary_part.added", serde_json::json!({
-                "type": "response.reasoning_summary_part.added",
-                "output_index": self.output_index,
-                "summary_index": 0,
-                "part": { "type": "summary_text" }
-            })));
+            events.push(Self::sse_event(
+                "response.reasoning_summary_part.added",
+                serde_json::json!({
+                    "type": "response.reasoning_summary_part.added",
+                    "output_index": self.output_index,
+                    "summary_index": 0,
+                    "part": { "type": "summary_text" }
+                }),
+            ));
         }
 
         // 累积 reasoning
         self.accumulated_reasoning.push_str(reasoning);
 
         // 发送 delta
-        events.push(Self::sse_event("response.reasoning.delta", serde_json::json!({
-            "type": "response.reasoning.delta",
-            "output_index": self.output_index,
-            "delta": reasoning
-        })));
+        events.push(Self::sse_event(
+            "response.reasoning.delta",
+            serde_json::json!({
+                "type": "response.reasoning.delta",
+                "output_index": self.output_index,
+                "delta": reasoning
+            }),
+        ));
 
         events
     }
@@ -786,18 +801,24 @@ impl ResponsesStreamConverter {
 
         // 如果有 summary part，发送 .done 事件
         if self.has_reasoning_summary_part {
-            events.push(Self::sse_event("response.reasoning_summary_text.done", serde_json::json!({
-                "type": "response.reasoning_summary_text.done",
-                "output_index": self.output_index,
-                "summary_index": 0,
-                "text": full_reasoning
-            })));
-            events.push(Self::sse_event("response.reasoning_summary_part.done", serde_json::json!({
-                "type": "response.reasoning_summary_part.done",
-                "output_index": self.output_index,
-                "summary_index": 0,
-                "part": { "type": "summary_text", "text": full_reasoning }
-            })));
+            events.push(Self::sse_event(
+                "response.reasoning_summary_text.done",
+                serde_json::json!({
+                    "type": "response.reasoning_summary_text.done",
+                    "output_index": self.output_index,
+                    "summary_index": 0,
+                    "text": full_reasoning
+                }),
+            ));
+            events.push(Self::sse_event(
+                "response.reasoning_summary_part.done",
+                serde_json::json!({
+                    "type": "response.reasoning_summary_part.done",
+                    "output_index": self.output_index,
+                    "summary_index": 0,
+                    "part": { "type": "summary_text", "text": full_reasoning }
+                }),
+            ));
         }
         self.has_reasoning_summary_part = false;
 
@@ -811,14 +832,17 @@ impl ResponsesStreamConverter {
             })]
         };
 
-        events.push(Self::sse_event("response.output_item.done", serde_json::json!({
-            "type": "response.output_item.done",
-            "output_index": self.output_index,
-            "item": {
-                "type": "reasoning",
-                "summary": summary
-            }
-        })));
+        events.push(Self::sse_event(
+            "response.output_item.done",
+            serde_json::json!({
+                "type": "response.output_item.done",
+                "output_index": self.output_index,
+                "item": {
+                    "type": "reasoning",
+                    "summary": summary
+                }
+            }),
+        ));
 
         self.output_index += 1;
         self.accumulated_reasoning.clear();
@@ -836,40 +860,49 @@ impl ResponsesStreamConverter {
             self.has_message_item_started = true;
 
             let item_id = format!("msg_{}", self.output_index);
-            events.push(Self::sse_event("response.output_item.added", serde_json::json!({
-                "type": "response.output_item.added",
-                "output_index": self.output_index,
-                "item": {
-                    "id": item_id,
-                    "type": "message",
-                    "status": "in_progress",
-                    "role": "assistant",
-                    "content": []
-                }
-            })));
+            events.push(Self::sse_event(
+                "response.output_item.added",
+                serde_json::json!({
+                    "type": "response.output_item.added",
+                    "output_index": self.output_index,
+                    "item": {
+                        "id": item_id,
+                        "type": "message",
+                        "status": "in_progress",
+                        "role": "assistant",
+                        "content": []
+                    }
+                }),
+            ));
         }
 
         // 启动 content part
         if !self.has_content_part_started {
             self.has_content_part_started = true;
-            events.push(Self::sse_event("response.content_part.added", serde_json::json!({
-                "type": "response.content_part.added",
-                "output_index": self.output_index,
-                "content_index": self.content_index,
-                "part": { "type": "output_text", "text": "" }
-            })));
+            events.push(Self::sse_event(
+                "response.content_part.added",
+                serde_json::json!({
+                    "type": "response.content_part.added",
+                    "output_index": self.output_index,
+                    "content_index": self.content_index,
+                    "part": { "type": "output_text", "text": "" }
+                }),
+            ));
         }
 
         // 累积文本
         self.accumulated_text.push_str(text);
 
         // 发送 delta
-        events.push(Self::sse_event("response.output_text.delta", serde_json::json!({
-            "type": "response.output_text.delta",
-            "output_index": self.output_index,
-            "content_index": self.content_index,
-            "delta": text
-        })));
+        events.push(Self::sse_event(
+            "response.output_text.delta",
+            serde_json::json!({
+                "type": "response.output_text.delta",
+                "output_index": self.output_index,
+                "content_index": self.content_index,
+                "delta": text
+            }),
+        ));
 
         events
     }
@@ -909,17 +942,20 @@ impl ResponsesStreamConverter {
                     },
                 );
 
-                events.push(Self::sse_event("response.output_item.added", serde_json::json!({
-                    "type": "response.output_item.added",
-                    "output_index": self.output_index,
-                    "item": {
-                        "type": "function_call",
-                        "id": tc.id,
-                        "status": "in_progress",
-                        "call_id": tc.id,
-                        "name": tc.function.name
-                    }
-                })));
+                events.push(Self::sse_event(
+                    "response.output_item.added",
+                    serde_json::json!({
+                        "type": "response.output_item.added",
+                        "output_index": self.output_index,
+                        "item": {
+                            "type": "function_call",
+                            "id": tc.id,
+                            "status": "in_progress",
+                            "call_id": tc.id,
+                            "name": tc.function.name
+                        }
+                    }),
+                ));
 
                 self.output_index += 1;
             }
@@ -956,18 +992,24 @@ impl ResponsesStreamConverter {
         let full_text = self.accumulated_text.clone();
 
         vec![
-            Self::sse_event("response.output_text.done", serde_json::json!({
-                "type": "response.output_text.done",
-                "output_index": self.output_index,
-                "content_index": self.content_index,
-                "text": full_text
-            })),
-            Self::sse_event("response.content_part.done", serde_json::json!({
-                "type": "response.content_part.done",
-                "output_index": self.output_index,
-                "content_index": self.content_index,
-                "part": { "type": "output_text", "text": full_text }
-            })),
+            Self::sse_event(
+                "response.output_text.done",
+                serde_json::json!({
+                    "type": "response.output_text.done",
+                    "output_index": self.output_index,
+                    "content_index": self.content_index,
+                    "text": full_text
+                }),
+            ),
+            Self::sse_event(
+                "response.content_part.done",
+                serde_json::json!({
+                    "type": "response.content_part.done",
+                    "output_index": self.output_index,
+                    "content_index": self.content_index,
+                    "part": { "type": "output_text", "text": full_text }
+                }),
+            ),
         ]
     }
 
@@ -981,20 +1023,23 @@ impl ResponsesStreamConverter {
         let mut events = self.close_current_content_part();
         let full_text = self.accumulated_text.clone();
 
-        events.push(Self::sse_event("response.output_item.done", serde_json::json!({
-            "type": "response.output_item.done",
-            "output_index": self.output_index,
-            "item": {
-                "type": "message",
-                "status": "completed",
-                "role": "assistant",
-                "content": [{
-                    "type": "output_text",
-                    "text": full_text,
-                    "annotations": []
-                }]
-            }
-        })));
+        events.push(Self::sse_event(
+            "response.output_item.done",
+            serde_json::json!({
+                "type": "response.output_item.done",
+                "output_index": self.output_index,
+                "item": {
+                    "type": "message",
+                    "status": "completed",
+                    "role": "assistant",
+                    "content": [{
+                        "type": "output_text",
+                        "text": full_text,
+                        "annotations": []
+                    }]
+                }
+            }),
+        ));
 
         self.output_index += 1;
         self.content_index = 0;
@@ -1024,17 +1069,20 @@ impl ResponsesStreamConverter {
                     "arguments": state.arguments
                 }),
             ));
-            events.push(Self::sse_event("response.output_item.done", serde_json::json!({
-                "type": "response.output_item.done",
-                "output_index": state.output_index,
-                "item": {
-                    "type": "function_call",
-                    "status": "completed",
-                    "call_id": state.id,
-                    "name": state.name,
-                    "arguments": state.arguments
-                }
-            })));
+            events.push(Self::sse_event(
+                "response.output_item.done",
+                serde_json::json!({
+                    "type": "response.output_item.done",
+                    "output_index": state.output_index,
+                    "item": {
+                        "type": "function_call",
+                        "status": "completed",
+                        "call_id": state.id,
+                        "name": state.name,
+                        "arguments": state.arguments
+                    }
+                }),
+            ));
         }
 
         events
@@ -1076,10 +1124,13 @@ impl ResponsesStreamConverter {
                 });
             }
 
-            events.push(Self::sse_event("response.completed", serde_json::json!({
-                "type": "response.completed",
-                "response": response_obj
-            })));
+            events.push(Self::sse_event(
+                "response.completed",
+                serde_json::json!({
+                    "type": "response.completed",
+                    "response": response_obj
+                }),
+            ));
         }
 
         events
@@ -1173,10 +1224,13 @@ impl StreamConverter for ResponsesStreamConverter {
                 });
             }
 
-            events.push(Self::sse_event("response.completed", serde_json::json!({
-                "type": "response.completed",
-                "response": response_obj
-            })));
+            events.push(Self::sse_event(
+                "response.completed",
+                serde_json::json!({
+                    "type": "response.completed",
+                    "response": response_obj
+                }),
+            ));
         }
 
         Ok(events)

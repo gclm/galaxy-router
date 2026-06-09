@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use super::inbound::{Inbound, InboundError};
 use super::model::*;
 use super::outbound::{Outbound, OutboundError};
-use super::stream_converter::{StreamConverter, StreamConvertError};
+use super::stream_converter::{StreamConvertError, StreamConverter};
 use std::collections::HashMap;
 
 /// Anthropic Messages 入站转换器
@@ -758,18 +758,21 @@ impl AnthropicStreamConverter {
             "output_tokens": self.input_usage.as_ref().map(|u| u.completion_tokens).unwrap_or(1)
         });
 
-        vec![Self::sse_event("message_start", serde_json::json!({
-            "type": "message_start",
-            "message": {
-                "id": self.message_id,
-                "type": "message",
-                "role": "assistant",
-                "content": [],
-                "model": self.model,
-                "stop_reason": null,
-                "usage": usage
-            }
-        }))]
+        vec![Self::sse_event(
+            "message_start",
+            serde_json::json!({
+                "type": "message_start",
+                "message": {
+                    "id": self.message_id,
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [],
+                    "model": self.model,
+                    "stop_reason": null,
+                    "usage": usage
+                }
+            }),
+        )]
     }
 
     /// 关闭 thinking block
@@ -782,10 +785,13 @@ impl AnthropicStreamConverter {
 
         let mut events = vec![];
         if self.should_emit("content_block_stop") {
-            events.push(Self::sse_event("content_block_stop", serde_json::json!({
-                "type": "content_block_stop",
-                "index": self.content_index
-            })));
+            events.push(Self::sse_event(
+                "content_block_stop",
+                serde_json::json!({
+                    "type": "content_block_stop",
+                    "index": self.content_index
+                }),
+            ));
         }
         self.content_index += 1;
         events
@@ -800,10 +806,13 @@ impl AnthropicStreamConverter {
 
         let mut events = vec![];
         if self.should_emit("content_block_stop") {
-            events.push(Self::sse_event("content_block_stop", serde_json::json!({
-                "type": "content_block_stop",
-                "index": self.content_index
-            })));
+            events.push(Self::sse_event(
+                "content_block_stop",
+                serde_json::json!({
+                    "type": "content_block_stop",
+                    "index": self.content_index
+                }),
+            ));
         }
         self.content_index += 1;
         events
@@ -818,10 +827,13 @@ impl AnthropicStreamConverter {
 
         let mut events = vec![];
         if self.should_emit("content_block_stop") {
-            events.push(Self::sse_event("content_block_stop", serde_json::json!({
-                "type": "content_block_stop",
-                "index": self.content_index
-            })));
+            events.push(Self::sse_event(
+                "content_block_stop",
+                serde_json::json!({
+                    "type": "content_block_stop",
+                    "index": self.content_index
+                }),
+            ));
         }
         self.content_index += 1;
         events
@@ -838,19 +850,25 @@ impl AnthropicStreamConverter {
         // 启动 thinking block
         if !self.has_thinking_content_started {
             self.has_thinking_content_started = true;
-            events.push(Self::sse_event("content_block_start", serde_json::json!({
-                "type": "content_block_start",
-                "index": self.content_index,
-                "content_block": { "type": "thinking" }
-            })));
+            events.push(Self::sse_event(
+                "content_block_start",
+                serde_json::json!({
+                    "type": "content_block_start",
+                    "index": self.content_index,
+                    "content_block": { "type": "thinking" }
+                }),
+            ));
         }
 
         // 发送 thinking delta
-        events.push(Self::sse_event("content_block_delta", serde_json::json!({
-            "type": "content_block_delta",
-            "index": self.content_index,
-            "delta": { "type": "thinking_delta", "thinking": thinking }
-        })));
+        events.push(Self::sse_event(
+            "content_block_delta",
+            serde_json::json!({
+                "type": "content_block_delta",
+                "index": self.content_index,
+                "delta": { "type": "thinking_delta", "thinking": thinking }
+            }),
+        ));
 
         events
     }
@@ -866,19 +884,25 @@ impl AnthropicStreamConverter {
         // 启动 text block
         if !self.has_text_content_started {
             self.has_text_content_started = true;
-            events.push(Self::sse_event("content_block_start", serde_json::json!({
-                "type": "content_block_start",
-                "index": self.content_index,
-                "content_block": { "type": "text" }
-            })));
+            events.push(Self::sse_event(
+                "content_block_start",
+                serde_json::json!({
+                    "type": "content_block_start",
+                    "index": self.content_index,
+                    "content_block": { "type": "text" }
+                }),
+            ));
         }
 
         // 发送 text delta
-        events.push(Self::sse_event("content_block_delta", serde_json::json!({
-            "type": "content_block_delta",
-            "index": self.content_index,
-            "delta": { "type": "text_delta", "text": text }
-        })));
+        events.push(Self::sse_event(
+            "content_block_delta",
+            serde_json::json!({
+                "type": "content_block_delta",
+                "index": self.content_index,
+                "delta": { "type": "text_delta", "text": text }
+            }),
+        ));
 
         events
     }
@@ -912,16 +936,19 @@ impl AnthropicStreamConverter {
                     },
                 );
 
-                events.push(Self::sse_event("content_block_start", serde_json::json!({
-                    "type": "content_block_start",
-                    "index": self.content_index,
-                    "content_block": {
-                        "type": "tool_use",
-                        "id": tc.id,
-                        "name": tc.function.name,
-                        "input": {}
-                    }
-                })));
+                events.push(Self::sse_event(
+                    "content_block_start",
+                    serde_json::json!({
+                        "type": "content_block_start",
+                        "index": self.content_index,
+                        "content_block": {
+                            "type": "tool_use",
+                            "id": tc.id,
+                            "name": tc.function.name,
+                            "input": {}
+                        }
+                    }),
+                ));
 
                 // 如果有初始 arguments，发送 delta
                 if !tc.function.arguments.is_empty() {
@@ -972,7 +999,8 @@ impl AnthropicStreamConverter {
         }
 
         // 映射 finish_reason
-        let stop_reason = event.first_choice()
+        let stop_reason = event
+            .first_choice()
             .and_then(|c| c.finish_reason.as_ref())
             .map(|fr| match fr {
                 FinishReason::Stop => "end_turn",
@@ -994,16 +1022,22 @@ impl AnthropicStreamConverter {
                 serde_json::json!({ "output_tokens": 0 })
             };
 
-            events.push(Self::sse_event("message_delta", serde_json::json!({
-                "type": "message_delta",
-                "delta": {
-                    "stop_reason": stop_reason
-                },
-                "usage": usage
-            })));
-            events.push(Self::sse_event("message_stop", serde_json::json!({
-                "type": "message_stop"
-            })));
+            events.push(Self::sse_event(
+                "message_delta",
+                serde_json::json!({
+                    "type": "message_delta",
+                    "delta": {
+                        "stop_reason": stop_reason
+                    },
+                    "usage": usage
+                }),
+            ));
+            events.push(Self::sse_event(
+                "message_stop",
+                serde_json::json!({
+                    "type": "message_stop"
+                }),
+            ));
         }
 
         events

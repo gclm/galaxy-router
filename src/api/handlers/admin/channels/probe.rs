@@ -89,7 +89,11 @@ pub async fn test_channel(
 
         let mut req_builder = state
             .http_client
-            .post(format!("{}{}", endpoint.base_url.trim_end_matches('/'), upstream_path))
+            .post(format!(
+                "{}{}",
+                endpoint.base_url.trim_end_matches('/'),
+                upstream_path
+            ))
             .header("Content-Type", "application/json")
             .timeout(std::time::Duration::from_secs(30));
 
@@ -223,17 +227,21 @@ pub async fn detect_channel_quirks(
             let api_key = api_key.key.clone();
             let model = model.clone();
             async move {
-                let (body, _upstream_path) = match build_detect_payload(&endpoint.endpoint_type, &model) {
-                    Some(v) => v,
-                    None => {
-                        return EndpointDetection {
-                            endpoint: endpoint.endpoint_type.as_str().to_string(),
-                            recommendations: HashMap::new(),
-                            evidence: format!("协议 {} 不支持检测", endpoint.endpoint_type.as_str()),
-                            sample: String::new(),
-                        };
-                    }
-                };
+                let (body, _upstream_path) =
+                    match build_detect_payload(&endpoint.endpoint_type, &model) {
+                        Some(v) => v,
+                        None => {
+                            return EndpointDetection {
+                                endpoint: endpoint.endpoint_type.as_str().to_string(),
+                                recommendations: HashMap::new(),
+                                evidence: format!(
+                                    "协议 {} 不支持检测",
+                                    endpoint.endpoint_type.as_str()
+                                ),
+                                sample: String::new(),
+                            };
+                        }
+                    };
                 let (result, _latency, _ttft, _pt, _ct) = probe_endpoint_raw(
                     client,
                     endpoint,
@@ -673,8 +681,10 @@ fn analyze_response(endpoint_type: &EndpointType, response: &str) -> EndpointDet
 
         if has_content_block_start && has_thinking && has_signature_field && !has_signature_delta {
             recommendations.insert("thinking.fix_signature".to_string(), true);
-            evidence_parts
-                .push("Anthropic signature 在 content_block_start 内、未见 signature_delta 事件".to_string());
+            evidence_parts.push(
+                "Anthropic signature 在 content_block_start 内、未见 signature_delta 事件"
+                    .to_string(),
+            );
             if let Some(idx) = response.find("\"signature\":") {
                 let start = idx + "\"signature\":".len();
                 let end = response[start..]
@@ -702,7 +712,12 @@ mod analyze_response_tests {
     fn detects_think_tags_in_openai_chat() {
         let resp = r#"data: {"choices":[{"delta":{"content":"<think>hidden</think> visible"}}]}"#;
         let r = analyze_response(&EndpointType::OpenAiChat, resp);
-        assert!(r.recommendations.get("thinking.extract_tags").copied().unwrap_or(false));
+        assert!(
+            r.recommendations
+                .get("thinking.extract_tags")
+                .copied()
+                .unwrap_or(false)
+        );
         assert!(r.evidence.contains("<think>"));
         assert!(r.sample.contains("hidden"));
         assert!(!r.recommendations.contains_key("thinking.fix_signature"));
@@ -718,7 +733,12 @@ event: content_block_stop
 data: {"type":"content_block_stop","index":0}
 "#;
         let r = analyze_response(&EndpointType::Anthropic, resp);
-        assert!(r.recommendations.get("thinking.fix_signature").copied().unwrap_or(false));
+        assert!(
+            r.recommendations
+                .get("thinking.fix_signature")
+                .copied()
+                .unwrap_or(false)
+        );
         assert!(r.evidence.contains("content_block_start"));
         assert!(r.sample.contains("abc123"));
     }

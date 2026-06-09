@@ -6,6 +6,9 @@ use std::time::Instant;
 use tokio::sync::RwLock;
 
 use super::circuit::{CircuitBreaker, CircuitConfig};
+use crate::scheduler::capacity::ChannelCapacityManager;
+use crate::scheduler::metrics::SchedulerMetrics;
+use crate::scheduler::runtime::{ChannelRuntimeManager, ChannelRuntimeStats};
 
 /// 渠道状态
 #[derive(Debug)]
@@ -48,6 +51,7 @@ impl ChannelStatus {
     }
 
     /// 计算错误率
+    #[allow(dead_code)]
     pub fn error_rate(&self) -> f64 {
         let total = self.success_count + self.failure_count;
         if total == 0 {
@@ -143,16 +147,6 @@ pub struct StickySession {
     pub expires_at: DateTime<Utc>,
 }
 
-/// 渠道负载信息（用于选择算法）
-#[derive(Clone)]
-#[allow(dead_code)]
-pub struct ChannelLoadInfo {
-    pub active_requests: u64,
-    pub load_rate: u32,
-    pub last_used_at: Instant,
-    pub max_concurrency: u32,
-}
-
 /// 负载均衡状态
 #[derive(Clone)]
 pub struct LoadBalancerState {
@@ -170,6 +164,12 @@ pub struct LoadBalancerState {
     pub blacklist_minutes: i64,
     /// 粘性会话最大容量
     max_sticky_sessions: usize,
+    /// 容量管理器（RAII permit 方式跟踪并发）
+    capacity_manager: ChannelCapacityManager,
+    /// 调度器运行时指标
+    scheduler_metrics: SchedulerMetrics,
+    /// 渠道运行时 EWMA 统计
+    runtime_manager: ChannelRuntimeManager,
 }
 
 impl Default for LoadBalancerState {
@@ -188,11 +188,54 @@ impl LoadBalancerState {
             blacklist_threshold: 3,
             blacklist_minutes: 10,
             max_sticky_sessions: 10000,
+            capacity_manager: ChannelCapacityManager::new(),
+            scheduler_metrics: SchedulerMetrics::new(),
+            runtime_manager: ChannelRuntimeManager::new(),
         }
+    }
+
+    /// 获取共享的容量管理器
+    pub fn capacity_manager(&self) -> ChannelCapacityManager {
+        self.capacity_manager.clone()
+    }
+    /// 记录真实调度选择结果
+    pub fn record_scheduler_selection(
+        &self,
+        selected_channel_id: &str,
+        selected_was_sticky: bool,
+        sticky_channel_id: Option<&str>,
+    ) {
+        if selected_was_sticky {
+            self.scheduler_metrics.record_sticky_hit();
+            return;
+        }
+
+        self.scheduler_metrics.record_load_balance();
+        if let Some(sticky_channel_id) = sticky_channel_id
+            && sticky_channel_id != selected_channel_id
+        {
+            self.scheduler_metrics.record_channel_switch();
+        }
+    }
+
+    /// 获取渠道运行时统计快照
+    pub fn runtime_stats(&self, channel_id: &str) -> ChannelRuntimeStats {
+        self.runtime_manager.get_stats(channel_id)
     }
 
     /// 记录请求成功
     pub async fn record_success(&self, channel_id: &str, latency_ms: f64) {
+        self.record_success_with_ttft(channel_id, latency_ms, None)
+            .await;
+    }
+
+    /// 记录请求成功（流式路径可传入 TTFT）
+    pub async fn record_success_with_ttft(
+        &self,
+        channel_id: &str,
+        latency_ms: f64,
+        ttft_ms: Option<f64>,
+    ) {
         // 更新统计
         {
             let mut states = self.channel_states.write().await;
@@ -200,6 +243,8 @@ impl LoadBalancerState {
                 status.record_success(latency_ms).await;
             }
         }
+        self.runtime_manager
+            .record_success(channel_id, latency_ms, ttft_ms);
         // 通知熔断器（使用空的 key_hint，后续可扩展）
         self.circuit_breaker
             .record_success(channel_id, "default")
@@ -221,6 +266,7 @@ impl LoadBalancerState {
                 }
             }
         }
+        self.runtime_manager.record_failure(channel_id);
         // 通知熔断器
         self.circuit_breaker
             .record_failure(channel_id, "default")
@@ -273,48 +319,6 @@ impl LoadBalancerState {
         }
     }
 
-    /// 获取渠道的负载信息（负载率、活跃请求数、最后使用时间）
-    pub async fn get_channel_load_info(&self, channel_id: &str) -> Option<ChannelLoadInfo> {
-        let states = self.channel_states.read().await;
-        let status = states.get(channel_id)?;
-        let active = status.active_requests.load(Ordering::Relaxed);
-        let load_rate = status.load_rate();
-        let last_used = *status.last_used_at.read().await;
-        Some(ChannelLoadInfo {
-            active_requests: active,
-            load_rate,
-            last_used_at: last_used,
-            max_concurrency: status.max_concurrency,
-        })
-    }
-
-    /// 计算渠道评分
-    pub async fn calculate_score(&self, channel_id: &str, base_weight: i32) -> f64 {
-        let states = self.channel_states.read().await;
-        let status = states.get(channel_id);
-
-        let mut score = base_weight as f64;
-
-        if let Some(status) = status {
-            // 不可用渠道评分归零
-            if !status.is_available() {
-                return 0.0;
-            }
-
-            // 错误率惩罚
-            let error_rate = status.error_rate();
-            score *= 1.0 - error_rate;
-
-            // 延迟惩罚（延迟越高，评分越低）
-            if status.avg_latency_ms > 0.0 {
-                let latency_factor = 1.0 / (1.0 + status.avg_latency_ms / 1000.0);
-                score *= latency_factor;
-            }
-        }
-
-        score.max(0.0)
-    }
-
     /// 获取粘性会话
     pub async fn get_sticky_session(&self, session_hash: &str) -> Option<String> {
         let sessions = self.sticky_sessions.read().await;
@@ -354,6 +358,16 @@ impl LoadBalancerState {
                 expires_at: now + chrono::Duration::seconds(self.sticky_ttl_secs),
             },
         );
+    }
+
+    /// 记录 monitor 探测成功
+    pub fn record_monitor_success(&self, channel_id: &str) {
+        self.runtime_manager.record_monitor_success(channel_id);
+    }
+
+    /// 记录 monitor 探测失败
+    pub fn record_monitor_failure(&self, channel_id: &str) {
+        self.runtime_manager.record_monitor_failure(channel_id);
     }
 
     /// 清理过期的粘性会话
@@ -460,5 +474,61 @@ mod tests {
         assert_eq!(s.active_requests.load(Ordering::Relaxed), 2);
         s.decrement_active();
         assert_eq!(s.active_requests.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn scheduler_metrics_records_sticky_and_load_balance_selections() {
+        let lb = LoadBalancerState::new();
+
+        lb.record_scheduler_selection("ch-sticky", true, Some("ch-sticky"));
+        lb.record_scheduler_selection("ch-a", false, None);
+
+        let snap = lb.scheduler_metrics.snapshot();
+        assert_eq!(snap.sticky_hits, 1);
+        assert_eq!(snap.load_balance_selects, 1);
+        assert_eq!(snap.channel_switches, 0);
+        assert_eq!(snap.total_selections, 2);
+    }
+
+    #[test]
+    fn scheduler_metrics_records_channel_switch_from_sticky() {
+        let lb = LoadBalancerState::new();
+
+        lb.record_scheduler_selection("ch-new", false, Some("ch-old"));
+
+        let snap = lb.scheduler_metrics.snapshot();
+        assert_eq!(snap.sticky_hits, 0);
+        assert_eq!(snap.load_balance_selects, 1);
+        assert_eq!(snap.channel_switches, 1);
+        assert_eq!(snap.total_selections, 1);
+    }
+
+    #[tokio::test]
+    async fn runtime_manager_updates_on_production_success_and_failure() {
+        let lb = LoadBalancerState::new();
+
+        lb.record_failure("ch-runtime", false).await;
+        let after_failure = lb.runtime_stats("ch-runtime").error_rate();
+        assert!(after_failure > 0.0);
+
+        lb.record_success("ch-runtime", 120.0).await;
+        let stats = lb.runtime_stats("ch-runtime");
+        assert!(stats.error_rate() < after_failure);
+        assert_eq!(stats.avg_latency_ms(), 120.0);
+        assert_eq!(stats.request_count(), 2);
+    }
+
+    #[tokio::test]
+    async fn runtime_manager_tracks_ttft_and_monitor_health() {
+        let lb = LoadBalancerState::new();
+
+        lb.record_success_with_ttft("ch-stream", 300.0, Some(42.0))
+            .await;
+        lb.record_monitor_failure("ch-stream");
+
+        let stats = lb.runtime_stats("ch-stream");
+        assert_eq!(stats.avg_latency_ms(), 300.0);
+        assert_eq!(stats.avg_ttft_ms(), 42.0);
+        assert!(stats.health() < 1.0);
     }
 }
