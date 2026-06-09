@@ -7,15 +7,15 @@ use crate::relay::pipeline::{RelayPipeline, RelayPipelineRequest};
 use crate::scheduler::selector::SelectionResult;
 
 /// 准备好的代理请求
-pub(super) struct PreparedProxyRequest {
-    pub(super) body: Vec<u8>,
-    pub(super) headers: reqwest::header::HeaderMap,
-    pub(super) url: String,
-    pub(super) upstream_endpoint: EndpointType,
-    pub(super) needs_conversion: bool,
-    pub(super) channel_id: String,
-    pub(super) model: String,
-    pub(super) target_model: String,
+pub(crate) struct PreparedProxyRequest {
+    pub(crate) body: Vec<u8>,
+    pub(crate) headers: reqwest::header::HeaderMap,
+    pub(crate) url: String,
+    pub(crate) upstream_endpoint: EndpointType,
+    pub(crate) needs_conversion: bool,
+    pub(crate) channel_id: String,
+    pub(crate) model: String,
+    pub(crate) target_model: String,
 }
 
 /// 从响应体提取 usage 数据
@@ -159,7 +159,7 @@ pub(crate) fn extract_response_text(body: &serde_json::Value) -> String {
 }
 
 /// 准备代理请求（共享逻辑）
-pub(super) async fn prepare_proxy_request(
+pub(crate) async fn prepare_proxy_request(
     headers: &HeaderMap,
     body: &serde_json::Value,
     client_endpoint: &EndpointType,

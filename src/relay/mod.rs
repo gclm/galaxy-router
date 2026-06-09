@@ -15,6 +15,8 @@ pub(crate) mod cache;
 
 pub(crate) mod channel;
 
+pub(crate) mod prepare;
+
 pub(crate) mod queue;
 
 #[allow(dead_code)]

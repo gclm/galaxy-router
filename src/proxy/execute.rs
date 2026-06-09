@@ -1,7 +1,7 @@
 use axum::body::Bytes;
 use axum::http::{HeaderMap, StatusCode};
 
-use super::prepare::{extract_request_text, prepare_proxy_request};
+use crate::relay::prepare::{extract_request_text, prepare_proxy_request};
 use super::{ProxyError, ProxyState, ProxySuccess};
 use crate::api::handlers::admin::channels::EndpointType;
 use crate::metrics::attempt::AttemptStats;

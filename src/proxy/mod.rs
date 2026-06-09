@@ -1,5 +1,4 @@
 pub mod execute;
-pub mod prepare;
 pub mod ratelimit;
 
 pub use crate::relay::cache::ProxyCache;
