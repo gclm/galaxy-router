@@ -5,12 +5,10 @@ pub mod execute;
 pub mod prepare;
 pub mod queue;
 pub mod ratelimit;
-pub mod relay_executor;
 pub mod scheduler;
 pub mod selection;
 pub mod sse;
 pub mod state;
-mod stream_relay_executor;
 pub mod thinking_normalizer;
 
 pub use cache::ProxyCache;
@@ -332,7 +330,7 @@ pub(super) async fn build_relay_candidates(
 
 impl ProxyState {
     /// 获取渠道信息（带缓存）
-    async fn get_channel(&self, channel_id: &str) -> Result<ChannelInfo, ProxyError> {
+    pub(crate) async fn get_channel(&self, channel_id: &str) -> Result<ChannelInfo, ProxyError> {
         // 1. 检查缓存
         if let Some(channel) = self.cache.get_channel(channel_id).await {
             return Ok(channel);
@@ -489,7 +487,7 @@ pub async fn proxy_stream(
             }
         };
 
-    let executor = stream_relay_executor::ProxyStreamRelayExecutor::new(
+    let executor = crate::relay::stream_executor::ProxyStreamRelayExecutor::new(
         state.clone(),
         request_id.to_string(),
         headers.clone(),

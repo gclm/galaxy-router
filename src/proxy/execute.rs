@@ -28,7 +28,7 @@ fn thinking_flag(extras: &Option<serde_json::Map<String, serde_json::Value>>, ke
 }
 
 /// 单次尝试的统计信息
-pub(super) struct AttemptStats {
+pub(crate) struct AttemptStats {
     channel_id: String,
     target_model: String,
     upstream_endpoint: EndpointType,
@@ -296,7 +296,7 @@ pub(super) async fn save_request_record(
 
 /// 执行单次代理请求
 #[allow(clippy::too_many_arguments)]
-pub(super) async fn execute_proxy_request(
+pub(crate) async fn execute_proxy_request(
     state: &ProxyState,
     _api_key_id: Option<&str>,
     upstream_api_key: &str,
@@ -505,7 +505,7 @@ pub async fn proxy_request(
     };
 
     // 2. 创建 executor + RelayRun
-    let executor = super::relay_executor::ProxyRelayExecutor::new(
+    let executor = crate::relay::executor::ProxyRelayExecutor::new(
         state.clone(),
         headers.clone(),
         body.clone(),
@@ -580,7 +580,7 @@ pub async fn proxy_request(
 
 /// 执行单次流式代理请求
 #[allow(clippy::too_many_arguments)]
-pub(super) async fn execute_proxy_stream(
+pub(crate) async fn execute_proxy_stream(
     state: &ProxyState,
     request_id: String,
     api_key_id: Option<&str>,

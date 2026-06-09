@@ -29,7 +29,7 @@ phases:
       - Commit is recommended before P12 module moves.
 
   - id: P12
-    status: pending
+    status: green
     name: move executors and single-attempt HTTP execution into relay
     objective: move real relay attempt execution out of src/proxy while preserving behavior
     write_scope:
@@ -44,38 +44,38 @@ phases:
       - src/proxy/mod.rs
     tasks:
       - id: P12.1
-        status: pending
+        status: green
         name: add or confirm executor characterization coverage
         details:
           - cover successful non-stream attempt updates scheduler feedback and returns native response
           - cover failed attempt calls failure feedback and keeps retry behavior
           - cover stream response_written behavior and capacity permit lifetime
       - id: P12.2
-        status: pending
+        status: green
         name: move non-stream executor type to relay::executor
         details:
           - move ProxyRelayExecutor implementation with minimal rename
           - keep temporary compatibility re-export if needed
       - id: P12.3
-        status: pending
+        status: green
         name: move stream executor type to relay::stream_executor
         details:
           - move ProxyStreamRelayExecutor implementation with minimal rename
           - preserve no-retry-after-response-written semantics
       - id: P12.4
-        status: pending
+        status: green
         name: expose non-stream execute_once under relay::http
         details:
           - wrap or rename execute_proxy_request to relay::http::execute_once
           - keep old proxy function as bridge only if necessary
       - id: P12.5
-        status: pending
+        status: green
         name: expose stream execute_once under relay::stream
         details:
           - wrap or rename execute_proxy_stream to relay::stream::execute_once
           - do not rewrite SSE loop in this phase
       - id: P12.6
-        status: pending
+        status: green
         name: remove stale proxy executor ownership
         details:
           - no business logic should remain in proxy/relay_executor.rs or proxy/stream_relay_executor.rs except optional re-export
@@ -273,5 +273,6 @@ phases:
       - make check
     commit_recommendation: refactor: reduce proxy to gateway adapter
 notes:
+  - 2026-06-09: P12 completed; moved ProxyRelayExecutor and ProxyStreamRelayExecutor into src/relay, added relay::http::execute_once and relay::stream::execute_once bridge entrypoints, removed proxy executor files, and made ProxyState::get_channel crate-visible for the temporary P12-P15 bridge. execute_proxy_request/execute_proxy_stream implementation still lives in proxy::execute as an explicit bridge for P13/P14/P15 removal. Validation passed: cargo test relay_run --test relay_run_tdd; cargo test sse_integration; make check.
   - 2026-06-09: Created complete proxy retirement pathmap/checklist after P11 planning discussion.
   - 2026-06-09: Recommended next action is commit current P1-P11 checkpoint before P12 begins.

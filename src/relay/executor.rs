@@ -1,17 +1,18 @@
 use async_trait::async_trait;
 use std::sync::{Arc, Mutex};
 
-use super::ProxyState;
-use super::execute::{AttemptStats, execute_proxy_request};
-use super::selection::SelectionResult;
 use crate::api::handlers::admin::channels::EndpointType;
+use crate::proxy::execute::AttemptStats;
+use crate::proxy::selection::SelectionResult;
+use crate::proxy::{ProxyError, ProxyState};
+use crate::relay::http::execute_once;
 use crate::relay::run::{
     RelayAttemptError, RelayAttemptExecutor, RelayAttemptResult, RelayCandidate, RelayRequest,
 };
 
 /// 非流式代理执行器：将 RelayRun 的候选迭代与真实 proxy 执行连接
 #[derive(Clone)]
-pub(super) struct ProxyRelayExecutor {
+pub(crate) struct ProxyRelayExecutor {
     state: ProxyState,
     headers: axum::http::HeaderMap,
     body: serde_json::Value,
@@ -21,7 +22,7 @@ pub(super) struct ProxyRelayExecutor {
 }
 
 impl ProxyRelayExecutor {
-    pub(super) fn new(
+    pub(crate) fn new(
         state: ProxyState,
         headers: axum::http::HeaderMap,
         body: serde_json::Value,
@@ -39,7 +40,7 @@ impl ProxyRelayExecutor {
     }
 
     /// 取出 executor 执行期间积累的 AttemptStats
-    pub(super) fn take_attempt_stats(&self) -> Vec<AttemptStats> {
+    pub(crate) fn take_attempt_stats(&self) -> Vec<AttemptStats> {
         let mut stats = self
             .attempt_stats
             .lock()
@@ -116,7 +117,7 @@ impl RelayAttemptExecutor for ProxyRelayExecutor {
             let key_hint = selection.channel.key_hint(upstream_api_key);
             let mut local_attempts = Vec::new();
 
-            let result = execute_proxy_request(
+            let result = execute_once(
                 &self.state,
                 self.api_key_id.as_deref(),
                 upstream_api_key,
@@ -142,9 +143,9 @@ impl RelayAttemptExecutor for ProxyRelayExecutor {
                         response_written: false,
                     };
                 }
-                Err(super::ProxyError::UpstreamError { status, body }) => {
+                Err(ProxyError::UpstreamError { status, body }) => {
                     let error = RelayAttemptError::new(status.as_u16(), sanitize_error_body(&body));
-                    let is_key_retryable = super::ProxyError::UpstreamError {
+                    let is_key_retryable = ProxyError::UpstreamError {
                         status,
                         body: body.clone(),
                     }
