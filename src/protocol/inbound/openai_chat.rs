@@ -2,16 +2,12 @@ use async_trait::async_trait;
 use axum::http::HeaderMap;
 use serde::{Deserialize, Serialize};
 
-use super::inbound::{Inbound, InboundError};
-use super::model::*;
-use super::outbound::{Outbound, OutboundError};
-use super::stream_converter::{SimpleStreamConverter, StreamConverter};
+use super::{Inbound, InboundError};
+use crate::protocol::model::*;
+use crate::protocol::stream_converter::{SimpleStreamConverter, StreamConverter};
 
 /// OpenAI Chat Completions 入站转换器
 pub struct OpenAiChatInbound;
-
-/// OpenAI Chat Completions 出站转换器
-pub struct OpenAiChatOutbound;
 
 /// OpenAI Chat 请求
 #[derive(Debug, Deserialize)]
@@ -38,50 +34,50 @@ struct OpenAiChatRequest {
 
 /// OpenAI 消息
 #[derive(Debug, Deserialize, Serialize)]
-struct OpenAiMessage {
-    role: String,
+pub(crate) struct OpenAiMessage {
+    pub(crate) role: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    content: Option<serde_json::Value>,
+    pub(crate) content: Option<serde_json::Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    name: Option<String>,
+    pub(crate) name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    tool_calls: Option<Vec<OpenAiToolCall>>,
+    pub(crate) tool_calls: Option<Vec<OpenAiToolCall>>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    tool_call_id: Option<String>,
+    pub(crate) tool_call_id: Option<String>,
 }
 
 /// OpenAI 工具调用
 #[derive(Debug, Deserialize, Serialize)]
-struct OpenAiToolCall {
-    id: String,
+pub(crate) struct OpenAiToolCall {
+    pub(crate) id: String,
     #[serde(rename = "type")]
-    call_type: String,
-    function: OpenAiFunctionCall,
+    pub(crate) call_type: String,
+    pub(crate) function: OpenAiFunctionCall,
 }
 
 /// OpenAI 函数调用
 #[derive(Debug, Deserialize, Serialize)]
-struct OpenAiFunctionCall {
-    name: String,
-    arguments: String,
+pub(crate) struct OpenAiFunctionCall {
+    pub(crate) name: String,
+    pub(crate) arguments: String,
 }
 
 /// OpenAI 工具
 #[derive(Debug, Deserialize, Serialize)]
-struct OpenAiTool {
+pub(crate) struct OpenAiTool {
     #[serde(rename = "type")]
-    tool_type: String,
-    function: OpenAiFunctionDefinition,
+    pub(crate) tool_type: String,
+    pub(crate) function: OpenAiFunctionDefinition,
 }
 
 /// OpenAI 函数定义
 #[derive(Debug, Deserialize, Serialize)]
-struct OpenAiFunctionDefinition {
-    name: String,
+pub(crate) struct OpenAiFunctionDefinition {
+    pub(crate) name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    description: Option<String>,
+    pub(crate) description: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    parameters: Option<serde_json::Value>,
+    pub(crate) parameters: Option<serde_json::Value>,
 }
 
 #[async_trait]
@@ -208,126 +204,5 @@ impl Inbound for OpenAiChatInbound {
                 .map_err(|e| InboundError::TransformError(format!("序列化流式事件失败: {}", e)))?;
             Ok(format!("data: {}\n\n", data).into_bytes())
         }))
-    }
-}
-
-#[async_trait]
-impl Outbound for OpenAiChatOutbound {
-    fn transform_request(&self, request: &LlmRequest) -> Result<Vec<u8>, OutboundError> {
-        let messages: Vec<OpenAiMessage> = request
-            .messages
-            .iter()
-            .map(|m| {
-                let role = match m.role {
-                    Role::System => "system",
-                    Role::User => "user",
-                    Role::Assistant => "assistant",
-                    Role::Tool => "tool",
-                    Role::Developer => "developer",
-                };
-
-                let content = m.content.as_ref().map(|c| match c {
-                    Content::Text(s) => serde_json::Value::String(s.clone()),
-                    Content::Parts(parts) => {
-                        serde_json::to_value(parts).unwrap_or(serde_json::Value::Null)
-                    }
-                });
-
-                let tool_calls = m.tool_calls.as_ref().map(|tc| {
-                    tc.iter()
-                        .map(|t| OpenAiToolCall {
-                            id: t.id.clone(),
-                            call_type: t.call_type.clone(),
-                            function: OpenAiFunctionCall {
-                                name: t.function.name.clone(),
-                                arguments: t.function.arguments.clone(),
-                            },
-                        })
-                        .collect()
-                });
-
-                OpenAiMessage {
-                    role: role.to_string(),
-                    content,
-                    name: m.name.clone(),
-                    tool_calls,
-                    tool_call_id: m.tool_call_id.clone(),
-                }
-            })
-            .collect();
-
-        let tools: Option<Vec<OpenAiTool>> = request.tools.as_ref().map(|t| {
-            t.iter()
-                .map(|tool| OpenAiTool {
-                    tool_type: tool.tool_type.clone(),
-                    function: OpenAiFunctionDefinition {
-                        name: tool.function.name.clone(),
-                        description: tool.function.description.clone(),
-                        parameters: tool.function.parameters.clone(),
-                    },
-                })
-                .collect()
-        });
-
-        let tool_choice = request.tool_choice.as_ref().map(|tc| match tc {
-            ToolChoice::None => serde_json::Value::String("none".to_string()),
-            ToolChoice::Auto => serde_json::Value::String("auto".to_string()),
-            ToolChoice::Required => serde_json::Value::String("required".to_string()),
-            ToolChoice::Function { function } => {
-                serde_json::json!({ "type": "function", "function": { "name": function.name } })
-            }
-        });
-
-        let body = serde_json::json!({
-            "model": request.model,
-            "messages": messages,
-            "temperature": request.temperature,
-            "top_p": request.top_p,
-            "max_tokens": request.max_tokens,
-            "max_completion_tokens": request.max_completion_tokens,
-            "stream": request.stream,
-            "tools": tools,
-            "tool_choice": tool_choice,
-            "stop": request.stop,
-        });
-
-        serde_json::to_vec(&body)
-            .map_err(|e| OutboundError::TransformError(format!("序列化请求失败: {}", e)))
-    }
-
-    async fn transform_response(
-        &self,
-        body: &[u8],
-        _status: u16,
-    ) -> Result<LlmResponse, OutboundError> {
-        serde_json::from_slice(body)
-            .map_err(|e| OutboundError::ParseError(format!("解析 OpenAI Chat 响应失败: {}", e)))
-    }
-
-    fn transform_stream_event(
-        &self,
-        event: &[u8],
-    ) -> Result<Option<LlmStreamResponse>, OutboundError> {
-        let text = String::from_utf8_lossy(event);
-        let text = text.trim();
-
-        if text.is_empty() || text == "data: [DONE]" {
-            return Ok(None);
-        }
-
-        let data = text.strip_prefix("data: ").unwrap_or(text);
-
-        serde_json::from_str(data)
-            .map(Some)
-            .map_err(|e| OutboundError::ParseError(format!("解析 OpenAI Chat 流式事件失败: {}", e)))
-    }
-
-    fn set_auth_header(&self, headers: &mut reqwest::header::HeaderMap, api_key: &str) {
-        headers.insert(
-            "Authorization",
-            format!("Bearer {}", api_key)
-                .parse()
-                .expect("api_key validated at save"),
-        );
     }
 }

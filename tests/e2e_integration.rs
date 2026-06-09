@@ -10,7 +10,7 @@ use galaxy_router::config::{
     ServerConfig,
 };
 use galaxy_router::db::Database;
-use galaxy_router::stats::model::ModelRegistry;
+use galaxy_router::metrics::model::ModelRegistry;
 use tower::ServiceExt;
 
 async fn build_test_app() -> axum::Router {

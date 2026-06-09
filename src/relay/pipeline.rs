@@ -200,29 +200,15 @@ fn rewrite_model(body: &mut serde_json::Value, upstream_model: &str) {
 }
 
 fn inbound_for(endpoint: &EndpointType) -> Result<&'static dyn Inbound, RelayPipelineError> {
-    match endpoint {
-        EndpointType::OpenAiChat => Ok(&crate::protocol::openai_chat::OpenAiChatInbound),
-        EndpointType::OpenAiResponse => {
-            Ok(&crate::protocol::openai_responses::OpenAiResponsesInbound)
-        }
-        EndpointType::Anthropic => Ok(&crate::protocol::anthropic::AnthropicInbound),
-        _ => Err(RelayPipelineError::UnsupportedEndpoint {
-            endpoint: endpoint.clone(),
-        }),
-    }
+    crate::protocol::inbound::inbound_for(endpoint).ok_or(RelayPipelineError::UnsupportedEndpoint {
+        endpoint: endpoint.clone(),
+    })
 }
 
 fn outbound_for(endpoint: &EndpointType) -> Result<&'static dyn Outbound, RelayPipelineError> {
-    match endpoint {
-        EndpointType::OpenAiChat => Ok(&crate::protocol::openai_chat::OpenAiChatOutbound),
-        EndpointType::OpenAiResponse => {
-            Ok(&crate::protocol::openai_responses::OpenAiResponsesOutbound)
-        }
-        EndpointType::Anthropic => Ok(&crate::protocol::anthropic::AnthropicOutbound),
-        _ => Err(RelayPipelineError::UnsupportedEndpoint {
-            endpoint: endpoint.clone(),
-        }),
-    }
+    crate::protocol::outbound::outbound_for(endpoint).ok_or(RelayPipelineError::UnsupportedEndpoint {
+        endpoint: endpoint.clone(),
+    })
 }
 
 #[cfg(test)]

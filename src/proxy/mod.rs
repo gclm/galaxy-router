@@ -398,12 +398,8 @@ impl ProxyState {
 
 /// 获取出站转换器（静态引用，避免堆分配）
 pub fn get_outbound(endpoint_type: &EndpointType) -> &'static dyn Outbound {
-    match endpoint_type {
-        EndpointType::OpenAiChat => &crate::protocol::openai_chat::OpenAiChatOutbound,
-        EndpointType::OpenAiResponse => &crate::protocol::openai_responses::OpenAiResponsesOutbound,
-        EndpointType::Anthropic => &crate::protocol::anthropic::AnthropicOutbound,
-        _ => &crate::protocol::openai_chat::OpenAiChatOutbound,
-    }
+    crate::protocol::outbound::outbound_for(endpoint_type)
+        .unwrap_or(&crate::protocol::outbound::openai_chat::OpenAiChatOutbound)
 }
 
 /// 流式代理请求（支持重试和排队）

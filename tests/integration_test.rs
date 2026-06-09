@@ -296,7 +296,7 @@ async fn test_api_key_crud() {
 #[test]
 fn test_openai_chat_transform() {
     use galaxy_router::protocol::inbound::Inbound;
-    use galaxy_router::protocol::openai_chat::OpenAiChatInbound;
+    use galaxy_router::protocol::inbound::openai_chat::OpenAiChatInbound;
 
     let inbound = OpenAiChatInbound;
     let headers = axum::http::HeaderMap::new();
@@ -322,7 +322,7 @@ fn test_openai_chat_transform() {
 
 #[test]
 fn test_anthropic_transform() {
-    use galaxy_router::protocol::anthropic::AnthropicInbound;
+    use galaxy_router::protocol::inbound::anthropic::AnthropicInbound;
     use galaxy_router::protocol::inbound::Inbound;
 
     let inbound = AnthropicInbound;

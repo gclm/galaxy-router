@@ -3,7 +3,7 @@
 //! 覆盖 proxy/sse 模块的纯函数路径。
 
 use galaxy_router::api::handlers::admin::channels::EndpointType;
-use galaxy_router::proxy::sse::{
+use galaxy_router::protocol::sse::{
     SseUsageSource, apply_sse_usage, collect_sse_content, extract_error_from_sse,
     extract_usage_from_sse, find_sse_boundary, format_stream_error_event, sanitize_upstream_error,
     sse_field,

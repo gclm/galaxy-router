@@ -17,4 +17,5 @@ pub(crate) mod channel;
 
 pub(crate) mod queue;
 
+#[allow(dead_code)]
 pub(crate) mod scheduler_task;

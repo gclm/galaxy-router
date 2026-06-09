@@ -3,6 +3,11 @@ use axum::http::HeaderMap;
 
 use super::model::{LlmRequest, LlmResponse, LlmStreamResponse};
 use super::stream_converter::StreamConverter;
+use crate::api::handlers::admin::channels::EndpointType;
+
+pub mod anthropic;
+pub mod openai_chat;
+pub mod openai_responses;
 
 /// 入站转换器 trait
 ///
@@ -42,4 +47,15 @@ pub enum InboundError {
 
     #[error("转换失败: {0}")]
     TransformError(String),
+}
+
+/// 根据端点类型获取对应的入站转换器，不支持的端点返回 None
+pub fn inbound_for(endpoint: &EndpointType) -> Option<&'static dyn Inbound> {
+    match endpoint {
+        EndpointType::OpenAiChat => Some(&openai_chat::OpenAiChatInbound),
+        EndpointType::OpenAiResponse => Some(&openai_responses::OpenAiResponsesInbound),
+        EndpointType::Anthropic => Some(&anthropic::AnthropicInbound),
+        EndpointType::OpenAiEmbedding | EndpointType::OpenAiImages => Some(&openai_chat::OpenAiChatInbound),
+        EndpointType::Gemini => None,
+    }
 }

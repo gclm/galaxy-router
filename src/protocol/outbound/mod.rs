@@ -1,6 +1,11 @@
 use async_trait::async_trait;
 
 use super::model::{LlmRequest, LlmResponse, LlmStreamResponse};
+use crate::api::handlers::admin::channels::EndpointType;
+
+pub mod anthropic;
+pub mod openai_chat;
+pub mod openai_responses;
 
 /// 出站转换器 trait
 ///
@@ -36,4 +41,15 @@ pub enum OutboundError {
 
     #[error("解析响应失败: {0}")]
     ParseError(String),
+}
+
+/// 根据端点类型获取对应的出站转换器，不支持的端点返回 None
+pub fn outbound_for(endpoint: &EndpointType) -> Option<&'static dyn Outbound> {
+    match endpoint {
+        EndpointType::OpenAiChat => Some(&openai_chat::OpenAiChatOutbound),
+        EndpointType::OpenAiResponse => Some(&openai_responses::OpenAiResponsesOutbound),
+        EndpointType::Anthropic => Some(&anthropic::AnthropicOutbound),
+        EndpointType::OpenAiEmbedding | EndpointType::OpenAiImages => Some(&openai_chat::OpenAiChatOutbound),
+        EndpointType::Gemini => None,
+    }
 }
