@@ -46,6 +46,25 @@ dev-stop:
 test:
 	cargo test
 
+# 快速单元测试（不含 HTTP 层）
+test-unit:
+	cargo test --lib
+
+# 管理后台 API 回归
+test-api:
+	cargo test --test api
+
+# 代理转发回归（Step 3 实现）
+test-proxy:
+	cargo test --test proxy
+
+# 完整回归（单元 + API + 代理）
+test-regression:
+	cargo test --test api --test proxy
+
+# CI 完整流程
+test-ci: clippy test-regression
+
 fmt:
 	cargo fmt
 
@@ -164,7 +183,12 @@ help:
 	@echo "  dev-stop           停止残留的开发进程"
 	@echo ""
 	@echo "测试 / 检查:"
-	@echo "  test               运行测试"
+	@echo "  test               运行全部测试"
+	@echo "  test-unit          单元测试（不含 HTTP 层）"
+	@echo "  test-api           管理后台 API 回归"
+	@echo "  test-proxy         代理转发回归"
+	@echo "  test-regression    完整回归（API + 代理）"
+	@echo "  test-ci            CI 完整流程（lint + 回归）"
 	@echo "  fmt                格式化代码"
 	@echo "  clippy             代码检查"
 	@echo "  check              完整检查（lint+测试）"
