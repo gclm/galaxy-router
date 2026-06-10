@@ -160,6 +160,6 @@ impl AppConfig {
 
     /// 获取数据库 URL
     pub fn database_url(&self) -> String {
-        format!("sqlite:{}?mode=rwc", self.database.path)
+        format!("sqlite:{}?mode=rwc&journal_mode=WAL&busy_timeout=5000", self.database.path)
     }
 }
