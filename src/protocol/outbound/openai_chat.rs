@@ -76,18 +76,19 @@ impl Outbound for OpenAiChatOutbound {
             }
         });
 
-        let body = serde_json::json!({
+        let mut body = serde_json::json!({
             "model": request.model,
             "messages": messages,
-            "temperature": request.temperature,
-            "top_p": request.top_p,
-            "max_tokens": request.max_tokens,
-            "max_completion_tokens": request.max_completion_tokens,
-            "stream": request.stream,
-            "tools": tools,
-            "tool_choice": tool_choice,
-            "stop": request.stop,
         });
+        // 仅注入非 null 的可选字段，避免上游对 null 值敏感（如智谱 API 返回 500）
+        if let Some(v) = request.temperature { body["temperature"] = serde_json::json!(v); }
+        if let Some(v) = request.top_p { body["top_p"] = serde_json::json!(v); }
+        if let Some(v) = request.max_tokens { body["max_tokens"] = serde_json::json!(v); }
+        if let Some(v) = request.max_completion_tokens { body["max_completion_tokens"] = serde_json::json!(v); }
+        if let Some(v) = request.stream { body["stream"] = serde_json::json!(v); }
+        if let Some(ref v) = tools { body["tools"] = serde_json::json!(v); }
+        if let Some(ref v) = tool_choice { body["tool_choice"] = v.clone(); }
+        if let Some(ref v) = request.stop { body["stop"] = serde_json::json!(v); }
 
         serde_json::to_vec(&body)
             .map_err(|e| OutboundError::TransformError(format!("序列化请求失败: {}", e)))

@@ -70,7 +70,7 @@ pub(crate) async fn build_relay_candidates(
     if let Some(hash) = session_hash
         && let Some(channel_id) = state.lb_state.get_sticky_session(hash).await
         && let Ok(channel) = state.get_channel(&channel_id).await
-        && channel.find_endpoint(client_endpoint).is_some()
+        && channel.has_any_endpoint()
     {
         seen.insert(channel_id.clone());
         candidates.push(RelayCandidate {

@@ -114,14 +114,13 @@ impl ProxyStreamRelayExecutor {
             .map_err(|e| RelayAttemptError::new(503, e.to_string()))?;
 
         let endpoint = channel
-            .find_endpoint(&self.client_endpoint)
+            .find_best_endpoint(&self.client_endpoint)
             .ok_or_else(|| {
                 RelayAttemptError::new(
                     503,
                     format!(
-                        "channel {} has no endpoint for {}",
+                        "channel {} has no available endpoint",
                         candidate.channel_id,
-                        self.client_endpoint.as_str()
                     ),
                 )
             })?;

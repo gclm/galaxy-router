@@ -33,6 +33,30 @@ impl ChannelInfo {
             .cloned()
     }
 
+    /// 是否有任意启用的端点（用于候选筛选，不要求协议匹配）
+    pub fn has_any_endpoint(&self) -> bool {
+        self.endpoints.iter().any(|e| e.enabled)
+    }
+
+    /// 选择最佳上游端点：优先精确匹配，fallback 到任意可用端点（由 pipeline 做协议转换）
+    pub fn find_best_endpoint(&self, endpoint_type: &EndpointType) -> Option<EndpointConfig> {
+        // 精确匹配：无需转换
+        if let Some(ep) = self.find_endpoint(endpoint_type) {
+            return Some(ep);
+        }
+        // Fallback：优先 openai_chat（最通用），其次 anthropic，最后任意
+        self.endpoints
+            .iter()
+            .find(|e| e.enabled && e.endpoint_type == EndpointType::OpenAiChat)
+            .or_else(|| {
+                self.endpoints
+                    .iter()
+                    .find(|e| e.enabled && e.endpoint_type == EndpointType::Anthropic)
+            })
+            .or_else(|| self.endpoints.iter().find(|e| e.enabled))
+            .cloned()
+    }
+
     /// 生成上游 Key 的显示 hint（优先 note，否则截断）
     pub fn key_hint(&self, key: &str) -> String {
         if let Some(ak) = self
