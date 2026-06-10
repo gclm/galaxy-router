@@ -7,7 +7,7 @@
 - `architecture/`: 模块划分、数据流、所有权边界
 - `reference/`: 稳定的查找事实（编码规范、仓库表面）
 - `memory/`: 反思、决策和已知文档缺口
-- `sop/`: 工作流流程定义（feature/refactor/issue/brainstorm/cold-start）
+- `sop/`: 工作流流程定义（feature/refactor/issue/brainstorm/git）
 - `guides/`: 特定工作流的操作指南
 
 ## Key Documents

@@ -25,9 +25,11 @@
 
 - 单元测试写在同文件 `#[cfg(test)] mod tests { }` 内
 - 测试函数命名：`snake_case_describes_expected_behavior`（如 `classify_upstream_distinguishes_key_retryable`）
-- 测试数据库路径：`/tmp/galaxy_test_*`，每个测试模块用独立文件
-- 集成测试依赖 `tower::ServiceExt` 对 Router 做 oneshot 请求
-- 外部 HTTP 请求不 mock，测试只覆盖内部逻辑
+- 测试数据库路径：`/tmp/galaxy_test_*`，每个 `TestApp::new()` 创建独立 SQLite 文件
+- 集成测试使用 `TestApp`（`tests/common/app.rs`）构建 Router + DB + JWT + fixtures
+- 代理测试使用 `wiremock` 模拟上游（`tests/common/mock.rs`），覆盖完整转发链路
+- 外部 HTTP 请求全部 mock，不依赖真实网络
+- 分类执行：`make test-api` / `make test-proxy` / `make test-regression`
 
 ## 代码风格
 

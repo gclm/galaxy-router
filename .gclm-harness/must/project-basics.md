@@ -14,7 +14,11 @@
 make build          # 构建项目（含前端 pnpm build）
 make run            # 启动服务（等同于 cargo run）
 make dev            # 前后端同时运行（cargo run + vite dev）
-make test           # cargo test
+make test           # cargo test（全部）
+make test-unit      # cargo test --lib（单元测试）
+make test-api       # 管理后台 API 回归
+make test-proxy     # 代理转发回归
+make test-regression # API + 代理完整回归
 make check          # clippy + test
 make fmt            # cargo fmt
 ```
