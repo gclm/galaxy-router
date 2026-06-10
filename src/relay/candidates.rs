@@ -60,7 +60,7 @@ async fn score_candidates(
 pub(crate) async fn build_relay_candidates(
     state: &ProxyState,
     model: &str,
-    client_endpoint: &EndpointType,
+    _client_endpoint: &EndpointType,
     session_hash: Option<&str>,
 ) -> Result<Vec<RelayCandidate>, ProxyError> {
     let mut candidates = Vec::new();

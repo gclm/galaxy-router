@@ -1,3 +1,6 @@
+use std::sync::Arc;
+use std::time::Instant;
+
 use axum::{
     Json, Router,
     body::Body,
@@ -240,23 +243,31 @@ pub async fn create_router(
                 crate::api::middleware::cors::require_cors(pool, req, next)
             }
         }))
-        // 注入 pool 和 JWT secret 到 extensions
-        .layer(middleware::from_fn(
-            move |mut req: Request<Body>, next: middleware::Next| {
-                let secret = jwt_secret.clone();
-                let pool = pool.clone();
-                async move {
-                    req.extensions_mut().insert(secret);
-                    req.extensions_mut().insert(pool);
-                    next.run(req).await
-                }
-            },
-        ))
+        // 注入 pool / JWT secret / start_time 到 extensions
+        .layer({
+            let start_time = Arc::new(Instant::now());
+            middleware::from_fn(
+                move |mut req: Request<Body>, next: middleware::Next| {
+                    let secret = jwt_secret.clone();
+                    let pool = pool.clone();
+                    let start = start_time.clone();
+                    async move {
+                        req.extensions_mut().insert(secret);
+                        req.extensions_mut().insert(pool);
+                        req.extensions_mut().insert(start);
+                        next.run(req).await
+                    }
+                },
+            )
+        })
         .layer(TraceLayer::new_for_http())
 }
 
-/// 健康检查端点（返回初始化状态）
-async fn health_check(axum::Extension(pool): axum::Extension<SqlitePool>) -> Json<Value> {
+/// 健康检查端点（返回初始化状态 + 运行时长）
+async fn health_check(
+    axum::Extension(pool): axum::Extension<SqlitePool>,
+    axum::Extension(start_time): axum::Extension<Arc<Instant>>,
+) -> Json<Value> {
     let needs_setup = sqlx::query_scalar::<_, i32>("SELECT COUNT(*) FROM users")
         .fetch_one(&pool)
         .await
@@ -266,7 +277,8 @@ async fn health_check(axum::Extension(pool): axum::Extension<SqlitePool>) -> Jso
     Json(json!({
         "status": "ok",
         "version": env!("GALAXY_BUILD_VERSION"),
-        "needs_setup": needs_setup
+        "needs_setup": needs_setup,
+        "uptime_seconds": start_time.elapsed().as_secs()
     }))
 }
 
