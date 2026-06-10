@@ -1,5 +1,6 @@
 pub mod cache;
 pub mod channel;
+pub mod error;
 pub mod executor;
 pub mod pipeline;
 pub mod prepare;

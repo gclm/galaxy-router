@@ -9,7 +9,8 @@ use crate::relay::prepare::prepare_proxy_request;
 use crate::relay::run::{
     RelayAttemptError, RelayAttemptExecutor, RelayAttemptResult, RelayCandidate, RelayRequest,
 };
-use crate::relay::state::{ProxyError, ProxyState, ProxySuccess};
+use crate::relay::error::ProxyError;
+use crate::relay::state::{ProxyState, ProxySuccess};
 use crate::scheduler::selector::SelectionResult;
 
 /// RAII guard：确保函数退出时自动递减活跃请求数
@@ -326,7 +327,9 @@ mod tests {
 
     use crate::db::Database;
     use crate::metrics::model::ModelRegistry;
-    use crate::relay::state::{ProxyError, ProxyState, proxy_request};
+    use crate::relay::error::ProxyError;
+    use crate::relay::pipeline::proxy_request;
+    use crate::relay::state::ProxyState;
     use axum::{Router, routing::post};
 
     async fn spawn_mock_upstream() -> String {

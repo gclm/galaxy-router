@@ -3,7 +3,9 @@ use serde_json::Value;
 
 use crate::api::handlers::admin::channels::EndpointType;
 use crate::api::middleware::ApiKeyAuth;
-use crate::relay::state::{self, ErrorFormat, ProxyState};
+use crate::relay::error::ErrorFormat;
+use crate::relay::pipeline::handle_proxy_request;
+use crate::relay::state::ProxyState;
 
 /// OpenAI Embeddings 代理
 pub async fn proxy(
@@ -12,7 +14,7 @@ pub async fn proxy(
     headers: HeaderMap,
     Json(body): Json<Value>,
 ) -> impl IntoResponse {
-    state::handle_proxy_request(
+    handle_proxy_request(
         &state,
         auth,
         headers,

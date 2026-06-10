@@ -3,7 +3,8 @@ use axum::http::HeaderMap;
 use crate::api::handlers::admin::channels::EndpointType;
 use crate::metrics::usage::estimator::TokenEstimator;
 use crate::relay::pipeline::{RelayPipeline, RelayPipelineRequest};
-use crate::relay::state::{ProxyError, get_outbound};
+use crate::relay::error::ProxyError;
+use crate::relay::pipeline::get_outbound;
 use crate::scheduler::selector::SelectionResult;
 
 /// 准备好的代理请求
