@@ -1,0 +1,9 @@
+type: feature
+complexity: moderate
+sop: sop/feature.md
+status: planning
+feature: 2026-06-10-设计回归测试方案并覆盖常见代理场景
+title: 设计回归测试方案并覆盖常见代理场景
+created: '2026-06-10'
+completed: null
+notes: ''

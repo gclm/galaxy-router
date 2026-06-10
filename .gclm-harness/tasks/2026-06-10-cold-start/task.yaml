@@ -1,0 +1,14 @@
+type: feature
+complexity: moderate
+sop: sop/cold-start.md
+status: completed
+feature: 2026-06-10-cold-start
+title: 冷启动 — 生成项目知识层
+created: 2026-06-10
+completed: 2026-06-10
+notes: |
+  Phase 2-4 已完成：
+  - Phase 2：AI 生成知识层骨架（6 个文件）
+  - Phase 3：用户 review，补充 3 条反馈（Homebrew/E2E/RESTful）
+  - Phase 4：health uptime_seconds Simple 任务验证通过
+  后续任务已记录在 architecture/ARCHITECTURE.md 技术债中
