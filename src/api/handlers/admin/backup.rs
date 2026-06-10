@@ -222,7 +222,7 @@ pub async fn reset(
 
 async fn fetch_channels(pool: &SqlitePool) -> DbResult<Vec<Channel>> {
     let rows: Vec<ChannelRow> = sqlx::query_as(
-        "SELECT id, name, api_keys, endpoints, models, rate_limit_rpm, rate_limit_tpm, failure_threshold, blacklist_minutes, concurrency, custom_headers, enabled, created_at, updated_at FROM channels ORDER BY created_at",
+        "SELECT id, name, api_keys, endpoints, models, rate_limit_rpm, rate_limit_tpm, failure_threshold, blacklist_minutes, concurrency, timeout_secs, max_concurrency, custom_headers, extras, enabled, created_at, updated_at FROM channels ORDER BY created_at",
     )
     .fetch_all(pool)
     .await
