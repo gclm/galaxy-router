@@ -4,7 +4,7 @@ use sqlx::SqlitePool;
 use std::sync::Arc;
 use std::time::Instant;
 
-use crate::api::{ApiError, ApiResponse};
+use crate::error::app::{ApiError, ApiResponse};
 use axum::http::StatusCode;
 
 #[derive(Clone)]

@@ -419,7 +419,7 @@ fn test_jwt_decode_accepts_correct_secret() {
 
 #[test]
 fn test_api_response_success_shape() {
-    let resp = galaxy_router::api::response::ApiResponse::success(42_i32);
+    let resp = galaxy_router::error::app::ApiResponse::success(42_i32);
     let json = serde_json::to_value(&resp).unwrap();
     assert_eq!(json["code"], 0);
     assert_eq!(json["message"], "success");
@@ -429,11 +429,11 @@ fn test_api_response_success_shape() {
 #[test]
 fn test_api_error_variants_have_distinct_codes() {
     use axum::Json;
-    let (_, Json(bad)) = galaxy_router::api::response::ApiError::bad_request("x");
-    let (_, Json(unauth)) = galaxy_router::api::response::ApiError::unauthorized("x");
-    let (_, Json(nf)) = galaxy_router::api::response::ApiError::not_found("x");
-    let (_, Json(conf)) = galaxy_router::api::response::ApiError::conflict("x");
-    let (_, Json(internal)) = galaxy_router::api::response::ApiError::internal_error("x");
+    let (_, Json(bad)) = galaxy_router::error::app::ApiError::bad_request("x");
+    let (_, Json(unauth)) = galaxy_router::error::app::ApiError::unauthorized("x");
+    let (_, Json(nf)) = galaxy_router::error::app::ApiError::not_found("x");
+    let (_, Json(conf)) = galaxy_router::error::app::ApiError::conflict("x");
+    let (_, Json(internal)) = galaxy_router::error::app::ApiError::internal_error("x");
 
     assert_eq!(bad.code, 400);
     assert_eq!(unauth.code, 401);

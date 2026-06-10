@@ -6,7 +6,7 @@ use crate::api::handlers::admin::channels::EndpointType;
 use crate::metrics::recorder::redaction::sanitize_json_content;
 use crate::metrics::recorder::save_request_record;
 use crate::relay::candidates::build_relay_candidates;
-use crate::relay::error::{ErrorFormat, ProxyError};
+use crate::error::proxy::{ErrorFormat, ProxyError};
 use crate::relay::state::ProxyState;
 
 /// 验证字符串可作为 HTTP header value
@@ -414,26 +414,26 @@ pub async fn handle_proxy_request(
         .check_rpm(&auth.key_id, auth.rate_limit_rpm)
         .await
     {
-        return crate::relay::error::format_rate_limit_error(retry_after, "RPM", auth.rate_limit_rpm, error_format);
+        return crate::error::proxy::format_rate_limit_error(retry_after, "RPM", auth.rate_limit_rpm, error_format);
     }
     if let Err(retry_after) = state
         .rate_limiter
         .check_tpm(&auth.key_id, auth.rate_limit_tpm)
         .await
     {
-        return crate::relay::error::format_rate_limit_error(retry_after, "TPM", auth.rate_limit_tpm, error_format);
+        return crate::error::proxy::format_rate_limit_error(retry_after, "TPM", auth.rate_limit_tpm, error_format);
     }
 
     // 预算检查（月/日额度）
     if let Err(msg) = check_budget(&state.pool, &auth.key_id).await {
-        return crate::relay::error::format_budget_error(&msg, error_format);
+        return crate::error::proxy::format_budget_error(&msg, error_format);
     }
 
     // 验证 API Key 是否有权访问目标模型（三段式：403→404→503）
     if let Err(e) =
         validate_model_access(&state.pool, &auth.key_id, model, &auth.allowed_groups).await
     {
-        return crate::relay::error::format_proxy_error(e, error_format);
+        return crate::error::proxy::format_proxy_error(e, error_format);
     }
 
     if is_stream {
@@ -456,7 +456,7 @@ pub async fn handle_proxy_request(
                 .body(axum::body::Body::from_stream(stream))
                 .expect("static headers + StatusCode from upstream are valid Response inputs")
                 .into_response(),
-            Err(e) => crate::relay::error::format_proxy_error(e, error_format),
+            Err(e) => crate::error::proxy::format_proxy_error(e, error_format),
         }
     } else {
         match proxy_request(
@@ -476,7 +476,7 @@ pub async fn handle_proxy_request(
                 .body(axum::body::Body::from(result.body))
                 .expect("static Content-Type + StatusCode are valid Response inputs")
                 .into_response(),
-            Err(e) => crate::relay::error::format_proxy_error(e, error_format),
+            Err(e) => crate::error::proxy::format_proxy_error(e, error_format),
         }
     }
 }

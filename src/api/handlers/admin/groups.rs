@@ -7,7 +7,8 @@ use serde::{Deserialize, Serialize};
 use sqlx::{AssertSqlSafe, SqlitePool};
 
 use crate::api::handlers::admin::channels::PaginatedResponse;
-use crate::api::{ApiError, ApiResponse, response::generate_id};
+use crate::api::response::generate_id;
+use crate::error::app::{ApiError, ApiResponse};
 use crate::metrics::query::tz_modifier;
 
 /// 分组
@@ -424,7 +425,7 @@ pub async fn delete(
     }
 
     state.cache.invalidate_all_groups().await;
-    Ok(Json(crate::api::response::success_empty()))
+    Ok(Json(crate::error::app::success_empty()))
 }
 
 /// 添加分组项
@@ -495,7 +496,7 @@ pub async fn delete_item(
     }
 
     state.cache.invalidate_all_groups().await;
-    Ok(Json(crate::api::response::success_empty()))
+    Ok(Json(crate::error::app::success_empty()))
 }
 
 async fn get_group_by_id(

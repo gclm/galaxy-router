@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
 use std::sync::Arc;
 
-use crate::api::{ApiError, ApiResponse};
+use crate::error::app::{ApiError, ApiResponse};
 use crate::config::AppConfig;
 
 #[derive(Clone)]

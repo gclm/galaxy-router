@@ -28,7 +28,7 @@
 | 6 | 业务配置变更后，必须同步失效对应 `ProxyCache` | 缓存与数据库一致性 |
 
 **踩坑警告**：
-- 错误类型当前在各模块内定义（`relay/error.rs`、`api/response.rs`），计划迁移到统一 `error/` 包
+- 错误类型统一在 `src/error/` 包：`error::proxy`（ProxyError/ErrorClass/ErrorFormat）、`error::app`（ApiError/ApiResponse）；`generate_id()` 在 `api::response`
 - `protocol/inbound/` 和 `protocol/outbound/` 是空目录待重构，不要往里放文件
 - `relay/` 为代理请求生命周期模块，`scheduler/` 为负载均衡模块
 

@@ -5,7 +5,7 @@ use axum::{
 };
 use serde::Deserialize;
 
-use crate::api::{ApiError, ApiResponse};
+use crate::error::app::{ApiError, ApiResponse};
 use crate::metrics::model::ModelRegistry;
 
 /// 定价 API 状态

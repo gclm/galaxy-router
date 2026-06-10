@@ -7,7 +7,8 @@ use serde::{Deserialize, Serialize};
 use sqlx::{AssertSqlSafe, SqlitePool};
 
 use crate::api::middleware::ApiKeyCache;
-use crate::api::{ApiError, ApiResponse, response::generate_id};
+use crate::api::response::generate_id;
+use crate::error::app::{ApiError, ApiResponse};
 use crate::metrics::query::{now_local_str, tz_modifier};
 
 /// API Key
@@ -314,5 +315,5 @@ pub async fn delete(
     // 清除缓存
     state.api_key_cache.invalidate(&api_key_value).await;
 
-    Ok(Json(crate::api::response::success_empty()))
+    Ok(Json(crate::error::app::success_empty()))
 }

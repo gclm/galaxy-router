@@ -3,7 +3,7 @@ use serde_json::Value;
 
 use crate::api::handlers::admin::channels::EndpointType;
 use crate::api::middleware::ApiKeyAuth;
-use crate::relay::error::ErrorFormat;
+use crate::error::proxy::ErrorFormat;
 use crate::relay::pipeline::handle_proxy_request;
 use crate::relay::state::ProxyState;
 

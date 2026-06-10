@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 
 use crate::api::handlers::admin::channels::EndpointType;
-use crate::relay::error::ProxyError;
+use crate::error::proxy::ProxyError;
 use crate::relay::run::RelayCandidate;
 use crate::relay::state::ProxyState;
 use crate::scheduler::scoring::{

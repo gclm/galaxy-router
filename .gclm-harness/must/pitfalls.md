@@ -4,7 +4,7 @@
 
 ## 硬约束（不许做的事）
 
-- 错误类型规划迁移到统一 `error/` 包（`AppError` + `ProxyError`），当前仍在各模块内定义（`relay/error.rs`、`api/response.rs`）
+- 错误类型已统一到 `src/error/` 包：`error::proxy`（ProxyError/ErrorClass/ErrorFormat）、`error::app`（ApiError/ApiResponse）
 - `protocol/inbound/` 和 `protocol/outbound/` 不是空目录，已有协议转换实现，可以修改
 - 代理 API 响应不能包装成 `{code, message, data}`——必须透传上游原格式，保证 SDK 兼容
 - 数据库迁移不可回滚、不可修改已发布版本，只能追加新文件（version > 0）

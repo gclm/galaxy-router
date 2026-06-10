@@ -9,7 +9,7 @@ use crate::relay::prepare::prepare_proxy_request;
 use crate::relay::run::{
     RelayAttemptError, RelayAttemptExecutor, RelayAttemptResult, RelayCandidate, RelayRequest,
 };
-use crate::relay::error::ProxyError;
+use crate::error::proxy::ProxyError;
 use crate::relay::state::{ProxyState, ProxySuccess};
 use crate::scheduler::selector::SelectionResult;
 
@@ -326,7 +326,7 @@ mod tests {
 
     use crate::db::Database;
     use crate::metrics::model::ModelRegistry;
-    use crate::relay::error::ProxyError;
+    use crate::error::proxy::ProxyError;
     use crate::relay::pipeline::proxy_request;
     use crate::relay::state::ProxyState;
     use axum::{Router, routing::post};

@@ -7,7 +7,7 @@ use crate::metrics::model::ModelRegistry;
 use crate::metrics::recorder::StatsRecorder;
 use crate::relay::cache::ProxyCache;
 use crate::relay::channel::ChannelInfo;
-use crate::relay::error::ProxyError;
+use crate::error::proxy::ProxyError;
 use crate::relay::queue::RequestQueue;
 use crate::relay::ratelimit::RateLimiter;
 use crate::scheduler::state::LoadBalancerState;

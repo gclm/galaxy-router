@@ -6,7 +6,7 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use sqlx::AssertSqlSafe;
 
-use crate::api::{ApiError, ApiResponse};
+use crate::error::app::{ApiError, ApiResponse};
 use crate::metrics::query::{StatsState, tz_modifier};
 
 /// 查询参数
@@ -309,5 +309,5 @@ pub async fn delete_budget(
         return Err(ApiError::not_found("预算限制不存在"));
     }
 
-    Ok(Json(crate::api::response::success_empty()))
+    Ok(Json(crate::error::app::success_empty()))
 }

@@ -19,7 +19,7 @@ use axum_extra::{
 };
 use sqlx::SqlitePool;
 
-use crate::api::ApiError;
+use crate::error::app::ApiError;
 use crate::auth::decode_jwt;
 
 /// 缓存条目 TTL（秒）

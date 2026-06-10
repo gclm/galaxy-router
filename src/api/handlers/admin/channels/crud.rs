@@ -10,7 +10,7 @@ use super::types::{
     UpdateChannelRequest, UpstreamApiKey,
 };
 use crate::api::response::generate_id;
-use crate::api::{ApiError, ApiResponse};
+use crate::error::app::{ApiError, ApiResponse};
 use crate::metrics::query::tz_modifier;
 
 /// 获取渠道列表（支持搜索、筛选、排序、分页）
@@ -306,7 +306,7 @@ pub async fn delete(
     }
 
     state.cache.invalidate_channel(&id).await;
-    Ok(Json(crate::api::response::success_empty()))
+    Ok(Json(crate::error::app::success_empty()))
 }
 
 /// 根据 ID 获取渠道

@@ -11,7 +11,7 @@ use super::types::{
     ChannelState, CustomHeader, DetectRequest, DetectResponse, EndpointConfig, EndpointDetection,
     EndpointType, TestChannelRequest, TestChannelResponse,
 };
-use crate::api::{ApiError, ApiResponse};
+use crate::error::app::{ApiError, ApiResponse};
 
 const TEST_PROMPT: &str = "Hello! Please respond with a brief greeting in one sentence.";
 

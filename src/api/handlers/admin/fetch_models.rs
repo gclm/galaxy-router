@@ -3,7 +3,7 @@ use reqwest::Client;
 use serde::Deserialize;
 
 use crate::api::handlers::admin::channels::{EndpointConfig, EndpointType};
-use crate::api::{ApiError, ApiResponse};
+use crate::error::app::{ApiError, ApiResponse};
 
 /// 获取模型列表请求
 #[derive(Debug, Deserialize)]

@@ -19,7 +19,7 @@ use crate::relay::run::{
     RelayAttemptError, RelayCandidate, RelayRequest, RelayStreamAttemptExecutor,
     RelayStreamAttemptResult, RelayStreamSuccess,
 };
-use crate::relay::error::ProxyError;
+use crate::error::proxy::ProxyError;
 use crate::relay::state::ProxyState;
 use crate::scheduler::selector::SelectionResult;
 use axum::http::StatusCode;

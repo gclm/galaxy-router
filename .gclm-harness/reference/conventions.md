@@ -14,12 +14,15 @@
 
 ## 错误处理
 
-- **业务错误**：各模块定义自己的 enum（`relay/error.rs::ProxyError`），用 `thiserror` 派生 `Error`
+- **业务错误**：统一在 `src/error/` 包中定义
+  - `error::proxy` — `ProxyError`（代理层错误枚举）、`ErrorClass`（重试策略分类）、`ErrorFormat`（响应格式）
+  - `error::app` — `ApiError`（管理后台错误响应）、`ApiResponse`（管理后台成功响应）
 - **基础设施错误**：`anyhow::Result` 传播（DB 连接、配置加载）
 - **HTTP 错误响应**：
   - 代理 API：按入站协议格式返回（OpenAI → `{"error": {...}}`，Anthropic → `{"type": "error", ...}`）
   - 管理 API：统一 `ApiError { code, message }` 格式
 - **错误分类**：`ErrorClass` 枚举（KeyRetryable / UpstreamRetryable / Client / Internal）驱动重试策略
+- **工具函数**：`generate_id()` 在 `api::response` 模块（UUID v7 生成）
 
 ## 测试规范
 

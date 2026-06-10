@@ -9,7 +9,7 @@ type GroupRow = (String, String, Option<String>, bool, i32, i32, bool);
 
 use crate::api::handlers::admin::channels::Channel;
 use crate::api::handlers::admin::channels::ChannelRow;
-use crate::api::{ApiError, ApiResponse};
+use crate::error::app::{ApiError, ApiResponse};
 
 const BACKUP_FORMAT: &str = "galaxy-router-backup";
 const BACKUP_VERSION: i32 = 1;

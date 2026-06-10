@@ -9,6 +9,7 @@ mod api;
 mod auth;
 mod config;
 mod db;
+mod error;
 mod metrics;
 mod protocol;
 mod relay;

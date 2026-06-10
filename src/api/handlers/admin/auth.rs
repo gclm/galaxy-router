@@ -2,7 +2,7 @@ use axum::{Json, extract::State, http::StatusCode};
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
 
-use crate::api::{ApiError, ApiResponse};
+use crate::error::app::{ApiError, ApiResponse};
 use crate::auth::{JwtService, PasswordService};
 
 /// 认证状态
@@ -181,5 +181,5 @@ pub async fn change_password(
         .await
         .map_err(|e| ApiError::internal_error(e.to_string()))?;
 
-    Ok(Json(crate::api::response::success_empty()))
+    Ok(Json(crate::error::app::success_empty()))
 }
