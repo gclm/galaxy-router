@@ -35,7 +35,7 @@ export const channelsApi = {
   delete: (id: string) => apiClient.delete<void>(`/channels/${id}`),
 
   fetchModels: (data: FetchModelsRequest) =>
-    apiClient.post<string[]>('/fetch-models', data),
+    apiClient.post<string[]>('/models/fetch', data),
 
   testChannel: (id: string, data: TestChannelRequest) =>
     apiClient.post<TestChannelResponse>(`/channels/${id}/test`, data),

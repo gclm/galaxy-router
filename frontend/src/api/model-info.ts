@@ -20,9 +20,9 @@ export interface ModelInfo {
 }
 
 export const modelInfoApi = {
-  list: () => apiClient.get<ModelInfo[]>('/models/info'),
+  list: () => apiClient.get<ModelInfo[]>('/models'),
 
-  get: (model: string) => apiClient.get<ModelInfo>(`/models/info/${encodeURIComponent(model)}`),
+  get: (model: string) => apiClient.get<ModelInfo>(`/models/${encodeURIComponent(model)}`),
 
-  update: (data: Partial<ModelInfo> & { model: string }) => apiClient.put<void>('/models/info', data),
+  update: (data: Partial<ModelInfo> & { model: string }) => apiClient.put<void>('/models', data),
 }

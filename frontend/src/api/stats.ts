@@ -31,10 +31,10 @@ export const statsApi = {
   models: (params?: StatsParams) => apiClient.get<ModelStats[]>('/stats/models', statsQuery(params)),
   channels: (params?: StatsParams) => apiClient.get<ChannelStats[]>('/stats/channels', statsQuery(params)),
   latency: (params?: StatsParams) => apiClient.get<LatencyStats>('/stats/latency', statsQuery(params)),
-  listBudgets: () => apiClient.get<BudgetLimit[]>('/stats/budgets'),
+  listBudgets: () => apiClient.get<BudgetLimit[]>('/budgets'),
   setBudget: (data: { api_key_id: string; monthly_limit_usd?: number; daily_limit_usd?: number; enabled?: boolean }) =>
-    apiClient.post<BudgetLimit>('/stats/budgets', data),
-  deleteBudget: (id: string) => apiClient.delete(`/stats/budgets/${id}`),
+    apiClient.post<BudgetLimit>('/budgets', data),
+  deleteBudget: (id: string) => apiClient.delete(`/budgets/${id}`),
   logModels: () => apiClient.get<string[]>('/stats/logs/models'),
   logs: (params?: LogsParams) => apiClient.get<{ items: RequestLog[]; total: number }>('/stats/logs', params as Record<string, string | number | undefined>),
   logDetail: (id: string) => apiClient.get<RequestLogDetail>(`/stats/logs/${id}`),

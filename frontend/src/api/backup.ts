@@ -56,9 +56,9 @@ export interface ResetResult {
 }
 
 export const backupApi = {
-  export: () => apiClient.get<BackupFile>('/backup/export'),
+  export: () => apiClient.get<BackupFile>('/backups'),
 
-  import: (data: BackupFile) => apiClient.post<ImportResult>('/backup/import', data),
+  import: (data: BackupFile) => apiClient.post<ImportResult>('/backups', data),
 
-  reset: () => apiClient.post<ResetResult>('/backup/reset'),
+  reset: () => apiClient.delete<ResetResult>('/backups'),
 }

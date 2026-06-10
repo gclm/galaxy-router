@@ -630,7 +630,7 @@ async fn test_e2e_admin_models_info_list_and_get_404() {
         .clone()
         .oneshot(
             Request::builder()
-                .uri("/api/v1/admin/models/info")
+                .uri("/api/v1/admin/models")
                 .header("authorization", format!("Bearer {}", jwt))
                 .body(Body::empty())
                 .unwrap(),
@@ -643,7 +643,7 @@ async fn test_e2e_admin_models_info_list_and_get_404() {
     let resp = app
         .oneshot(
             Request::builder()
-                .uri("/api/v1/admin/models/info/no-such-model")
+                .uri("/api/v1/admin/models/no-such-model")
                 .header("authorization", format!("Bearer {}", jwt))
                 .body(Body::empty())
                 .unwrap(),
@@ -708,7 +708,7 @@ async fn test_e2e_admin_backup_export() {
     let resp = app
         .oneshot(
             Request::builder()
-                .uri("/api/v1/admin/backup/export")
+                .uri("/api/v1/admin/backups")
                 .header("authorization", format!("Bearer {}", jwt))
                 .body(Body::empty())
                 .unwrap(),

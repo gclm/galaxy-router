@@ -89,7 +89,7 @@ async fn test_stats_set_budget() {
     let resp = app
         .oneshot(app.admin_json(
             Method::POST,
-            "/api/v1/admin/stats/budgets",
+            "/api/v1/admin/budgets",
             &format!(r#"{{"api_key_id":"{key_id}","monthly_limit_usd":10.0,"daily_limit_usd":1.0}}"#),
         ))
         .await;
@@ -102,7 +102,7 @@ async fn test_stats_set_budget() {
 async fn test_stats_list_budgets_empty() {
     let app = TestApp::new().await;
     let resp = app
-        .oneshot(app.admin_req(Method::GET, "/api/v1/admin/stats/budgets"))
+        .oneshot(app.admin_req(Method::GET, "/api/v1/admin/budgets"))
         .await;
     let body = assert_status(resp, StatusCode::OK).await;
     assert_eq!(body["data"].as_array().unwrap().len(), 0);
@@ -117,7 +117,7 @@ async fn test_stats_delete_budget() {
     let resp = app
         .oneshot(app.admin_json(
             Method::POST,
-            "/api/v1/admin/stats/budgets",
+            "/api/v1/admin/budgets",
             &format!(r#"{{"api_key_id":"{key_id}","monthly_limit_usd":5.0}}"#),
         ))
         .await;
@@ -128,7 +128,7 @@ async fn test_stats_delete_budget() {
     let resp = app
         .oneshot(app.admin_req(
             Method::DELETE,
-            &format!("/api/v1/admin/stats/budgets/{budget_id}"),
+            &format!("/api/v1/admin/budgets/{budget_id}"),
         ))
         .await;
     assert_status(resp, StatusCode::OK).await;

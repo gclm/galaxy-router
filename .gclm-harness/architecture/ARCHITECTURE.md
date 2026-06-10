@@ -8,7 +8,7 @@ galaxy-router
 ├── config.rs            # AppConfig（TOML 加载 + 环境变量覆盖）
 ├── api/                 # HTTP 路由层
 │   ├── router.rs        # 路由注册（proxy + admin）
-│   ├── response.rs      # 统一管理响应格式 ApiError
+│   ├── response.rs      # generate_id() 工具函数
 │   ├── handlers/
 │   │   ├── admin/       # 管理 API（CRUD: channels/groups/api-keys/stats/settings/backup）
 │   │   └── proxy/       # 代理 API（chat/embeddings/images/messages/models/responses）
@@ -25,7 +25,6 @@ galaxy-router
 │   ├── cache.rs         # ProxyCache（groups/channels/regex 三层缓存）
 │   ├── queue.rs         # RequestQueue（排队 Semaphore）
 │   ├── ratelimit.rs     # RateLimiter（RPM + TPM 令牌桶）
-│   ├── error.rs         # ProxyError + ErrorClass + 格式化错误响应
 │   ├── prepare.rs       # 请求预处理
 │   └── scheduler_task.rs # Scheduler（后台任务，启动调度器）
 ├── scheduler/           # ★ 负载均衡
@@ -55,6 +54,9 @@ galaxy-router
 ├── auth/                # 认证模块
 │   ├── jwt.rs           # JWT 签发/验证
 │   └── password.rs      # Argon2 密码哈希
+├── error/                # 统一错误类型
+│   ├── app.rs           # ApiError + ApiResponse（管理 API 统一响应）
+│   └── proxy.rs         # ProxyError + ErrorClass + ErrorFormat + 格式化
 ├── db/                  # 数据库
 │   ├── mod.rs           # Database（连接池 + 迁移）
 │   └── migrations/      # SQL 迁移文件（1-12）
@@ -126,21 +128,4 @@ api ──→ relay ──→ scheduler
 
 ## 已知技术债
 
-### Admin API RESTful 不规范
-
-部分接口不符合 RESTful 规范，存在 HTTP 方法乱用和路径设计问题：
-
-| 问题 | 当前 | 建议 |
-|------|------|------|
-| 动作当资源名 | `/fetch-models` POST | `POST /models/fetch` 或视为模型资源操作 |
-| 动作当路径 | `/channels/{id}/test` POST、`/channels/{id}/detect` POST | `POST /channels/{id}:test`（子资源动作） |
-| 非资源化路径 | `/backup/export` GET、`/backup/import` POST、`/backup/reset` POST | `GET /backups`、`POST /backups`、`DELETE /backups` |
-| 查询混入写操作 | `/stats/budgets` POST 创建预算（stats 是只读语义） | `POST /budgets` 独立资源 |
-| 请求格式不统一 | 部分接口 body 格式不一致 | 需逐个审计对齐 |
-
-**影响**：前端代码依赖当前路径，重构需前后端联动。
-
-### 错误类型分散
-
-- 当前：`relay/error.rs`（ProxyError）、`api/response.rs`（ApiError）、middleware 内联错误
-- 计划：迁移到 `src/error/` 统一包，内含 `AppError`（管理+认证）+ `ProxyError`（代理）
+（无）

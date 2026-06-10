@@ -9,7 +9,7 @@ use super::common::{app::TestApp, assert_status, to_json};
 async fn test_backup_export_empty_data() {
     let app = TestApp::new().await;
     let resp = app
-        .oneshot(app.admin_req(Method::GET, "/api/v1/admin/backup/export"))
+        .oneshot(app.admin_req(Method::GET, "/api/v1/admin/backups"))
         .await;
     let body = assert_status(resp, StatusCode::OK).await;
     assert_eq!(body["data"]["format"], "galaxy-router-backup");
@@ -29,7 +29,7 @@ async fn test_backup_export_with_data() {
     app.insert_api_key("test-key", true).await;
 
     let resp = app
-        .oneshot(app.admin_req(Method::GET, "/api/v1/admin/backup/export"))
+        .oneshot(app.admin_req(Method::GET, "/api/v1/admin/backups"))
         .await;
     let body = assert_status(resp, StatusCode::OK).await;
     assert_eq!(body["data"]["data"]["channels"].as_array().unwrap().len(), 1);
@@ -52,7 +52,7 @@ async fn test_backup_import_valid() {
         }
     }"#;
     let resp = app
-        .oneshot(app.admin_json(Method::POST, "/api/v1/admin/backup/import", import_body))
+        .oneshot(app.admin_json(Method::POST, "/api/v1/admin/backups", import_body))
         .await;
     let body = assert_status(resp, StatusCode::OK).await;
     assert_eq!(body["code"], 0);
@@ -71,7 +71,7 @@ async fn test_backup_import_invalid_format_returns_400() {
         "data": {"channels":[],"groups":[],"api_keys":[],"settings":[]}
     }"#;
     let resp = app
-        .oneshot(app.admin_json(Method::POST, "/api/v1/admin/backup/import", import_body))
+        .oneshot(app.admin_json(Method::POST, "/api/v1/admin/backups", import_body))
         .await;
     assert_status(resp, StatusCode::BAD_REQUEST).await;
 }
@@ -87,7 +87,7 @@ async fn test_backup_import_version_mismatch_returns_400() {
         "data": {"channels":[],"groups":[],"api_keys":[],"settings":[]}
     }"#;
     let resp = app
-        .oneshot(app.admin_json(Method::POST, "/api/v1/admin/backup/import", import_body))
+        .oneshot(app.admin_json(Method::POST, "/api/v1/admin/backups", import_body))
         .await;
     assert_status(resp, StatusCode::BAD_REQUEST).await;
 }
@@ -99,7 +99,7 @@ async fn test_backup_reset_returns_counts() {
     app.insert_api_key("key-1", true).await;
 
     let resp = app
-        .oneshot(app.admin_json(Method::POST, "/api/v1/admin/backup/reset", "{}"))
+        .oneshot(app.admin_req(Method::DELETE, "/api/v1/admin/backups"))
         .await;
     let body = assert_status(resp, StatusCode::OK).await;
     assert_eq!(body["code"], 0);
@@ -116,20 +116,20 @@ async fn test_backup_export_reset_import_roundtrip() {
 
     // 1. Export
     let resp = app
-        .oneshot(app.admin_req(Method::GET, "/api/v1/admin/backup/export"))
+        .oneshot(app.admin_req(Method::GET, "/api/v1/admin/backups"))
         .await;
     let export_body = assert_status(resp, StatusCode::OK).await;
     let exported_data = serde_json::to_string(&export_body["data"]).unwrap();
 
     // 2. Reset
     let resp = app
-        .oneshot(app.admin_json(Method::POST, "/api/v1/admin/backup/reset", "{}"))
+        .oneshot(app.admin_req(Method::DELETE, "/api/v1/admin/backups"))
         .await;
     assert_status(resp, StatusCode::OK).await;
 
     // 3. Import
     let resp = app
-        .oneshot(app.admin_json(Method::POST, "/api/v1/admin/backup/import", &exported_data))
+        .oneshot(app.admin_json(Method::POST, "/api/v1/admin/backups", &exported_data))
         .await;
     let body = assert_status(resp, StatusCode::OK).await;
     assert_eq!(body["data"]["channels_imported"], 1);

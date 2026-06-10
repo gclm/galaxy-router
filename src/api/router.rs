@@ -17,9 +17,9 @@ use crate::api::handlers::admin::api_keys::{self, ApiKeyState};
 use crate::api::handlers::admin::auth::{self, AuthState};
 use crate::api::handlers::admin::backup::{self, BackupState};
 use crate::api::handlers::admin::channels::{self, ChannelState};
-use crate::api::handlers::admin::fetch_models::{self, FetchModelsState};
+use crate::api::handlers::admin::fetch_models;
 use crate::api::handlers::admin::groups::{self, GroupState};
-use crate::api::handlers::admin::model_info::{self, ModelInfoState};
+use crate::api::handlers::admin::model_info::{self, ModelsState};
 use crate::api::handlers::admin::settings::{self, SettingsState};
 use crate::api::handlers::admin::stats::{self, StatsApiState};
 use crate::api::handlers::admin::system_info::{self, SystemInfoState};
@@ -78,12 +78,9 @@ pub async fn create_router(
         stats: StatsState::new(pool.clone(), config.server.timezone_offset),
     };
 
-    let model_info_state = ModelInfoState {
+    let models_state = ModelsState {
         model_registry: model_registry.clone(),
-    };
-
-    let fetch_models_state = FetchModelsState {
-        http_client: reqwest::Client::builder()
+        fetch_client: reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(10))
             .build()
             .expect("Failed to create HTTP client"),
@@ -165,19 +162,25 @@ pub async fn create_router(
                 .route("/daily", get(stats::daily))
                 .route("/api-keys", get(stats::api_keys))
                 .route("/latency", get(stats::latency))
-                .route("/budgets", get(stats::list_budgets).post(stats::set_budget))
-                .route("/budgets/{id}", delete(stats::delete_budget))
                 .route("/logs", get(stats::logs))
                 .route("/logs/models", get(stats::log_models))
                 .route("/logs/{id}", get(stats::log_detail))
+                .with_state(stats_state.clone()),
+        )
+        .nest(
+            "/budgets",
+            Router::new()
+                .route("/", get(stats::list_budgets).post(stats::set_budget))
+                .route("/{id}", delete(stats::delete_budget))
                 .with_state(stats_state),
         )
         .nest(
-            "/models/info",
+            "/models",
             Router::new()
                 .route("/", get(model_info::list).put(model_info::update))
+                .route("/fetch", post(fetch_models::fetch_models))
                 .route("/{model}", get(model_info::get))
-                .with_state(model_info_state),
+                .with_state(models_state),
         )
         .nest(
             "/system-info",
@@ -194,18 +197,10 @@ pub async fn create_router(
                 .with_state(settings_state),
         )
         .nest(
-            "/backup",
+            "/backups",
             Router::new()
-                .route("/export", get(backup::export))
-                .route("/import", post(backup::import))
-                .route("/reset", post(backup::reset))
+                .route("/", get(backup::export).post(backup::import).delete(backup::reset))
                 .with_state(backup_state),
-        )
-        .nest(
-            "/fetch-models",
-            Router::new()
-                .route("/", post(fetch_models::fetch_models))
-                .with_state(fetch_models_state),
         )
         .layer(middleware::from_fn(require_admin_auth))
         .layer(middleware::from_fn(crate::api::middleware::require_json));
