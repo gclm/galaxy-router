@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex};
 use crate::api::handlers::admin::channels::EndpointType;
 use crate::metrics::attempt::AttemptStats;
 use crate::metrics::usage::{calculate_cost, resolve_non_stream_usage};
-use crate::relay::pipeline::RelayPipeline;
+use crate::relay::converter::RelayPipeline;
 use crate::relay::prepare::prepare_proxy_request;
 use crate::relay::run::{
     RelayAttemptError, RelayAttemptExecutor, RelayAttemptResult, RelayCandidate, RelayRequest,

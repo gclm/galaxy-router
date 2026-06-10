@@ -13,7 +13,7 @@ use crate::protocol::sse::{
     find_sse_boundary, format_stream_error_event, sanitize_upstream_error,
 };
 use crate::protocol::thinking_normalizer::{PassthroughNormalizer, ThinkingTagExtractor};
-use crate::relay::pipeline::RelayPipeline;
+use crate::relay::converter::RelayPipeline;
 use crate::relay::prepare::{extract_request_text, prepare_proxy_request};
 use crate::relay::run::{
     RelayAttemptError, RelayCandidate, RelayRequest, RelayStreamAttemptExecutor,

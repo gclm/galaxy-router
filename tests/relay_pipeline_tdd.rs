@@ -1,5 +1,5 @@
 use galaxy_router::api::handlers::admin::channels::EndpointType;
-use galaxy_router::relay::pipeline::{RelayPipeline, RelayPipelineRequest};
+use galaxy_router::relay::converter::{RelayPipeline, RelayPipelineRequest};
 use serde_json::json;
 
 #[test]
