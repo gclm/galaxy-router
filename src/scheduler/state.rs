@@ -13,14 +13,12 @@ use crate::scheduler::runtime::{ChannelRuntimeManager, ChannelRuntimeStats};
 
 /// 渠道状态
 #[derive(Debug)]
-#[allow(dead_code)]
 pub struct ChannelStatus {
     pub channel_id: String,
     pub success_count: u64,
     pub failure_count: u64,
     pub last_success: Option<DateTime<Utc>>,
     pub last_failure: Option<DateTime<Utc>>,
-    pub last_health_check: Option<DateTime<Utc>>,
     pub avg_latency_ms: f64,
     pub is_blacklisted: bool,
     pub blacklist_until: Option<DateTime<Utc>>,
@@ -41,7 +39,6 @@ impl ChannelStatus {
             failure_count: 0,
             last_success: None,
             last_failure: None,
-            last_health_check: None,
             avg_latency_ms: 0.0,
             is_blacklisted: false,
             blacklist_until: None,
@@ -52,7 +49,7 @@ impl ChannelStatus {
     }
 
     /// 计算错误率
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub fn error_rate(&self) -> f64 {
         let total = self.success_count + self.failure_count;
         if total == 0 {
@@ -103,15 +100,6 @@ impl ChannelStatus {
 
         // 更新最后使用时间
         *self.last_used_at.write().await = Instant::now();
-    }
-
-    /// 记录健康探测结果
-    #[allow(dead_code)]
-    pub fn record_health_check(&mut self, success: bool) {
-        self.last_health_check = Some(Utc::now());
-        if !success {
-            self.record_failure();
-        }
     }
 
     /// 记录失败
@@ -470,7 +458,7 @@ mod tests {
         let stats = lb.runtime_stats("ch-runtime");
         assert!(stats.error_rate() < after_failure);
         assert_eq!(stats.avg_latency_ms(), 120.0);
-        assert_eq!(stats.request_count(), 2);
+        assert_eq!(stats.request_count, 2);
     }
 
     #[tokio::test]

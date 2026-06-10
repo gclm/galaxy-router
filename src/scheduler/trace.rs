@@ -3,7 +3,6 @@
 pub enum AttemptStatus {
     Skipped,
     CircuitBreak,
-    Acquired,
     Success,
     Failed,
 }
@@ -46,11 +45,6 @@ impl AttemptTraceBuilder {
 
     pub fn circuit_break(&mut self) -> AttemptTraceDraft<'_> {
         self.draft(AttemptStatus::CircuitBreak)
-    }
-
-    #[allow(dead_code)]
-    pub fn acquired(&mut self) -> AttemptTraceDraft<'_> {
-        self.draft(AttemptStatus::Acquired)
     }
 
     pub fn success(&mut self) -> AttemptTraceDraft<'_> {
@@ -105,30 +99,6 @@ impl AttemptTraceDraft<'_> {
         self
     }
 
-    #[allow(dead_code)]
-    pub fn upstream_key_hint(mut self, upstream_key_hint: impl Into<String>) -> Self {
-        self.attempt.upstream_key_hint = Some(upstream_key_hint.into());
-        self
-    }
-
-    #[allow(dead_code)]
-    pub fn upstream_model(mut self, upstream_model: impl Into<String>) -> Self {
-        self.attempt.upstream_model = Some(upstream_model.into());
-        self
-    }
-
-    #[allow(dead_code)]
-    pub fn client_endpoint(mut self, client_endpoint: impl Into<String>) -> Self {
-        self.attempt.client_endpoint = Some(client_endpoint.into());
-        self
-    }
-
-    #[allow(dead_code)]
-    pub fn upstream_endpoint(mut self, upstream_endpoint: impl Into<String>) -> Self {
-        self.attempt.upstream_endpoint = Some(upstream_endpoint.into());
-        self
-    }
-
     pub fn reason(mut self, reason: impl Into<String>) -> Self {
         self.attempt.reason = Some(reason.into());
         self
@@ -136,12 +106,6 @@ impl AttemptTraceDraft<'_> {
 
     pub fn duration_ms(mut self, duration_ms: i64) -> Self {
         self.attempt.duration_ms = Some(duration_ms);
-        self
-    }
-
-    #[allow(dead_code)]
-    pub fn queue_wait_ms(mut self, queue_wait_ms: i64) -> Self {
-        self.attempt.queue_wait_ms = Some(queue_wait_ms);
         self
     }
 

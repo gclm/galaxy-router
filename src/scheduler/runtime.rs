@@ -17,7 +17,7 @@ pub struct ChannelRuntimeStats {
     latency_ewma: f64,
     ttft_ewma: f64,
     health: f64,
-    request_count: u64,
+    pub request_count: u64,
 }
 
 impl Default for ChannelRuntimeStats {
@@ -33,11 +33,6 @@ impl Default for ChannelRuntimeStats {
 }
 
 impl ChannelRuntimeStats {
-    #[allow(dead_code)]
-    pub fn new() -> Self {
-        Self::default()
-    }
-
     /// 记录请求成功，更新 latency 和可选 TTFT
     pub fn record_success(&mut self, latency_ms: f64, ttft_ms: Option<f64>) {
         // EWMA: error 衰减（成功 = 0）
@@ -84,11 +79,6 @@ impl ChannelRuntimeStats {
         self.health
     }
 
-    #[allow(dead_code)]
-    pub fn request_count(&self) -> u64 {
-        self.request_count
-    }
-
     fn update_latency_ewma(&mut self, latency_ms: f64) {
         if self.latency_ewma == 0.0 {
             self.latency_ewma = latency_ms;
@@ -114,7 +104,6 @@ pub struct ChannelRuntimeManager {
 }
 
 impl ChannelRuntimeManager {
-    #[allow(dead_code)]
     pub fn new() -> Self {
         Self::default()
     }
@@ -164,7 +153,7 @@ mod tests {
     /// P6.1: 失败后成功，error_rate 下降但不归零
     #[test]
     fn runtime_error_ewma_decreases_after_success_but_not_zero() {
-        let mut stats = ChannelRuntimeStats::new();
+        let mut stats = ChannelRuntimeStats::default();
 
         // 初始 error_rate = 0
         assert_eq!(stats.error_rate(), 0.0);
@@ -197,7 +186,7 @@ mod tests {
     /// P6.1: 连续失败后 error_rate 接近 1.0
     #[test]
     fn runtime_error_ewma_converges_on_repeated_failures() {
-        let mut stats = ChannelRuntimeStats::new();
+        let mut stats = ChannelRuntimeStats::default();
         for _ in 0..20 {
             stats.record_failure();
         }
@@ -211,7 +200,7 @@ mod tests {
     /// P6.1: 连续成功后 error_rate 接近 0.0
     #[test]
     fn runtime_error_ewma_converges_on_repeated_successes() {
-        let mut stats = ChannelRuntimeStats::new();
+        let mut stats = ChannelRuntimeStats::default();
         // 先建立一些失败
         for _ in 0..5 {
             stats.record_failure();
@@ -230,7 +219,7 @@ mod tests {
     /// P6.2: TTFT EWMA 跟踪流式首 token 延迟
     #[test]
     fn runtime_ttft_ewma_tracks_first_token_latency() {
-        let mut stats = ChannelRuntimeStats::new();
+        let mut stats = ChannelRuntimeStats::default();
         assert_eq!(stats.avg_ttft_ms(), 0.0);
 
         stats.record_success(200.0, Some(50.0));
@@ -251,7 +240,7 @@ mod tests {
     /// P6.2: 非流式请求不影响 TTFT
     #[test]
     fn runtime_ttft_unchanged_without_streaming() {
-        let mut stats = ChannelRuntimeStats::new();
+        let mut stats = ChannelRuntimeStats::default();
         stats.record_success(100.0, None);
         assert_eq!(
             stats.avg_ttft_ms(),
@@ -263,7 +252,7 @@ mod tests {
     /// P6.4: monitor 探测失败降低 health factor
     #[test]
     fn runtime_monitor_failure_lowers_health() {
-        let mut stats = ChannelRuntimeStats::new();
+        let mut stats = ChannelRuntimeStats::default();
         assert_eq!(stats.health(), 1.0);
 
         stats.record_monitor_failure();
@@ -287,7 +276,7 @@ mod tests {
     /// P6.4: monitor 探测成功恢复 health，但上限为 1.0
     #[test]
     fn runtime_monitor_success_recovers_health_capped_at_one() {
-        let mut stats = ChannelRuntimeStats::new();
+        let mut stats = ChannelRuntimeStats::default();
         stats.record_monitor_failure();
         let after_failure = stats.health();
         assert!(after_failure < 1.0);
@@ -321,7 +310,7 @@ mod tests {
 
         assert!(a.error_rate() > b.error_rate());
         assert!(b.avg_latency_ms() > 0.0);
-        assert_eq!(a.request_count(), 1);
-        assert_eq!(b.request_count(), 1);
+        assert_eq!(a.request_count, 1);
+        assert_eq!(b.request_count, 1);
     }
 }

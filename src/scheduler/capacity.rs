@@ -2,15 +2,6 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-#[allow(dead_code)]
-pub struct ChannelLoadSnapshot {
-    pub channel_id: String,
-    pub current_concurrency: u32,
-    pub max_concurrency: u32,
-    pub load_rate: u32,
-}
-
 #[derive(Debug, Default)]
 struct ChannelCapacityState {
     active: AtomicU32,
@@ -48,32 +39,6 @@ impl ChannelCapacityManager {
             {
                 return Some(ChannelCapacityPermit::limited(state));
             }
-        }
-    }
-
-    #[allow(dead_code)]
-    pub fn load_snapshot(&self, channel_id: &str, max_concurrency: u32) -> ChannelLoadSnapshot {
-        let current = if max_concurrency == 0 {
-            0
-        } else {
-            self.states
-                .lock()
-                .expect("capacity state mutex poisoned")
-                .get(channel_id)
-                .map(|s| s.active.load(Ordering::Acquire))
-                .unwrap_or(0)
-        };
-        let load_rate = if max_concurrency == 0 {
-            0
-        } else {
-            current.saturating_mul(100) / max_concurrency
-        };
-
-        ChannelLoadSnapshot {
-            channel_id: channel_id.to_string(),
-            current_concurrency: current,
-            max_concurrency,
-            load_rate,
         }
     }
 

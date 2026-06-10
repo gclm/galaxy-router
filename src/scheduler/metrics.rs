@@ -41,15 +41,6 @@ impl SchedulerMetrics {
         self.inner.channel_switches.fetch_add(1, Ordering::Relaxed);
     }
 
-    #[allow(dead_code)]
-    pub fn snapshot(&self) -> SchedulerMetricsSnapshot {
-        SchedulerMetricsSnapshot {
-            sticky_hits: self.inner.sticky_hits.load(Ordering::Relaxed),
-            load_balance_selects: self.inner.load_balance_selects.load(Ordering::Relaxed),
-            channel_switches: self.inner.channel_switches.load(Ordering::Relaxed),
-            total_selections: self.inner.total_selections.load(Ordering::Relaxed),
-        }
-    }
 }
 
 impl Default for SchedulerMetrics {
@@ -58,13 +49,25 @@ impl Default for SchedulerMetrics {
     }
 }
 
+#[cfg(test)]
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[allow(dead_code)]
-pub struct SchedulerMetricsSnapshot {
+pub(crate) struct SchedulerMetricsSnapshot {
     pub sticky_hits: u64,
     pub load_balance_selects: u64,
     pub channel_switches: u64,
     pub total_selections: u64,
+}
+
+#[cfg(test)]
+impl SchedulerMetrics {
+    pub(crate) fn snapshot(&self) -> SchedulerMetricsSnapshot {
+        SchedulerMetricsSnapshot {
+            sticky_hits: self.inner.sticky_hits.load(Ordering::Relaxed),
+            load_balance_selects: self.inner.load_balance_selects.load(Ordering::Relaxed),
+            channel_switches: self.inner.channel_switches.load(Ordering::Relaxed),
+            total_selections: self.inner.total_selections.load(Ordering::Relaxed),
+        }
+    }
 }
 
 #[cfg(test)]

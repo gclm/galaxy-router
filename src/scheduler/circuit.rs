@@ -33,9 +33,6 @@ pub struct CircuitConfig {
     pub base_cooldown_secs: u64,
     /// 最大冷却时间（秒）
     pub max_cooldown_secs: u64,
-    /// HalfOpen 状态试探超时（秒）
-    #[allow(dead_code)]
-    pub probe_timeout_secs: u64,
 }
 
 impl Default for CircuitConfig {
@@ -44,7 +41,6 @@ impl Default for CircuitConfig {
             failure_threshold: 5,
             base_cooldown_secs: 60,
             max_cooldown_secs: 600,
-            probe_timeout_secs: 30,
         }
     }
 }
@@ -129,22 +125,6 @@ impl CircuitBreaker {
         }
     }
 
-    /// 开始试探请求（HalfOpen -> 标记试探中）
-    #[allow(dead_code)]
-    pub async fn begin_probe(&self, channel_id: &str, key_hint: &str) -> bool {
-        let key = format!("{}:{}", channel_id, key_hint);
-        let mut entries = self.entries.write().await;
-
-        if let Some(entry) = entries.get_mut(&key)
-            && entry.state == CircuitState::HalfOpen
-            && !entry.half_open_probe
-        {
-            entry.half_open_probe = true;
-            return true;
-        }
-        false
-    }
-
     /// 记录成功
     pub async fn record_success(&self, channel_id: &str, key_hint: &str) {
         let key = format!("{}:{}", channel_id, key_hint);
@@ -214,7 +194,6 @@ impl CircuitBreaker {
     }
 
     /// 清理过期条目
-    #[allow(dead_code)]
     pub async fn cleanup_expired(&self, max_age: Duration) {
         let mut entries = self.entries.write().await;
         let now = Instant::now();
@@ -224,14 +203,6 @@ impl CircuitBreaker {
                 .map(|t| now.duration_since(t) < max_age)
                 .unwrap_or(true)
         });
-    }
-
-    /// 获取熔断器状态（用于监控）
-    #[allow(dead_code)]
-    pub async fn get_status(&self, channel_id: &str, key_hint: &str) -> Option<CircuitState> {
-        let key = format!("{}:{}", channel_id, key_hint);
-        let entries = self.entries.read().await;
-        entries.get(&key).map(|e| e.state.clone())
     }
 }
 
@@ -316,90 +287,6 @@ mod tests {
         breaker.record_success("ch1", "key1").await;
         let (tripped, _) = breaker.is_tripped("ch1", "key1").await;
         assert!(!tripped);
-    }
-
-    #[tokio::test]
-    async fn test_circuit_half_open_probe() {
-        let breaker = CircuitBreaker::new(CircuitConfig {
-            failure_threshold: 2,
-            base_cooldown_secs: 0, // 立即冷却
-            ..Default::default()
-        });
-
-        // 触发熔断
-        breaker.record_failure("ch1", "key1").await;
-        breaker.record_failure("ch1", "key1").await;
-
-        // 冷却时间已过，转为 HalfOpen
-        let (tripped, _) = breaker.is_tripped("ch1", "key1").await;
-        assert!(!tripped);
-
-        // 开始试探
-        let probe_started = breaker.begin_probe("ch1", "key1").await;
-        assert!(probe_started);
-
-        // 试探期间拒绝其他请求
-        let (tripped, _) = breaker.is_tripped("ch1", "key1").await;
-        assert!(tripped);
-
-        // 试探成功，转为 Closed
-        breaker.record_success("ch1", "key1").await;
-        let (tripped, _) = breaker.is_tripped("ch1", "key1").await;
-        assert!(!tripped);
-    }
-
-    #[tokio::test]
-    async fn test_circuit_half_open_probe_failure() {
-        let breaker = CircuitBreaker::new(CircuitConfig {
-            failure_threshold: 2,
-            base_cooldown_secs: 60, // 使用非零冷却时间
-            ..Default::default()
-        });
-
-        // 触发熔断
-        breaker.record_failure("ch1", "key1").await;
-        breaker.record_failure("ch1", "key1").await;
-
-        // 验证熔断状态
-        let (tripped, remaining) = breaker.is_tripped("ch1", "key1").await;
-        assert!(tripped);
-        assert!(remaining.is_some());
-
-        // 验证状态是 Open
-        let status = breaker.get_status("ch1", "key1").await;
-        assert_eq!(status, Some(CircuitState::Open));
-
-        // 模拟冷却时间已过（手动修改 last_failure_time）
-        {
-            let mut entries = breaker.entries.write().await;
-            if let Some(entry) = entries.get_mut("ch1:key1") {
-                entry.last_failure_time =
-                    Some(std::time::Instant::now() - std::time::Duration::from_secs(120));
-            }
-        }
-
-        // 冷却时间已过，转为 HalfOpen
-        let (tripped, _) = breaker.is_tripped("ch1", "key1").await;
-        assert!(!tripped);
-
-        // 验证状态是 HalfOpen
-        let status = breaker.get_status("ch1", "key1").await;
-        assert_eq!(status, Some(CircuitState::HalfOpen));
-
-        // 开始试探
-        let probe_started = breaker.begin_probe("ch1", "key1").await;
-        assert!(probe_started);
-
-        // 试探失败，重新进入 Open
-        breaker.record_failure("ch1", "key1").await;
-
-        // 验证状态是 Open（trip_count 递增）
-        let status = breaker.get_status("ch1", "key1").await;
-        assert_eq!(status, Some(CircuitState::Open));
-
-        // 验证仍然熔断
-        let (tripped, _) = breaker.is_tripped("ch1", "key1").await;
-        assert!(tripped);
     }
 
     #[tokio::test]

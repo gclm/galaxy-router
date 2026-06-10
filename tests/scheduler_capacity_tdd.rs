@@ -11,10 +11,6 @@ fn scheduler_capacity_unlimited_channels_always_acquire() {
     assert!(first.is_some());
     assert!(second.is_some());
     assert!(third.is_some());
-    assert_eq!(
-        manager.load_snapshot("ch-unlimited", 0).current_concurrency,
-        0
-    );
 }
 
 #[test]
@@ -28,9 +24,6 @@ fn scheduler_capacity_enforces_max_concurrency() {
     assert!(first.is_some());
     assert!(second.is_some());
     assert!(third.is_none());
-    let snapshot = manager.load_snapshot("ch-limited", 2);
-    assert_eq!(snapshot.current_concurrency, 2);
-    assert_eq!(snapshot.load_rate, 100);
 }
 
 #[test]
@@ -85,7 +78,4 @@ async fn capacity_permit_stream_release_allows_reacquire_after_task_ends() {
         reacquired.is_some(),
         "permit should be released after task ends"
     );
-
-    let snapshot = manager.load_snapshot("ch-stream", 1);
-    assert_eq!(snapshot.current_concurrency, 1);
 }
