@@ -11,7 +11,6 @@ mod config;
 mod db;
 mod metrics;
 mod protocol;
-mod proxy;
 mod relay;
 mod scheduler;
 mod static_assets;
@@ -94,7 +93,7 @@ async fn main() -> Result<()> {
 
     // 启动后台调度器
     let lb_state = scheduler::state::LoadBalancerState::new();
-    let rate_limiter = proxy::ratelimit::RateLimiter::new();
+    let rate_limiter = relay::ratelimit::RateLimiter::new();
     let scheduler = Arc::new(relay::scheduler_task::Scheduler::new(
         lb_state,
         rate_limiter.clone(),

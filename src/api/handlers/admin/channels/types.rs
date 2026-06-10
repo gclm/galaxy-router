@@ -181,7 +181,7 @@ pub struct UpdateChannelRequest {
 #[derive(Clone)]
 pub struct ChannelState {
     pub pool: SqlitePool,
-    pub cache: crate::proxy::ProxyCache,
+    pub cache: crate::relay::cache::ProxyCache,
     pub http_client: reqwest::Client,
     pub timezone_offset: i32,
 }

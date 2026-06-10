@@ -24,7 +24,8 @@ use crate::api::handlers::proxy::{chat, embeddings, images, messages, models, re
 use crate::api::middleware::require_admin_auth;
 use crate::config::{AppConfig, QueuingConfig};
 use crate::metrics::query::StatsState;
-use crate::proxy::{ProxyCache, ProxyState};
+use crate::relay::cache::ProxyCache;
+use crate::relay::state::ProxyState;
 use crate::static_assets;
 
 /// 创建应用路由

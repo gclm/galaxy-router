@@ -115,7 +115,7 @@ pub async fn create(
         return Err(ApiError::bad_request("至少需要一个端点"));
     }
     for k in &req.api_keys {
-        crate::proxy::validate_header_value(&k.key)
+        crate::relay::state::validate_header_value(&k.key)
             .map_err(|e| ApiError::bad_request(format!("API Key 非法: {e}")))?;
     }
 
@@ -201,7 +201,7 @@ pub async fn update(
     }
     if let Some(ref api_keys) = req.api_keys {
         for k in api_keys {
-            crate::proxy::validate_header_value(&k.key)
+            crate::relay::state::validate_header_value(&k.key)
                 .map_err(|e| ApiError::bad_request(format!("API Key 非法: {e}")))?;
         }
         separated.push("api_keys = ");

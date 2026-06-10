@@ -2,8 +2,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
-use crate::proxy::GroupInfo;
 use crate::relay::channel::ChannelInfo;
+use crate::relay::state::GroupInfo;
 
 /// 缓存大小限制
 const CACHE_MAX_SIZE: usize = 1000;

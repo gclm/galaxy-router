@@ -2,7 +2,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::time::interval;
 
-use crate::proxy::ratelimit::RateLimiter;
+use crate::relay::ratelimit::RateLimiter;
 use crate::scheduler::state::LoadBalancerState;
 
 /// 健康探测默认间隔（秒）

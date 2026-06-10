@@ -1,7 +1,7 @@
 use crate::api::response::generate_id;
 use crate::metrics::attempt::AttemptStats;
-use crate::proxy::ratelimit::RateLimiter;
-use crate::proxy::{ProxyError, ProxyState};
+use crate::relay::ratelimit::RateLimiter;
+use crate::relay::state::{ProxyError, ProxyState};
 use sqlx::SqlitePool;
 
 /// 统计记录器

@@ -3,12 +3,30 @@ use std::sync::{Arc, Mutex};
 
 use crate::api::handlers::admin::channels::EndpointType;
 use crate::metrics::attempt::AttemptStats;
-use crate::proxy::{ProxyError, ProxyState};
-use crate::relay::http::execute_once;
+use crate::metrics::usage::{calculate_cost, resolve_non_stream_usage};
+use crate::relay::pipeline::RelayPipeline;
+use crate::relay::prepare::prepare_proxy_request;
 use crate::relay::run::{
     RelayAttemptError, RelayAttemptExecutor, RelayAttemptResult, RelayCandidate, RelayRequest,
 };
+use crate::relay::state::{ProxyError, ProxyState, ProxySuccess};
 use crate::scheduler::selector::SelectionResult;
+
+/// RAII guard：确保函数退出时自动递减活跃请求数
+struct ActiveRequestGuard {
+    state: ProxyState,
+    channel_id: String,
+}
+
+impl Drop for ActiveRequestGuard {
+    fn drop(&mut self) {
+        let state = self.state.clone();
+        let channel_id = self.channel_id.clone();
+        tokio::spawn(async move {
+            state.lb_state.decrement_active(&channel_id).await;
+        });
+    }
+}
 
 /// 非流式代理执行器：将 RelayRun 的候选迭代与真实 proxy 执行连接
 #[derive(Clone)]
@@ -17,6 +35,7 @@ pub(crate) struct ProxyRelayExecutor {
     headers: axum::http::HeaderMap,
     body: serde_json::Value,
     client_endpoint: EndpointType,
+    #[allow(dead_code)]
     api_key_id: Option<String>,
     attempt_stats: Arc<Mutex<Vec<AttemptStats>>>,
 }
@@ -109,7 +128,6 @@ impl RelayAttemptExecutor for ProxyRelayExecutor {
             }
         };
 
-        // Key rotation：尝试同渠道的多个 API key
         let api_key_attempts = self.state.api_key_attempts(&selection.channel);
         let mut last_error = None;
 
@@ -117,27 +135,16 @@ impl RelayAttemptExecutor for ProxyRelayExecutor {
             let key_hint = selection.channel.key_hint(upstream_api_key);
             let mut local_attempts = Vec::new();
 
-            let result = execute_once(
-                &self.state,
-                self.api_key_id.as_deref(),
-                upstream_api_key,
-                &key_hint,
-                &self.headers,
-                &self.body,
-                &self.client_endpoint,
-                &selection,
-                &mut local_attempts,
-            )
-            .await;
+            let result = self
+                .execute_proxy_request(upstream_api_key, &key_hint, &selection, &mut local_attempts)
+                .await;
 
-            // 将本次尝试的 AttemptStats 合并到 executor 的全局统计中
             if let Ok(mut stats) = self.attempt_stats.lock() {
                 stats.extend(local_attempts);
             }
 
             match result {
                 Ok(success) => {
-                    // 成功：返回响应体（String）
                     return RelayAttemptResult {
                         response: Ok(String::from_utf8_lossy(&success.body).to_string()),
                         response_written: false,
@@ -161,14 +168,12 @@ impl RelayAttemptExecutor for ProxyRelayExecutor {
                         continue;
                     }
 
-                    // 非 key 相关错误：返回失败（RelayRun 会尝试下一个候选）
                     return RelayAttemptResult {
                         response: Err(error),
                         response_written: false,
                     };
                 }
                 Err(e) => {
-                    // 网络/内部错误
                     return RelayAttemptResult {
                         response: Err(RelayAttemptError::new(502, e.to_string())),
                         response_written: false,
@@ -177,7 +182,6 @@ impl RelayAttemptExecutor for ProxyRelayExecutor {
             }
         }
 
-        // 所有 key 都失败了
         RelayAttemptResult {
             response: Err(
                 last_error.unwrap_or_else(|| RelayAttemptError::new(500, "all api keys exhausted"))
@@ -187,7 +191,311 @@ impl RelayAttemptExecutor for ProxyRelayExecutor {
     }
 }
 
+impl ProxyRelayExecutor {
+    /// 执行单次非流式代理请求（从 proxy/execute.rs 内迁）
+    async fn execute_proxy_request(
+        &self,
+        upstream_api_key: &str,
+        upstream_key_hint: &str,
+        selection: &SelectionResult,
+        attempts: &mut Vec<AttemptStats>,
+    ) -> Result<ProxySuccess, ProxyError> {
+        let channel_id = selection.channel.id.clone();
+        self.state
+            .lb_state
+            .ensure_channel_status(&channel_id, selection.channel.max_concurrency)
+            .await;
+        self.state.lb_state.increment_active(&channel_id).await;
+        let _guard = ActiveRequestGuard {
+            state: self.state.clone(),
+            channel_id: channel_id.clone(),
+        };
+
+        let prepared = prepare_proxy_request(
+            &self.headers,
+            &self.body,
+            &self.client_endpoint,
+            selection,
+            upstream_api_key,
+        )
+        .await?;
+        let start_time = std::time::Instant::now();
+
+        let response = self
+            .state
+            .http_client
+            .post(&prepared.url)
+            .timeout(std::time::Duration::from_secs(
+                selection.channel.timeout_secs,
+            ))
+            .headers(prepared.headers)
+            .body(prepared.body)
+            .send()
+            .await
+            .map_err(|e| ProxyError::RequestError(e.to_string()))?;
+
+        let latency_ms = start_time.elapsed().as_millis() as i64;
+        let status = response.status();
+        let response_body = response.text().await.unwrap_or_default();
+
+        let body_value: serde_json::Value =
+            serde_json::from_str(&response_body).unwrap_or_default();
+        let status_u16 = status.as_u16();
+
+        let usage = resolve_non_stream_usage(
+            &self.body,
+            &body_value,
+            &prepared.upstream_endpoint,
+            status_u16,
+        );
+        let cost = calculate_cost(&self.state.model_registry, &prepared.target_model, usage).await;
+        let input_tokens = usage.input_tokens;
+        let output_tokens = usage.output_tokens;
+        let cache_read = usage.cache_read;
+        let cache_creation = usage.cache_creation;
+
+        attempts.push(AttemptStats {
+            channel_id: prepared.channel_id.clone(),
+            target_model: prepared.target_model.clone(),
+            upstream_endpoint: prepared.upstream_endpoint.clone(),
+            needs_conversion: prepared.needs_conversion,
+            latency_ms,
+            status_code: status_u16,
+            input_tokens,
+            output_tokens,
+            cache_read,
+            cache_creation,
+            cost,
+            error_message: if !status.is_success() {
+                Some(response_body[..response_body.len().min(500)].to_string())
+            } else {
+                None
+            },
+            upstream_key_hint: upstream_key_hint.to_string(),
+        });
+
+        if !status.is_success() {
+            tracing::warn!(
+                "Upstream error: channel={}, status={}, body={}",
+                prepared.channel_id,
+                status,
+                &response_body[..response_body.len().min(300)]
+            );
+            return Err(ProxyError::UpstreamError {
+                status,
+                body: response_body,
+            });
+        }
+
+        self.state
+            .lb_state
+            .record_success(&prepared.channel_id, latency_ms as f64)
+            .await;
+
+        let final_body = if prepared.needs_conversion {
+            let finalized = RelayPipeline::finalize_response_async(
+                self.client_endpoint.clone(),
+                prepared.upstream_endpoint.clone(),
+                body_value,
+                status.as_u16(),
+            )
+            .await
+            .map_err(|e| ProxyError::TransformError(e.to_string()))?;
+            serde_json::to_vec(&finalized.body).unwrap_or_default()
+        } else {
+            response_body.into_bytes()
+        };
+
+        Ok(ProxySuccess {
+            status,
+            body: final_body,
+        })
+    }
+}
+
 /// 截断过长的错误消息
 fn sanitize_error_body(body: &str) -> String {
     body[..body.len().min(500)].to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    // ============================================================
+    // 端到端：mock 本地 upstream + 真实 ProxyState 调 proxy_request
+    // ============================================================
+
+    use crate::db::Database;
+    use crate::metrics::model::ModelRegistry;
+    use crate::relay::state::{ProxyError, ProxyState, proxy_request};
+    use axum::{Router, routing::post};
+
+    async fn spawn_mock_upstream() -> String {
+        use axum::extract::Json as AxJson;
+
+        async fn mock_chat(AxJson(_body): AxJson<serde_json::Value>) -> AxJson<serde_json::Value> {
+            AxJson(serde_json::json!({
+                "id": "chatcmpl-test",
+                "object": "chat.completion",
+                "model": "gpt-4o",
+                "choices": [{
+                    "index": 0,
+                    "message": {"role": "assistant", "content": "hi back"},
+                    "finish_reason": "stop"
+                }],
+                "usage": {
+                    "prompt_tokens": 10,
+                    "completion_tokens": 5,
+                    "total_tokens": 15
+                }
+            }))
+        }
+
+        let app = Router::new().route("/v1/chat/completions", post(mock_chat));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let _ = axum::serve(listener, app).await;
+        });
+        let url = format!("http://{}/v1/chat/completions", addr);
+        for _ in 0..20 {
+            if reqwest::Client::new()
+                .request(reqwest::Method::POST, &url)
+                .body("{}")
+                .send()
+                .await
+                .is_ok()
+            {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+        url
+    }
+
+    async fn make_state_with_channel(upstream_url: &str) -> (ProxyState, sqlx::SqlitePool) {
+        let db_path = format!("/tmp/galaxy_execute_{}.db", uuid::Uuid::now_v7());
+        let _ = std::fs::remove_file(&db_path);
+        let db_url = format!("sqlite:{}?mode=rwc", db_path);
+        let db = Database::new(&db_url).await.unwrap();
+        let pool = db.pool().clone();
+
+        let base_url = upstream_url.trim_end_matches("/chat/completions");
+        let channel_id = "ch-mock";
+        let api_keys = r#"[{"key":"sk-mock","note":"","enabled":true}]"#;
+        let endpoints = format!(
+            r#"[{{"type":"openai_chat","base_url":"{}","enabled":true}}]"#,
+            base_url
+        );
+        let models = r#"["gpt-4o"]"#;
+        sqlx::query(
+            "INSERT INTO channels (id, name, api_keys, endpoints, models, enabled) \
+             VALUES (?, 'mock', ?, ?, ?, 1)",
+        )
+        .bind(channel_id)
+        .bind(api_keys)
+        .bind(&endpoints)
+        .bind(models)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let group_id = "grp-mock";
+        sqlx::query("INSERT INTO groups (id, name, enabled) VALUES (?, 'gpt-4o', 1)")
+            .bind(group_id)
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO group_items (id, group_id, channel_id, model_name) \
+             VALUES ('item-mock', ?, ?, 'gpt-4o')",
+        )
+        .bind(group_id)
+        .bind(channel_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let registry = ModelRegistry::new(pool.clone());
+        let state = ProxyState::new(pool.clone(), registry).await;
+        (state, pool)
+    }
+
+    #[tokio::test]
+    async fn proxy_request_passes_through_to_local_upstream() {
+        use crate::api::handlers::admin::channels::EndpointType;
+
+        let upstream = spawn_mock_upstream().await;
+        let (state, pool) = make_state_with_channel(&upstream).await;
+
+        let body = serde_json::json!({
+            "model": "gpt-4o",
+            "messages": [{"role": "user", "content": "hi"}]
+        });
+        let headers = axum::http::HeaderMap::new();
+        let result = proxy_request(
+            &state,
+            "test-request-id",
+            Some("key-1"),
+            &headers,
+            &body,
+            &EndpointType::OpenAiChat,
+        )
+        .await
+        .expect("proxy should succeed");
+
+        assert_eq!(result.status, 200);
+        let resp: serde_json::Value = serde_json::from_slice(&result.body).unwrap();
+        assert_eq!(resp["choices"][0]["message"]["content"], "hi back");
+        assert_eq!(resp["usage"]["prompt_tokens"], 10);
+
+        let count: i32 = sqlx::query_scalar("SELECT COUNT(*) FROM usage_logs")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(count, 1, "应记录 1 条请求日志");
+    }
+
+    #[tokio::test]
+    async fn proxy_request_no_available_channel_returns_error() {
+        use crate::api::handlers::admin::channels::EndpointType;
+
+        let db_path = format!("/tmp/galaxy_execute_empty_{}.db", uuid::Uuid::now_v7());
+        let _ = std::fs::remove_file(&db_path);
+        let db_url = format!("sqlite:{}?mode=rwc", db_path);
+        let db = Database::new(&db_url).await.unwrap();
+        let pool = db.pool().clone();
+        let registry = ModelRegistry::new(pool.clone());
+        let state = ProxyState::new(pool.clone(), registry).await;
+
+        let body = serde_json::json!({
+            "model": "gpt-4o",
+            "messages": [{"role": "user", "content": "hi"}]
+        });
+        let headers = axum::http::HeaderMap::new();
+        let result = proxy_request(
+            &state,
+            "test-request-id",
+            Some("key-1"),
+            &headers,
+            &body,
+            &EndpointType::OpenAiChat,
+        )
+        .await;
+        let err = match result {
+            Ok(_) => panic!("expected NoAvailableChannel, got Ok"),
+            Err(e) => e,
+        };
+        assert!(matches!(err, ProxyError::ModelNotFound(_)), "got {:?}", err);
+
+        let count: i32 = sqlx::query_scalar("SELECT COUNT(*) FROM usage_logs")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(count, 1, "渠道选择失败也应记录日志");
+        let status: Option<i32> = sqlx::query_scalar("SELECT status_code FROM usage_logs LIMIT 1")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(status, Some(404));
+    }
 }

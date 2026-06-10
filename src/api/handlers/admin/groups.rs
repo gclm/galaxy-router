@@ -95,7 +95,7 @@ pub struct AddGroupItemRequest {
 #[derive(Clone)]
 pub struct GroupState {
     pub pool: SqlitePool,
-    pub cache: crate::proxy::ProxyCache,
+    pub cache: crate::relay::cache::ProxyCache,
     pub timezone_offset: i32,
 }
 

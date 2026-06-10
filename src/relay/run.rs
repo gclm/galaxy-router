@@ -200,9 +200,11 @@ pub struct RelayRunOutcome {
     pub selected_channel_id: Option<String>,
     pub status_code: u16,
     pub error_message: Option<String>,
+    #[allow(dead_code)]
     pub attempts: Vec<AttemptTrace>,
 }
 
+#[allow(dead_code)]
 impl RelayRunOutcome {
     pub fn is_success(&self) -> bool {
         self.response.is_some() && (200..300).contains(&self.status_code)
@@ -381,5 +383,6 @@ pub struct RelayStreamRunOutcome {
     pub selected_channel_id: Option<String>,
     pub status_code: u16,
     pub error_message: Option<String>,
+    #[allow(dead_code)]
     pub attempts: Vec<AttemptTrace>,
 }
