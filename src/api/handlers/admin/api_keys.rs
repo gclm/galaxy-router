@@ -6,13 +6,7 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use sqlx::{AssertSqlSafe, Row, SqlitePool};
 
-/// 分页响应
-#[derive(Debug, Serialize)]
-pub struct PaginatedResponse<T: Serialize> {
-    pub items: Vec<T>,
-    pub total: i64,
-}
-
+use crate::api::handlers::admin::channels::PaginatedResponse;
 use crate::api::middleware::ApiKeyCache;
 use crate::api::response::generate_id;
 use crate::error::app::{ApiError, ApiResponse};
