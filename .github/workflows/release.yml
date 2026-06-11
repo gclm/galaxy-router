@@ -28,7 +28,7 @@ jobs:
 
       - run: cd frontend && pnpm install --frozen-lockfile && pnpm build
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: frontend-dist
           path: frontend/dist
@@ -96,7 +96,7 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y libsqlite3-dev zip
 
       # 下载前端产物（不重复构建）
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: frontend-dist
           path: frontend/dist
@@ -123,7 +123,7 @@ jobs:
           cd build/dist && zip "galaxy-router-${artifact}.zip" galaxy-router
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: galaxy-router-${{ matrix.artifact }}
           path: build/dist/galaxy-router-${{ matrix.artifact }}.zip
@@ -138,7 +138,7 @@ jobs:
         with:
           fetch-depth: 0
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           path: build/dist
           merge-multiple: true
@@ -174,7 +174,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           path: artifacts/
 
