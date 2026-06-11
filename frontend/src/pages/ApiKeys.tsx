@@ -1,13 +1,11 @@
-import { useState, useMemo } from 'react'
-import { apiKeysApi } from '@/api/api-keys'
+import { useState } from 'react'
 import type { ApiKey, CreateApiKeyRequest } from '@/api/types'
+import { apiKeysApi } from '@/api/api-keys'
 import { Button } from '@/components/ui/button'
 import { StatusBadge } from '@/components/StatusBadge'
 import { ConfirmDeleteDialog } from '@/components/ConfirmDeleteDialog'
-import { Pagination } from '@/components/Pagination'
-import { FilterBar } from '@/components/common/FilterBar'
-import { PageHeader } from '@/components/common/PageHeader'
-import { EmptyState } from '@/components/common/EmptyState'
+import { ApiKeyForm } from '@/components/ApiKeyForm'
+import { FilterBar, PageHeader, DataTable, SortHeader } from '@/components/common'
 import { useTableLoader } from '@/hooks/useTableLoader'
 import {
   useCreateApiKey,
@@ -36,77 +34,30 @@ import {
 } from '@/components/ui/dialog'
 
 export function ApiKeys() {
-  // ─── Table state via useTableLoader ──────────────────────
+  // ─── Table state via useTableLoader（服务端分页） ───────
   const table = useTableLoader<ApiKey>({
-    fetchFn: async () => {
-      const result = await apiKeysApi.list()
-      return { items: result, total: result.length }
+    fetchFn: async (params) => {
+      const result = await apiKeysApi.list({
+        page: params.page,
+        page_size: params.pageSize,
+        search: params.search || undefined,
+        status: params.status || undefined,
+        sort_by: params.sortBy,
+        sort_order: params.sortOrder,
+      })
+      return result
     },
     defaultPageSize: 20,
   })
-
-  // ─── Client-side filter + sort + paginate ───────────────
-  const displayData = useMemo(() => {
-    let items = [...table.data]
-
-    if (table.search) {
-      const q = table.search.toLowerCase()
-      items = items.filter((k) => k.name.toLowerCase().includes(q))
-    }
-
-    if (table.status === 'enabled') {
-      items = items.filter((k) => k.enabled)
-    } else if (table.status === 'disabled') {
-      items = items.filter((k) => !k.enabled)
-    }
-
-    items.sort((a, b) => {
-      const av =
-        table.sortBy === 'name'
-          ? a.name.toLowerCase()
-          : a.created_at.toLowerCase()
-      const bv =
-        table.sortBy === 'name'
-          ? b.name.toLowerCase()
-          : b.created_at.toLowerCase()
-      if (av < bv) return table.sortOrder === 'asc' ? -1 : 1
-      if (av > bv) return table.sortOrder === 'asc' ? 1 : -1
-      return 0
-    })
-
-    const total = items.length
-    const start = (table.page - 1) * table.pageSize
-    return { items: items.slice(start, start + table.pageSize), total }
-  }, [
-    table.data,
-    table.search,
-    table.status,
-    table.sortBy,
-    table.sortOrder,
-    table.page,
-    table.pageSize,
-  ])
 
   // ─── Dialog state ───────────────────────────────────────
   const [formOpen, setFormOpen] = useState(false)
   const [editingKey, setEditingKey] = useState<ApiKey | null>(null)
   const [deleteId, setDeleteId] = useState<string | null>(null)
+  const [toggleTarget, setToggleTarget] = useState<ApiKey | null>(null)
   const [copiedKey, setCopiedKey] = useState<string | null>(null)
-
-  // ─── Create form state ──────────────────────────────────
-  const [newKeyName, setNewKeyName] = useState('')
-  const [newKeyRateLimitRpm, setNewKeyRateLimitRpm] = useState('')
-  const [newKeyRateLimitTpm, setNewKeyRateLimitTpm] = useState('')
-  const [newKeySelectedGroups, setNewKeySelectedGroups] = useState<string[]>([])
   const [newKeyResult, setNewKeyResult] = useState<ApiKey | null>(null)
 
-  // ─── Edit form state ────────────────────────────────────
-  const [editName, setEditName] = useState('')
-  const [editRateLimitRpm, setEditRateLimitRpm] = useState('')
-  const [editRateLimitTpm, setEditRateLimitTpm] = useState('')
-  const [editSelectedGroups, setEditSelectedGroups] = useState<string[]>([])
-  const [editBudgetMonthly, setEditBudgetMonthly] = useState('')
-  const [editBudgetDaily, setEditBudgetDaily] = useState('')
   // ─── Groups ─────────────────────────────────────────────
   const { data: groupsData } = useGroups()
   const availableGroups = groupsData?.items ?? []
@@ -139,28 +90,10 @@ export function ApiKeys() {
     setTimeout(() => setCopiedKey((prev) => (prev === key ? null : prev)), 2000)
   }
 
-  const toggleGroup = (
-    current: string[],
-    setter: (v: string[]) => void,
-    group: string,
-  ) => {
-    setter(
-      current.includes(group)
-        ? current.filter((g) => g !== group)
-        : [...current, group],
-    )
-  }
-
   // ─── Create ─────────────────────────────────────────────
-  const handleCreate = () => {
-    if (!newKeyName.trim()) return
-    const data: CreateApiKeyRequest = {
-      name: newKeyName.trim(),
-      rate_limit_rpm: newKeyRateLimitRpm ? parseInt(newKeyRateLimitRpm) : undefined,
-      rate_limit_tpm: newKeyRateLimitTpm ? parseInt(newKeyRateLimitTpm) : undefined,
-      allowed_groups: newKeySelectedGroups.length > 0 ? newKeySelectedGroups.join(',') : undefined,
-    }
-    createMutation.mutate(data, {
+  const handleCreate = (data: CreateApiKeyRequest & { budget_monthly?: number; budget_daily?: number }) => {
+    const { budget_monthly, budget_daily, ...keyData } = data
+    createMutation.mutate(keyData, {
       onSuccess: (key) => {
         setNewKeyResult(key)
         toast.success('API Key 创建成功')
@@ -171,50 +104,29 @@ export function ApiKeys() {
     })
   }
 
-  // ─── Edit ───────────────────────────────────────────────
-  const openEdit = (key: ApiKey) => {
-    setEditingKey(key)
-    setEditName(key.name)
-    setEditRateLimitRpm(key.rate_limit_rpm > 0 ? String(key.rate_limit_rpm) : '')
-    setEditRateLimitTpm(key.rate_limit_tpm > 0 ? String(key.rate_limit_tpm) : '')
-    setEditSelectedGroups(
-      key.allowed_groups
-        ? key.allowed_groups.split(',').map((s) => s.trim()).filter(Boolean)
-        : [],
-    )
-    const budget = getBudgetForKey(key.id)
-    setEditBudgetMonthly(budget?.monthly_limit_usd ? String(budget.monthly_limit_usd) : '')
-    setEditBudgetDaily(budget?.daily_limit_usd ? String(budget.daily_limit_usd) : '')
-    setFormOpen(true)
-  }
-
-  const handleUpdate = () => {
+  // ─── Update ─────────────────────────────────────────────
+  const handleUpdate = (data: CreateApiKeyRequest & { budget_monthly?: number; budget_daily?: number }) => {
     if (!editingKey) return
+    const { budget_monthly, budget_daily, ...keyData } = data
     updateMutation.mutate(
-      {
-        id: editingKey.id,
-        data: {
-          name: editName.trim(),
-          rate_limit_rpm: editRateLimitRpm ? parseInt(editRateLimitRpm) : undefined,
-          rate_limit_tpm: editRateLimitTpm ? parseInt(editRateLimitTpm) : undefined,
-          allowed_groups: editSelectedGroups.length > 0 ? editSelectedGroups.join(',') : undefined,
-        },
-      },
+      { id: editingKey.id, data: keyData },
       {
         onSuccess: () => {
           // 保存预算设置
-          const monthly = editBudgetMonthly ? parseFloat(editBudgetMonthly) : 0
-          const daily = editBudgetDaily ? parseFloat(editBudgetDaily) : 0
-          if (monthly > 0 || daily > 0) {
-            setBudgetMutation.mutate({
-              api_key_id: editingKey.id,
-              monthly_limit_usd: monthly,
-              daily_limit_usd: daily,
-            })
-          } else {
-            const existingBudget = getBudgetForKey(editingKey.id)
-            if (existingBudget) {
-              deleteBudgetMutation.mutate(existingBudget.id)
+          if (budget_monthly !== undefined || budget_daily !== undefined) {
+            const monthly = budget_monthly ?? 0
+            const daily = budget_daily ?? 0
+            if (monthly > 0 || daily > 0) {
+              setBudgetMutation.mutate({
+                api_key_id: editingKey.id,
+                monthly_limit_usd: monthly,
+                daily_limit_usd: daily,
+              })
+            } else {
+              const existingBudget = getBudgetForKey(editingKey.id)
+              if (existingBudget) {
+                deleteBudgetMutation.mutate(existingBudget.id)
+              }
             }
           }
           setEditingKey(null)
@@ -245,6 +157,12 @@ export function ApiKeys() {
     )
   }
 
+  const handleToggleConfirm = () => {
+    if (!toggleTarget) return
+    handleToggleEnabled(toggleTarget)
+    setToggleTarget(null)
+  }
+
   // ─── Delete ─────────────────────────────────────────────
   const handleDelete = () => {
     if (!deleteId) return
@@ -264,10 +182,12 @@ export function ApiKeys() {
   const openCreate = () => {
     setEditingKey(null)
     setNewKeyResult(null)
-    setNewKeyName('')
-    setNewKeyRateLimitRpm('')
-    setNewKeyRateLimitTpm('')
-    setNewKeySelectedGroups([])
+    setFormOpen(true)
+  }
+
+  const openEdit = (key: ApiKey) => {
+    setEditingKey(key)
+    setNewKeyResult(null)
     setFormOpen(true)
   }
 
@@ -275,53 +195,22 @@ export function ApiKeys() {
     setFormOpen(false)
     setEditingKey(null)
     setNewKeyResult(null)
-    setNewKeyName('')
-    setNewKeyRateLimitRpm('')
-    setNewKeyRateLimitTpm('')
-    setNewKeySelectedGroups([])
   }
 
   const isFiltered = table.search || table.status
 
-  // ─── Group selector (reusable for create & edit) ───────
-  const GroupSelector = ({
-    selected,
-    onToggle,
-  }: {
-    selected: string[]
-    onToggle: (group: string) => void
-  }) => (
-    <div>
-      <label className="block text-sm font-medium mb-2">
-        允许访问的分组（留空表示全部）
-      </label>
-      {availableGroups.length === 0 ? (
-        <p className="text-xs text-muted-foreground">暂无可用分组</p>
-      ) : (
-        <div className="max-h-48 overflow-y-auto rounded-lg border p-2 space-y-1">
-          {availableGroups.map((group) => (
-            <label
-              key={group.id}
-              className="flex items-center gap-2 px-2 py-1.5 rounded hover:bg-muted/50 cursor-pointer"
-            >
-              <input
-                type="checkbox"
-                checked={selected.includes(group.name)}
-                onChange={() => onToggle(group.name)}
-                className="rounded"
-              />
-              <span className="text-sm">{group.name}</span>
-            </label>
-          ))}
-        </div>
-      )}
-      {selected.length > 0 && (
-        <p className="text-xs text-muted-foreground mt-1">
-          已选择 {selected.length} 个分组
-        </p>
-      )}
-    </div>
-  )
+  const isSubmitting = createMutation.isPending || updateMutation.isPending
+
+  const columns = [
+    { header: <SortHeader label="名称" field="name" sortBy={table.sortBy} sortOrder={table.sortOrder} onSort={table.handleSort} /> },
+    { header: 'Key' },
+    { header: '分组权限' },
+    { header: '速率限制' },
+    { header: '预算' },
+    { header: '状态', align: 'center' as const },
+    { header: <SortHeader label="创建时间" field="created_at" sortBy={table.sortBy} sortOrder={table.sortOrder} onSort={table.handleSort} /> },
+    { header: '操作', align: 'center' as const },
+  ]
 
   return (
     <div className="space-y-4">
@@ -353,124 +242,102 @@ export function ApiKeys() {
       />
 
       {/* Table */}
-      <div className="rounded-2xl border bg-card overflow-hidden">
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="border-b bg-muted/50">
-                <th className="text-left px-4 py-3 font-medium">名称</th>
-                <th className="text-left px-4 py-3 font-medium">Key</th>
-                <th className="text-left px-4 py-3 font-medium">分组权限</th>
-                <th className="text-left px-4 py-3 font-medium">速率限制</th>
-                <th className="text-left px-4 py-3 font-medium">预算</th>
-                <th className="text-center px-4 py-3 font-medium">状态</th>
-                <th className="text-left px-4 py-3 font-medium">创建时间</th>
-                <th className="text-center px-4 py-3 font-medium">操作</th>
-              </tr>
-            </thead>
-            <tbody>
-              <EmptyState
-                loading={table.loading}
-                isEmpty={!table.loading && displayData.items.length === 0}
-                loadingText="加载中..."
-                emptyText={isFiltered ? '没有匹配的 API Key' : '暂无 API Key，点击上方按钮创建'}
-                colSpan={8}
+      <DataTable
+        columns={columns}
+        loading={table.loading}
+        isEmpty={!table.loading && table.data.length === 0}
+        emptyText={isFiltered ? '没有匹配的 API Key' : '暂无 API Key，点击上方按钮创建'}
+        pagination={{
+          total: table.total,
+          page: table.page,
+          pageSize: table.pageSize,
+          onPageChange: table.setPage,
+          onPageSizeChange: table.setPageSize,
+          pageSizeOptions: [20, 50, 100],
+        }}
+      >
+        {table.data.map((apiKey) => (
+          <tr
+            key={apiKey.id}
+            className="border-b last:border-0 hover:bg-muted/30 transition-colors"
+          >
+            <td className="px-4 py-3 font-medium">{apiKey.name}</td>
+            <td className="px-4 py-3">
+              <div className="flex items-center gap-2">
+                <code className="rounded bg-muted px-2 py-0.5 text-xs font-mono">
+                  {maskKey(apiKey.api_key)}
+                </code>
+                <button
+                  onClick={() => copyToClipboard(apiKey.api_key)}
+                  className={`transition-colors ${
+                    copiedKey === apiKey.api_key
+                      ? 'text-green-500'
+                      : 'text-muted-foreground hover:text-foreground'
+                  }`}
+                  title="复制完整 Key"
+                >
+                  {copiedKey === apiKey.api_key ? (
+                    <Check className="h-3.5 w-3.5" />
+                  ) : (
+                    <Copy className="h-3.5 w-3.5" />
+                  )}
+                </button>
+              </div>
+            </td>
+            <td className="px-4 py-3 text-xs text-muted-foreground">
+              {formatGroups(apiKey.allowed_groups)}
+            </td>
+            <td className="px-4 py-3 text-xs text-muted-foreground">
+              {apiKey.rate_limit_rpm > 0 || apiKey.rate_limit_tpm > 0
+                ? `${apiKey.rate_limit_rpm || '∞'} RPM / ${apiKey.rate_limit_tpm || '∞'} TPM`
+                : '不限'}
+            </td>
+            <td className="px-4 py-3 text-xs text-muted-foreground">
+              {(() => {
+                const budget = getBudgetForKey(apiKey.id)
+                if (!budget || (!budget.monthly_limit_usd && !budget.daily_limit_usd)) {
+                  return <span className="text-muted-foreground/50">—</span>
+                }
+                const parts: string[] = []
+                if (budget.monthly_limit_usd > 0) parts.push(`月 $${budget.monthly_limit_usd}`)
+                if (budget.daily_limit_usd > 0) parts.push(`日 $${budget.daily_limit_usd}`)
+                return <span>{parts.join(' / ')}</span>
+              })()}
+            </td>
+            <td className="px-4 py-3 text-center">
+              <StatusBadge
+                enabled={apiKey.enabled}
+                onClick={() => setToggleTarget(apiKey)}
               />
-              {!table.loading &&
-                displayData.items.map((apiKey) => (
-                  <tr
-                    key={apiKey.id}
-                    className="border-b last:border-0 hover:bg-muted/30 transition-colors"
-                  >
-                    <td className="px-4 py-3 font-medium">{apiKey.name}</td>
-                    <td className="px-4 py-3">
-                      <div className="flex items-center gap-2">
-                        <code className="rounded bg-muted px-2 py-0.5 text-xs font-mono">
-                          {maskKey(apiKey.api_key)}
-                        </code>
-                        <button
-                          onClick={() => copyToClipboard(apiKey.api_key)}
-                          className={`transition-colors ${
-                            copiedKey === apiKey.api_key
-                              ? 'text-green-500'
-                              : 'text-muted-foreground hover:text-foreground'
-                          }`}
-                          title="复制完整 Key"
-                        >
-                          {copiedKey === apiKey.api_key ? (
-                            <Check className="h-3.5 w-3.5" />
-                          ) : (
-                            <Copy className="h-3.5 w-3.5" />
-                          )}
-                        </button>
-                      </div>
-                    </td>
-                    <td className="px-4 py-3 text-xs text-muted-foreground">
-                      {formatGroups(apiKey.allowed_groups)}
-                    </td>
-                    <td className="px-4 py-3 text-xs text-muted-foreground">
-                      {apiKey.rate_limit_rpm > 0 || apiKey.rate_limit_tpm > 0
-                        ? `${apiKey.rate_limit_rpm || '∞'} RPM / ${apiKey.rate_limit_tpm || '∞'} TPM`
-                        : '不限'}
-                    </td>
-                    <td className="px-4 py-3 text-xs text-muted-foreground">
-                      {(() => {
-                        const budget = getBudgetForKey(apiKey.id)
-                        if (!budget || (!budget.monthly_limit_usd && !budget.daily_limit_usd)) {
-                          return <span className="text-muted-foreground/50">—</span>
-                        }
-                        const parts: string[] = []
-                        if (budget.monthly_limit_usd > 0) parts.push(`月 $${budget.monthly_limit_usd}`)
-                        if (budget.daily_limit_usd > 0) parts.push(`日 $${budget.daily_limit_usd}`)
-                        return <span>{parts.join(' / ')}</span>
-                      })()}
-                    </td>
-                    <td className="px-4 py-3 text-center">
-                      <StatusBadge
-                        enabled={apiKey.enabled}
-                        onClick={() => handleToggleEnabled(apiKey)}
-                      />
-                    </td>
-                    <td className="px-4 py-3 text-muted-foreground text-xs">
-                      {formatDate(apiKey.created_at)}
-                    </td>
-                    <td className="px-4 py-3">
-                      <div className="flex items-center justify-center gap-1">
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="h-8 w-8"
-                          onClick={() => openEdit(apiKey)}
-                          title="编辑"
-                        >
-                          <Pencil className="h-3.5 w-3.5" />
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="h-8 w-8 text-destructive hover:text-destructive"
-                          onClick={() => setDeleteId(apiKey.id)}
-                          title="删除"
-                        >
-                          <Trash2 className="h-3.5 w-3.5" />
-                        </Button>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-            </tbody>
-          </table>
-        </div>
-
-        <Pagination
-          total={displayData.total}
-          page={table.page}
-          pageSize={table.pageSize}
-          onPageChange={table.setPage}
-          onPageSizeChange={table.setPageSize}
-          pageSizeOptions={[20, 50, 100]}
-        />
-      </div>
+            </td>
+            <td className="px-4 py-3 text-muted-foreground text-xs">
+              {formatDate(apiKey.created_at)}
+            </td>
+            <td className="px-4 py-3">
+              <div className="flex items-center justify-center gap-1">
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-8 w-8"
+                  onClick={() => openEdit(apiKey)}
+                  title="编辑"
+                >
+                  <Pencil className="h-3.5 w-3.5" />
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-8 w-8 text-destructive hover:text-destructive"
+                  onClick={() => setDeleteId(apiKey.id)}
+                  title="删除"
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                </Button>
+              </div>
+            </td>
+          </tr>
+        ))}
+      </DataTable>
 
       {/* Create/Edit Dialog */}
       <Dialog
@@ -489,188 +356,17 @@ export function ApiKeys() {
                   : '创建 API Key'}
             </DialogTitle>
           </DialogHeader>
-
-          {/* Creation success state */}
-          {newKeyResult ? (
-            <div className="space-y-4">
-              <div className="rounded-lg bg-green-50 border border-green-200 p-3 dark:bg-green-900/20 dark:border-green-800">
-                <p className="text-sm text-green-800 dark:text-green-400 mb-3">
-                  API Key 已创建，请妥善保存
-                </p>
-                <div className="flex items-center gap-2">
-                  <code className="flex-1 rounded bg-background px-3 py-2 text-sm font-mono break-all">
-                    {newKeyResult.api_key}
-                  </code>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => copyToClipboard(newKeyResult.api_key)}
-                  >
-                    {copiedKey === newKeyResult.api_key ? (
-                      <Check className="h-4 w-4 mr-1" />
-                    ) : (
-                      <Copy className="h-4 w-4 mr-1" />
-                    )}
-                    {copiedKey === newKeyResult.api_key ? '已复制' : '复制'}
-                  </Button>
-                </div>
-              </div>
-              <div className="flex justify-end">
-                <Button variant="outline" onClick={closeForm}>
-                  我已保存
-                </Button>
-              </div>
-            </div>
-          ) : editingKey ? (
-            /* Edit form */
-            <div className="space-y-4">
-              <div>
-                <label className="block text-sm font-medium mb-1">名称</label>
-                <input
-                  type="text"
-                  value={editName}
-                  onChange={(e) => setEditName(e.target.value)}
-                  className="input"
-                  placeholder="例如：前端应用"
-                />
-              </div>
-              <GroupSelector
-                selected={editSelectedGroups}
-                onToggle={(g) => toggleGroup(editSelectedGroups, setEditSelectedGroups, g)}
-              />
-              <div>
-                <label className="block text-sm font-medium mb-2">速率限制</label>
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <label className="block text-xs text-muted-foreground mb-1">
-                      RPM（请求/分钟）
-                    </label>
-                    <input
-                      type="number"
-                      value={editRateLimitRpm}
-                      onChange={(e) => setEditRateLimitRpm(e.target.value)}
-                      className="input"
-                      placeholder="不限"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-xs text-muted-foreground mb-1">
-                      TPM（令牌/分钟）
-                    </label>
-                    <input
-                      type="number"
-                      value={editRateLimitTpm}
-                      onChange={(e) => setEditRateLimitTpm(e.target.value)}
-                      className="input"
-                      placeholder="不限"
-                    />
-                  </div>
-                </div>
-              </div>
-              <div>
-                <label className="block text-sm font-medium mb-2">预算限制 (USD)</label>
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <label className="block text-xs text-muted-foreground mb-1">月限额 ($)</label>
-                    <input
-                      type="number"
-                      value={editBudgetMonthly}
-                      onChange={(e) => setEditBudgetMonthly(e.target.value)}
-                      className="input"
-                      placeholder="不限"
-                      step="0.01"
-                      min="0"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-xs text-muted-foreground mb-1">日限额 ($)</label>
-                    <input
-                      type="number"
-                      value={editBudgetDaily}
-                      onChange={(e) => setEditBudgetDaily(e.target.value)}
-                      className="input"
-                      placeholder="不限"
-                      step="0.01"
-                      min="0"
-                    />
-                  </div>
-                </div>
-                <p className="text-xs text-muted-foreground mt-1">留空表示不限制，超出后请求将返回 402</p>
-              </div>
-              <div className="flex justify-end gap-2">
-                <Button variant="outline" onClick={closeForm}>
-                  取消
-                </Button>
-                <Button
-                  onClick={handleUpdate}
-                  disabled={!editName.trim() || updateMutation.isPending}
-                  className="btn-primary"
-                >
-                  {updateMutation.isPending ? '保存中...' : '保存'}
-                </Button>
-              </div>
-            </div>
-          ) : (
-            /* Create form */
-            <div className="space-y-4">
-              <div>
-                <label className="block text-sm font-medium mb-1">名称</label>
-                <input
-                  type="text"
-                  value={newKeyName}
-                  onChange={(e) => setNewKeyName(e.target.value)}
-                  className="input"
-                  placeholder="例如：前端应用"
-                  onKeyDown={(e) => e.key === 'Enter' && handleCreate()}
-                />
-              </div>
-              <GroupSelector
-                selected={newKeySelectedGroups}
-                onToggle={(g) => toggleGroup(newKeySelectedGroups, setNewKeySelectedGroups, g)}
-              />
-              <div>
-                <label className="block text-sm font-medium mb-2">速率限制</label>
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <label className="block text-xs text-muted-foreground mb-1">
-                      RPM（请求/分钟）
-                    </label>
-                    <input
-                      type="number"
-                      value={newKeyRateLimitRpm}
-                      onChange={(e) => setNewKeyRateLimitRpm(e.target.value)}
-                      className="input"
-                      placeholder="不限"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-xs text-muted-foreground mb-1">
-                      TPM（令牌/分钟）
-                    </label>
-                    <input
-                      type="number"
-                      value={newKeyRateLimitTpm}
-                      onChange={(e) => setNewKeyRateLimitTpm(e.target.value)}
-                      className="input"
-                      placeholder="不限"
-                    />
-                  </div>
-                </div>
-              </div>
-              <div className="flex justify-end gap-2">
-                <Button variant="outline" onClick={closeForm}>
-                  取消
-                </Button>
-                <Button
-                  onClick={handleCreate}
-                  disabled={!newKeyName.trim() || createMutation.isPending}
-                  className="btn-primary"
-                >
-                  {createMutation.isPending ? '创建中...' : '创建'}
-                </Button>
-              </div>
-            </div>
-          )}
+          <ApiKeyForm
+            apiKey={editingKey ?? undefined}
+            budget={editingKey ? getBudgetForKey(editingKey.id) : undefined}
+            groups={availableGroups}
+            onSubmit={editingKey ? handleUpdate : handleCreate}
+            onCancel={closeForm}
+            newKeyResult={!editingKey ? newKeyResult : undefined}
+            onCopy={copyToClipboard}
+            copiedKey={copiedKey}
+            submitting={isSubmitting}
+          />
         </DialogContent>
       </Dialog>
 
@@ -682,6 +378,17 @@ export function ApiKeys() {
         }}
         message="确定要删除此 API Key 吗？使用该 Key 的应用将无法继续访问。"
         onConfirm={handleDelete}
+      />
+
+      {/* Toggle Confirm Dialog */}
+      <ConfirmDeleteDialog
+        open={!!toggleTarget}
+        onOpenChange={(open) => {
+          if (!open) setToggleTarget(null)
+        }}
+        title={toggleTarget?.enabled ? '禁用 API Key' : '启用 API Key'}
+        message={`确定要${toggleTarget?.enabled ? '禁用' : '启用'} API Key「${toggleTarget?.name}」吗？`}
+        onConfirm={handleToggleConfirm}
       />
     </div>
   )

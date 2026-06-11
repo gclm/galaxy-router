@@ -21,6 +21,19 @@ impl Database {
         let pool = SqlitePoolOptions::new()
             .max_connections(10)
             .acquire_timeout(std::time::Duration::from_secs(5))
+            .after_connect(|conn, _meta| {
+                Box::pin(async move {
+                    // 启用 WAL 模式：读写不互相阻塞
+                    sqlx::query("PRAGMA journal_mode=WAL")
+                        .execute(&mut *conn)
+                        .await?;
+                    // 并发写冲突时等待 5 秒而非立即报错
+                    sqlx::query("PRAGMA busy_timeout=5000")
+                        .execute(&mut *conn)
+                        .await?;
+                    Ok(())
+                })
+            })
             .connect(database_url)
             .await?;
 

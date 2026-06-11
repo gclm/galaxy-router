@@ -1,9 +1,7 @@
-import { useEffect, useState, useMemo } from 'react'
+import { useState } from 'react'
 import { groupsApi } from '@/api/groups'
-import { channelsApi } from '@/api/channels'
-import type { Group, Channel, CreateGroupRequest } from '@/api/types'
+import type { Group, CreateGroupRequest } from '@/api/types'
 import { Button } from '@/components/ui/button'
-import { Pagination } from '@/components/Pagination'
 import { StatusBadge } from '@/components/StatusBadge'
 import { ConfirmDeleteDialog } from '@/components/ConfirmDeleteDialog'
 import { GroupForm } from '@/components/GroupForm'
@@ -13,14 +11,13 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
-import { FilterBar } from '@/components/common/FilterBar'
-import { PageHeader } from '@/components/common/PageHeader'
-import { EmptyState } from '@/components/common/EmptyState'
+import { FilterBar, PageHeader, DataTable, SortHeader } from '@/components/common'
 import { useTableLoader } from '@/hooks/useTableLoader'
 import {
   useCreateGroup,
   useUpdateGroup,
   useDeleteGroup,
+  useChannels,
 } from '@/api/query-hooks'
 import { formatDate } from '@/lib/utils'
 import { toast } from 'sonner'
@@ -28,75 +25,34 @@ import {
   Plus,
   Pencil,
   Trash2,
-  ArrowUpDown,
 } from 'lucide-react'
 
 export function Groups() {
-  // ─── Channels for GroupForm ─────────────────────────────
-  const [channels, setChannels] = useState<Channel[]>([])
-  useEffect(() => {
-    channelsApi.list().then(res => setChannels(res.items)).catch(console.error)
-  }, [])
+  // ─── Channels for GroupForm（React Query） ──────────────
+  const { data: channelsData } = useChannels()
+  const channels = channelsData?.items ?? []
 
-  // ─── Table state via useTableLoader ─────────────────────
+  // ─── Table state via useTableLoader（服务端分页） ───────
   const table = useTableLoader<Group>({
-    fetchFn: async () => {
-      const result = await groupsApi.list()
-      return { items: result.items, total: result.total }
+    fetchFn: async (params) => {
+      const result = await groupsApi.list({
+        page: params.page,
+        page_size: params.pageSize,
+        search: params.search || undefined,
+        status: params.status || undefined,
+        sort_by: params.sortBy,
+        sort_order: params.sortOrder,
+      })
+      return result
     },
     defaultPageSize: 20,
   })
-
-  // ─── Client-side filter + sort + paginate ───────────────
-  const displayData = useMemo(() => {
-    let items = [...table.data]
-
-    // Filter by search
-    if (table.search) {
-      const q = table.search.toLowerCase()
-      items = items.filter((g) => g.name.toLowerCase().includes(q))
-    }
-
-    // Filter by status
-    if (table.status === 'enabled') {
-      items = items.filter((g) => g.enabled)
-    } else if (table.status === 'disabled') {
-      items = items.filter((g) => !g.enabled)
-    }
-
-    // Sort
-    items.sort((a, b) => {
-      const av =
-        table.sortBy === 'name'
-          ? a.name.toLowerCase()
-          : a.created_at.toLowerCase()
-      const bv =
-        table.sortBy === 'name'
-          ? b.name.toLowerCase()
-          : b.created_at.toLowerCase()
-      if (av < bv) return table.sortOrder === 'asc' ? -1 : 1
-      if (av > bv) return table.sortOrder === 'asc' ? 1 : -1
-      return 0
-    })
-
-    // Paginate
-    const total = items.length
-    const start = (table.page - 1) * table.pageSize
-    return { items: items.slice(start, start + table.pageSize), total }
-  }, [
-    table.data,
-    table.search,
-    table.status,
-    table.sortBy,
-    table.sortOrder,
-    table.page,
-    table.pageSize,
-  ])
 
   // ─── Dialog state ───────────────────────────────────────
   const [formOpen, setFormOpen] = useState(false)
   const [editingGroup, setEditingGroup] = useState<Group | null>(null)
   const [deleteId, setDeleteId] = useState<string | null>(null)
+  const [toggleTarget, setToggleTarget] = useState<Group | null>(null)
 
   // ─── Mutations ──────────────────────────────────────────
   const createMutation = useCreateGroup()
@@ -149,6 +105,12 @@ export function Groups() {
     )
   }
 
+  const handleToggleConfirm = () => {
+    if (!toggleTarget) return
+    handleToggleEnabled(toggleTarget)
+    setToggleTarget(null)
+  }
+
   const handleDelete = () => {
     if (!deleteId) return
     deleteMutation.mutate(deleteId, {
@@ -181,6 +143,17 @@ export function Groups() {
 
   const isFiltered = table.search || table.status
 
+  const columns = [
+    { header: <SortHeader label="名称" field="name" sortBy={table.sortBy} sortOrder={table.sortOrder} onSort={table.handleSort} /> },
+    { header: '厂家' },
+    { header: '匹配规则' },
+    { header: '渠道数', align: 'center' as const },
+    { header: '重试', align: 'center' as const },
+    { header: '状态', align: 'center' as const },
+    { header: <SortHeader label="创建时间" field="created_at" sortBy={table.sortBy} sortOrder={table.sortOrder} onSort={table.handleSort} /> },
+    { header: '操作', align: 'center' as const },
+  ]
+
   return (
     <div className="space-y-4">
       {/* Page Header */}
@@ -211,112 +184,74 @@ export function Groups() {
       />
 
       {/* Table */}
-      <div className="rounded-2xl border bg-card overflow-hidden">
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="border-b bg-muted/50">
-                <th className="text-left px-4 py-3 font-medium">
-                  <button
-                    className="inline-flex items-center gap-1 hover:text-foreground"
-                    onClick={() => table.handleSort('name')}
-                  >
-                    名称
-                    {table.sortBy === 'name' && <ArrowUpDown className="h-3 w-3" />}
-                  </button>
-                </th>
-                <th className="text-left px-4 py-3 font-medium">厂家</th>
-                <th className="text-left px-4 py-3 font-medium">匹配规则</th>
-                <th className="text-center px-4 py-3 font-medium">渠道数</th>
-                <th className="text-center px-4 py-3 font-medium">重试</th>
-                <th className="text-center px-4 py-3 font-medium">状态</th>
-                <th className="text-left px-4 py-3 font-medium">
-                  <button
-                    className="inline-flex items-center gap-1 hover:text-foreground"
-                    onClick={() => table.handleSort('created_at')}
-                  >
-                    创建时间
-                    {table.sortBy === 'created_at' && <ArrowUpDown className="h-3 w-3" />}
-                  </button>
-                </th>
-                <th className="text-center px-4 py-3 font-medium">操作</th>
-              </tr>
-            </thead>
-            <tbody>
-              <EmptyState
-                loading={table.loading}
-                isEmpty={!table.loading && displayData.items.length === 0}
-                loadingText="加载中..."
-                emptyText={isFiltered ? '没有匹配的分组' : '暂无分组，点击上方按钮添加'}
-                colSpan={8}
+      <DataTable
+        columns={columns}
+        loading={table.loading}
+        isEmpty={!table.loading && table.data.length === 0}
+        emptyText={isFiltered ? '没有匹配的分组' : '暂无分组，点击上方按钮添加'}
+        pagination={{
+          total: table.total,
+          page: table.page,
+          pageSize: table.pageSize,
+          onPageChange: table.setPage,
+          onPageSizeChange: table.setPageSize,
+          pageSizeOptions: [20, 50, 100],
+        }}
+      >
+        {table.data.map((group) => (
+          <tr
+            key={group.id}
+            className="border-b last:border-0 hover:bg-muted/30 transition-colors"
+          >
+            <td className="px-4 py-3 font-medium">{group.name}</td>
+            <td className="px-4 py-3 text-xs text-muted-foreground">
+              {group.provider || ''}
+            </td>
+            <td className="px-4 py-3">
+              {group.match_regex ? (
+                <code className="rounded bg-muted px-1.5 py-0.5 text-xs">{group.match_regex}</code>
+              ) : (
+                <span className="text-muted-foreground text-xs">精确匹配</span>
+              )}
+            </td>
+            <td className="px-4 py-3 text-center text-muted-foreground">{group.items.length}</td>
+            <td className="px-4 py-3 text-center text-muted-foreground text-xs">
+              {group.retry_enabled ? `${group.max_retries} 次` : '关闭'}
+            </td>
+            <td className="px-4 py-3 text-center">
+              <StatusBadge
+                enabled={group.enabled}
+                onClick={() => setToggleTarget(group)}
               />
-              {!table.loading &&
-                displayData.items.map((group) => (
-                  <tr
-                    key={group.id}
-                    className="border-b last:border-0 hover:bg-muted/30 transition-colors"
-                  >
-                    <td className="px-4 py-3 font-medium">{group.name}</td>
-                    <td className="px-4 py-3 text-xs text-muted-foreground">
-                      {group.provider || ''}
-                    </td>
-                    <td className="px-4 py-3">
-                      {group.match_regex ? (
-                        <code className="rounded bg-muted px-1.5 py-0.5 text-xs">{group.match_regex}</code>
-                      ) : (
-                        <span className="text-muted-foreground text-xs">精确匹配</span>
-                      )}
-                    </td>
-                    <td className="px-4 py-3 text-center text-muted-foreground">{group.items.length}</td>
-                    <td className="px-4 py-3 text-center text-muted-foreground text-xs">
-                      {group.retry_enabled ? `${group.max_retries} 次` : '关闭'}
-                    </td>
-                    <td className="px-4 py-3 text-center">
-                      <StatusBadge
-                        enabled={group.enabled}
-                        onClick={() => handleToggleEnabled(group)}
-                      />
-                    </td>
-                    <td className="px-4 py-3 text-muted-foreground text-xs">
-                      {formatDate(group.created_at)}
-                    </td>
-                    <td className="px-4 py-3">
-                      <div className="flex items-center justify-center gap-1">
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="h-8 w-8"
-                          onClick={() => openEdit(group)}
-                          title="编辑"
-                        >
-                          <Pencil className="h-3.5 w-3.5" />
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="h-8 w-8 text-destructive hover:text-destructive"
-                          onClick={() => setDeleteId(group.id)}
-                          title="删除"
-                        >
-                          <Trash2 className="h-3.5 w-3.5" />
-                        </Button>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-            </tbody>
-          </table>
-        </div>
-
-        <Pagination
-          total={displayData.total}
-          page={table.page}
-          pageSize={table.pageSize}
-          onPageChange={table.setPage}
-          onPageSizeChange={table.setPageSize}
-          pageSizeOptions={[20, 50, 100]}
-        />
-      </div>
+            </td>
+            <td className="px-4 py-3 text-muted-foreground text-xs">
+              {formatDate(group.created_at)}
+            </td>
+            <td className="px-4 py-3">
+              <div className="flex items-center justify-center gap-1">
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-8 w-8"
+                  onClick={() => openEdit(group)}
+                  title="编辑"
+                >
+                  <Pencil className="h-3.5 w-3.5" />
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-8 w-8 text-destructive hover:text-destructive"
+                  onClick={() => setDeleteId(group.id)}
+                  title="删除"
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                </Button>
+              </div>
+            </td>
+          </tr>
+        ))}
+      </DataTable>
 
       {/* Create/Edit Dialog */}
       <Dialog
@@ -346,6 +281,17 @@ export function Groups() {
         }}
         message="确定要删除此分组吗？此操作不可撤销。"
         onConfirm={handleDelete}
+      />
+
+      {/* Toggle Confirm Dialog */}
+      <ConfirmDeleteDialog
+        open={!!toggleTarget}
+        onOpenChange={(open) => {
+          if (!open) setToggleTarget(null)
+        }}
+        title={toggleTarget?.enabled ? '禁用分组' : '启用分组'}
+        message={`确定要${toggleTarget?.enabled ? '禁用' : '启用'}分组「${toggleTarget?.name}」吗？`}
+        onConfirm={handleToggleConfirm}
       />
     </div>
   )

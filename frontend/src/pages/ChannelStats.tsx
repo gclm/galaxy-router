@@ -1,9 +1,8 @@
 import { useState, useMemo } from 'react'
 import { useStatsChannels } from '@/api/query-hooks'
-import { PageHeader, FilterBar, EmptyState, SummaryCard, ViewToggle } from '@/components/common'
+import { PageHeader, FilterBar, SummaryCard, ViewToggle, DataTable, SortHeader } from '@/components/common'
 import { DistributionPieChart, ChannelCompareChart } from '@/components/charts'
 import { formatNumber, formatCost } from '@/lib/utils'
-import { ArrowUpDown } from 'lucide-react'
 
 type SortField = 'request_count' | 'total_cost' | 'success_rate' | 'input_tokens' | 'output_tokens'
 
@@ -15,7 +14,7 @@ export function ChannelStats() {
   const [sortBy, setSortBy] = useState<SortField>('request_count')
   const [sortOrder, setSortOrder] = useState<'desc' | 'asc'>('desc')
 
-  const { data, isLoading } = useStatsChannels({ days })
+  const { data, isLoading, refetch } = useStatsChannels({ days })
   const stats = data ?? []
 
   const pieData = useMemo(() =>
@@ -61,24 +60,14 @@ export function ChannelStats() {
     ? ((totals.success / totals.requests) * 100).toFixed(1)
     : '-'
 
-  const handleSort = (col: SortField) => {
+  const handleSort = (col: string) => {
     if (sortBy === col) {
       setSortOrder((o) => (o === 'desc' ? 'asc' : 'desc'))
     } else {
-      setSortBy(col)
+      setSortBy(col as SortField)
       setSortOrder('desc')
     }
   }
-
-  const SortButton = ({ col, label }: { col: SortField; label: string }) => (
-    <button
-      className="inline-flex items-center gap-1 hover:text-foreground"
-      onClick={() => handleSort(col)}
-    >
-      {label}
-      {sortBy === col && <ArrowUpDown className="h-3 w-3" />}
-    </button>
-  )
 
   return (
     <div className="space-y-4">
@@ -107,7 +96,7 @@ export function ChannelStats() {
           searchValue={search}
           onSearchChange={setSearch}
           searchPlaceholder="搜索渠道名称..."
-          onRefresh={() => {}}
+          onRefresh={() => refetch()}
           loading={isLoading}
           extra={
             <select
@@ -138,49 +127,38 @@ export function ChannelStats() {
 
       {/* 表格区域 */}
       {showTable && (
-        <div className="rounded-2xl border bg-card overflow-hidden">
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b bg-muted/50">
-                  <th className="text-left px-4 py-3 font-medium">渠道</th>
-                  <th className="text-right px-4 py-3 font-medium"><SortButton col="request_count" label="请求量" /></th>
-                  <th className="text-right px-4 py-3 font-medium">成功</th>
-                  <th className="text-right px-4 py-3 font-medium">失败</th>
-                  <th className="text-right px-4 py-3 font-medium"><SortButton col="success_rate" label="成功率" /></th>
-                  <th className="text-right px-4 py-3 font-medium"><SortButton col="total_cost" label="成本" /></th>
-                </tr>
-              </thead>
-              <tbody>
-                <EmptyState
-                  loading={isLoading}
-                  isEmpty={!isLoading && sorted.length === 0}
-                  loadingText="加载中..."
-                  emptyText={search ? '没有匹配的渠道' : '暂无统计数据'}
-                  colSpan={6}
-                />
-                {!isLoading && sorted.map((row) => {
-                  const rate = row.request_count > 0
-                    ? ((row.success_count / row.request_count) * 100).toFixed(1)
-                    : '-'
-                  return (
-                    <tr
-                      key={row.channel_id}
-                      className="border-b last:border-0 hover:bg-muted/30 transition-colors"
-                    >
-                      <td className="px-4 py-3 font-medium">{row.channel_name || '未知'}</td>
-                      <td className="px-4 py-3 text-right tabular-nums">{formatNumber(row.request_count)}</td>
-                      <td className="px-4 py-3 text-right tabular-nums text-green-600">{formatNumber(row.success_count)}</td>
-                      <td className="px-4 py-3 text-right tabular-nums text-destructive">{formatNumber(row.failure_count)}</td>
-                      <td className="px-4 py-3 text-right tabular-nums">{rate}%</td>
-                      <td className="px-4 py-3 text-right tabular-nums">{formatCost(row.total_cost)}</td>
-                    </tr>
-                  )
-                })}
-              </tbody>
-            </table>
-          </div>
-        </div>
+        <DataTable
+          columns={[
+            { header: '渠道' },
+            { header: <SortHeader label="请求量" field="request_count" sortBy={sortBy} sortOrder={sortOrder} onSort={handleSort} />, align: 'right' },
+            { header: '成功', align: 'right' },
+            { header: '失败', align: 'right' },
+            { header: <SortHeader label="成功率" field="success_rate" sortBy={sortBy} sortOrder={sortOrder} onSort={handleSort} />, align: 'right' },
+            { header: <SortHeader label="成本" field="total_cost" sortBy={sortBy} sortOrder={sortOrder} onSort={handleSort} />, align: 'right' },
+          ]}
+          loading={isLoading}
+          isEmpty={!isLoading && sorted.length === 0}
+          emptyText={search ? '没有匹配的渠道' : '暂无统计数据'}
+        >
+          {sorted.map((row) => {
+            const rate = row.request_count > 0
+              ? ((row.success_count / row.request_count) * 100).toFixed(1)
+              : '-'
+            return (
+              <tr
+                key={row.channel_id}
+                className="border-b last:border-0 hover:bg-muted/30 transition-colors"
+              >
+                <td className="px-4 py-3 font-medium">{row.channel_name || '未知'}</td>
+                <td className="px-4 py-3 text-right tabular-nums">{formatNumber(row.request_count)}</td>
+                <td className="px-4 py-3 text-right tabular-nums text-green-600">{formatNumber(row.success_count)}</td>
+                <td className="px-4 py-3 text-right tabular-nums text-destructive">{formatNumber(row.failure_count)}</td>
+                <td className="px-4 py-3 text-right tabular-nums">{rate}%</td>
+                <td className="px-4 py-3 text-right tabular-nums">{formatCost(row.total_cost)}</td>
+              </tr>
+            )
+          })}
+        </DataTable>
       )}
     </div>
   )

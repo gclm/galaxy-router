@@ -39,8 +39,9 @@ async fn test_api_keys_list_empty() {
         .oneshot(app.admin_req(Method::GET, "/api/v1/admin/api-keys"))
         .await;
     let body = assert_status(resp, StatusCode::OK).await;
-    assert!(body["data"].is_array());
-    assert_eq!(body["data"].as_array().unwrap().len(), 0);
+    assert!(body["data"]["items"].is_array());
+    assert_eq!(body["data"]["items"].as_array().unwrap().len(), 0);
+    assert_eq!(body["data"]["total"], 0);
 }
 
 #[tokio::test]
@@ -52,7 +53,38 @@ async fn test_api_keys_list_with_data() {
         .oneshot(app.admin_req(Method::GET, "/api/v1/admin/api-keys"))
         .await;
     let body = assert_status(resp, StatusCode::OK).await;
-    assert_eq!(body["data"].as_array().unwrap().len(), 2);
+    assert_eq!(body["data"]["items"].as_array().unwrap().len(), 2);
+    assert_eq!(body["data"]["total"], 2);
+}
+
+#[tokio::test]
+async fn test_api_keys_list_pagination() {
+    let app = TestApp::new().await;
+    create_key_via_api(&app, r#"{"name":"key-a"}"#).await;
+    create_key_via_api(&app, r#"{"name":"key-b"}"#).await;
+    create_key_via_api(&app, r#"{"name":"key-c"}"#).await;
+
+    let resp = app
+        .oneshot(app.admin_req(Method::GET, "/api/v1/admin/api-keys?page=1&page_size=2"))
+        .await;
+    let body = assert_status(resp, StatusCode::OK).await;
+    assert_eq!(body["data"]["items"].as_array().unwrap().len(), 2);
+    assert_eq!(body["data"]["total"], 3);
+}
+
+#[tokio::test]
+async fn test_api_keys_list_search() {
+    let app = TestApp::new().await;
+    create_key_via_api(&app, r#"{"name":"my-special-key"}"#).await;
+    create_key_via_api(&app, r#"{"name":"other-key"}"#).await;
+
+    let resp = app
+        .oneshot(app.admin_req(Method::GET, "/api/v1/admin/api-keys?search=special"))
+        .await;
+    let body = assert_status(resp, StatusCode::OK).await;
+    assert_eq!(body["data"]["items"].as_array().unwrap().len(), 1);
+    assert_eq!(body["data"]["total"], 1);
+    assert_eq!(body["data"]["items"][0]["name"], "my-special-key");
 }
 
 #[tokio::test]

@@ -1,9 +1,8 @@
-import { useState, useMemo } from 'react'
+import { useState } from 'react'
 import { channelsApi } from '@/api/channels'
 import type { Channel, CreateChannelRequest } from '@/api/types'
 import { ENDPOINT_LABELS } from '@/api/types'
 import { Button } from '@/components/ui/button'
-import { Pagination } from '@/components/Pagination'
 import { StatusBadge } from '@/components/StatusBadge'
 import { ConfirmDeleteDialog } from '@/components/ConfirmDeleteDialog'
 import { ChannelForm } from '@/components/ChannelForm'
@@ -15,9 +14,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
-import { FilterBar } from '@/components/common/FilterBar'
-import { PageHeader } from '@/components/common/PageHeader'
-import { EmptyState } from '@/components/common/EmptyState'
+import { FilterBar, PageHeader, DataTable, SortHeader } from '@/components/common'
 import { useTableLoader } from '@/hooks/useTableLoader'
 import {
   useCreateChannel,
@@ -31,65 +28,24 @@ import {
   Pencil,
   Trash2,
   FlaskConical,
-  ArrowUpDown,
 } from 'lucide-react'
 
 export function Channels() {
-  // ─── Table state via useTableLoader ──────────────────────
+  // ─── Table state via useTableLoader（服务端分页） ───────
   const table = useTableLoader<Channel>({
-    fetchFn: async () => {
-      const result = await channelsApi.list()
-      return { items: result.items, total: result.total }
+    fetchFn: async (params) => {
+      const result = await channelsApi.list({
+        page: params.page,
+        page_size: params.pageSize,
+        search: params.search || undefined,
+        status: params.status || undefined,
+        sort_by: params.sortBy,
+        sort_order: params.sortOrder,
+      })
+      return result
     },
     defaultPageSize: 20,
   })
-
-
-  // ─── Client-side filter + sort + paginate ───────────────
-  const displayData = useMemo(() => {
-    let items = [...table.data]
-
-    // Filter by search
-    if (table.search) {
-      const q = table.search.toLowerCase()
-      items = items.filter((c) => c.name.toLowerCase().includes(q))
-    }
-
-    // Filter by status
-    if (table.status === 'enabled') {
-      items = items.filter((c) => c.enabled)
-    } else if (table.status === 'disabled') {
-      items = items.filter((c) => !c.enabled)
-    }
-
-    // Sort
-    items.sort((a, b) => {
-      const av =
-        table.sortBy === 'name'
-          ? a.name.toLowerCase()
-          : a.created_at.toLowerCase()
-      const bv =
-        table.sortBy === 'name'
-          ? b.name.toLowerCase()
-          : b.created_at.toLowerCase()
-      if (av < bv) return table.sortOrder === 'asc' ? -1 : 1
-      if (av > bv) return table.sortOrder === 'asc' ? 1 : -1
-      return 0
-    })
-
-    // Paginate
-    const total = items.length
-    const start = (table.page - 1) * table.pageSize
-    return { items: items.slice(start, start + table.pageSize), total }
-  }, [
-    table.data,
-    table.search,
-    table.status,
-    table.sortBy,
-    table.sortOrder,
-    table.page,
-    table.pageSize,
-  ])
 
   // ─── Dialog state ───────────────────────────────────────
   const [formOpen, setFormOpen] = useState(false)
@@ -97,6 +53,7 @@ export function Channels() {
   const [detailChannel, setDetailChannel] = useState<Channel | null>(null)
   const [testChannel, setTestChannel] = useState<Channel | null>(null)
   const [deleteId, setDeleteId] = useState<string | null>(null)
+  const [toggleTarget, setToggleTarget] = useState<Channel | null>(null)
 
   // ─── Mutations ──────────────────────────────────────────
   const createMutation = useCreateChannel()
@@ -149,6 +106,12 @@ export function Channels() {
     )
   }
 
+  const handleToggleConfirm = () => {
+    if (!toggleTarget) return
+    handleToggleEnabled(toggleTarget)
+    setToggleTarget(null)
+  }
+
   const handleDelete = () => {
     if (!deleteId) return
     deleteMutation.mutate(deleteId, {
@@ -181,6 +144,16 @@ export function Channels() {
 
   const isFiltered = table.search || table.status
 
+  const columns = [
+    { header: <SortHeader label="名称" field="name" sortBy={table.sortBy} sortOrder={table.sortOrder} onSort={table.handleSort} /> },
+    { header: '上游端点' },
+    { header: '状态', align: 'center' as const },
+    { header: '模型', align: 'center' as const },
+    { header: 'Keys', align: 'center' as const },
+    { header: <SortHeader label="创建时间" field="created_at" sortBy={table.sortBy} sortOrder={table.sortOrder} onSort={table.handleSort} /> },
+    { header: '操作', align: 'center' as const },
+  ]
+
   return (
     <div className="space-y-4">
       {/* Page Header */}
@@ -211,139 +184,102 @@ export function Channels() {
       />
 
       {/* Table */}
-      <div className="rounded-2xl border bg-card overflow-hidden">
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="border-b bg-muted/50">
-                <th className="text-left px-4 py-3 font-medium">
-                  <button
-                    className="inline-flex items-center gap-1 hover:text-foreground"
-                    onClick={() => table.handleSort('name')}
-                  >
-                    名称
-                    {table.sortBy === 'name' && <ArrowUpDown className="h-3 w-3" />}
-                  </button>
-                </th>
-                <th className="text-left px-4 py-3 font-medium">上游端点</th>
-                <th className="text-center px-4 py-3 font-medium">状态</th>
-                <th className="text-center px-4 py-3 font-medium">模型</th>
-                <th className="text-center px-4 py-3 font-medium">Keys</th>
-                <th className="text-left px-4 py-3 font-medium">
-                  <button
-                    className="inline-flex items-center gap-1 hover:text-foreground"
-                    onClick={() => table.handleSort('created_at')}
-                  >
-                    创建时间
-                    {table.sortBy === 'created_at' && <ArrowUpDown className="h-3 w-3" />}
-                  </button>
-                </th>
-                <th className="text-center px-4 py-3 font-medium">操作</th>
-              </tr>
-            </thead>
-            <tbody>
-              <EmptyState
-                loading={table.loading}
-                isEmpty={!table.loading && displayData.items.length === 0}
-                loadingText="加载中..."
-                emptyText={isFiltered ? '没有匹配的渠道' : '暂无渠道，点击上方按钮添加'}
-                colSpan={7}
-              />
-              {!table.loading &&
-                displayData.items.map((channel) => {
-                  const models = channel.models || []
-                  return (
-                    <tr
-                      key={channel.id}
-                      className="border-b last:border-0 hover:bg-muted/30 transition-colors"
+      <DataTable
+        columns={columns}
+        loading={table.loading}
+        isEmpty={!table.loading && table.data.length === 0}
+        emptyText={isFiltered ? '没有匹配的渠道' : '暂无渠道，点击上方按钮添加'}
+        pagination={{
+          total: table.total,
+          page: table.page,
+          pageSize: table.pageSize,
+          onPageChange: table.setPage,
+          onPageSizeChange: table.setPageSize,
+          pageSizeOptions: [20, 50, 100],
+        }}
+      >
+        {table.data.map((channel) => {
+          const models = channel.models || []
+          return (
+            <tr
+              key={channel.id}
+              className="border-b last:border-0 hover:bg-muted/30 transition-colors"
+            >
+              <td className="px-4 py-3 font-medium">
+                <button
+                  className="hover:text-primary hover:underline cursor-pointer text-left"
+                  onClick={() => setDetailChannel(channel)}
+                >
+                  {channel.name}
+                </button>
+              </td>
+              <td className="px-4 py-3">
+                <div className="flex flex-wrap gap-1">
+                  {channel.endpoints.map((ep, i) => (
+                    <span
+                      key={i}
+                      className={`inline-flex items-center rounded-md px-1.5 py-0.5 text-xs font-medium ${
+                        ep.enabled === false
+                          ? 'bg-muted text-muted-foreground line-through'
+                          : 'bg-primary/10 text-primary'
+                      }`}
                     >
-                      <td className="px-4 py-3 font-medium">
-                        <button
-                          className="hover:text-primary hover:underline cursor-pointer text-left"
-                          onClick={() => setDetailChannel(channel)}
-                        >
-                          {channel.name}
-                        </button>
-                      </td>
-                      <td className="px-4 py-3">
-                        <div className="flex flex-wrap gap-1">
-                          {channel.endpoints.map((ep, i) => (
-                            <span
-                              key={i}
-                              className={`inline-flex items-center rounded-md px-1.5 py-0.5 text-xs font-medium ${
-                                ep.enabled === false
-                                  ? 'bg-muted text-muted-foreground line-through'
-                                  : 'bg-primary/10 text-primary'
-                              }`}
-                            >
-                              {ENDPOINT_LABELS[ep.type] || ep.type}
-                            </span>
-                          ))}
-                        </div>
-                      </td>
-                      <td className="px-4 py-3 text-center">
-                        <StatusBadge
-                          enabled={channel.enabled}
-                          onClick={() => handleToggleEnabled(channel)}
-                        />
-                      </td>
-                      <td className="px-4 py-3 text-center text-muted-foreground">
-                        {models.length}
-                      </td>
-                      <td className="px-4 py-3 text-center text-muted-foreground">
-                        {channel.api_keys.filter((k) => k.enabled !== false).length}/
-                        {channel.api_keys.length}
-                      </td>
-                      <td className="px-4 py-3 text-muted-foreground text-xs">
-                        {formatDate(channel.created_at)}
-                      </td>
-                      <td className="px-4 py-3">
-                        <div className="flex items-center justify-center gap-1">
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            className="h-8 w-8"
-                            onClick={() => setTestChannel(channel)}
-                            title="测试"
-                          >
-                            <FlaskConical className="h-3.5 w-3.5" />
-                          </Button>
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            className="h-8 w-8"
-                            onClick={() => openEdit(channel)}
-                            title="编辑"
-                          >
-                            <Pencil className="h-3.5 w-3.5" />
-                          </Button>
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            className="h-8 w-8 text-destructive hover:text-destructive"
-                            onClick={() => setDeleteId(channel.id)}
-                            title="删除"
-                          >
-                            <Trash2 className="h-3.5 w-3.5" />
-                          </Button>
-                        </div>
-                      </td>
-                    </tr>
-                  )
-                })}
-            </tbody>
-          </table>
-        </div>
-
-        <Pagination
-          total={displayData.total}
-          page={table.page}
-          pageSize={table.pageSize}
-          onPageChange={table.setPage}
-          onPageSizeChange={table.setPageSize}
-          pageSizeOptions={[20, 50, 100]}
-        />
-      </div>
+                      {ENDPOINT_LABELS[ep.type] || ep.type}
+                    </span>
+                  ))}
+                </div>
+              </td>
+              <td className="px-4 py-3 text-center">
+                <StatusBadge
+                  enabled={channel.enabled}
+                  onClick={() => setToggleTarget(channel)}
+                />
+              </td>
+              <td className="px-4 py-3 text-center text-muted-foreground">
+                {models.length}
+              </td>
+              <td className="px-4 py-3 text-center text-muted-foreground">
+                {channel.api_keys.filter((k) => k.enabled !== false).length}/
+                {channel.api_keys.length}
+              </td>
+              <td className="px-4 py-3 text-muted-foreground text-xs">
+                {formatDate(channel.created_at)}
+              </td>
+              <td className="px-4 py-3">
+                <div className="flex items-center justify-center gap-1">
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-8 w-8"
+                    onClick={() => setTestChannel(channel)}
+                    title="测试"
+                  >
+                    <FlaskConical className="h-3.5 w-3.5" />
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-8 w-8"
+                    onClick={() => openEdit(channel)}
+                    title="编辑"
+                  >
+                    <Pencil className="h-3.5 w-3.5" />
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-8 w-8 text-destructive hover:text-destructive"
+                    onClick={() => setDeleteId(channel.id)}
+                    title="删除"
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                  </Button>
+                </div>
+              </td>
+            </tr>
+          )
+        })}
+      </DataTable>
 
       {/* Create/Edit Dialog */}
       <Dialog
@@ -404,6 +340,17 @@ export function Channels() {
         }}
         message="确定要删除此渠道吗？此操作不可撤销。"
         onConfirm={handleDelete}
+      />
+
+      {/* Toggle Confirm Dialog */}
+      <ConfirmDeleteDialog
+        open={!!toggleTarget}
+        onOpenChange={(open) => {
+          if (!open) setToggleTarget(null)
+        }}
+        title={toggleTarget?.enabled ? '禁用渠道' : '启用渠道'}
+        message={`确定要${toggleTarget?.enabled ? '禁用' : '启用'}渠道「${toggleTarget?.name}」吗？`}
+        onConfirm={handleToggleConfirm}
       />
     </div>
   )

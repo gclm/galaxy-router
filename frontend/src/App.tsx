@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react'
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
+import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom'
 import { useAuthStore } from '@/stores/auth'
 import { getHealth } from '@/api/auth'
 import { Layout } from '@/components/layout'
-import { Login, Setup, Dashboard, Channels, Groups, ApiKeys, ApiKeyStats, ModelStats, ChannelStats, Settings, Logs, Models, Playground } from '@/pages'
+import { ErrorBoundary } from '@/components/ErrorBoundary'
+import { Login, Setup, Dashboard, Channels, Groups, ApiKeys, ApiKeyStats, ModelStats, ChannelStats, Settings, Logs, Models, Playground, NotFound } from '@/pages'
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { isAuthenticated, isLoading } = useAuthStore()
@@ -21,6 +22,30 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
   }
 
   return <>{children}</>
+}
+
+/** 页面切换时顶部显示进度条（兼容 BrowserRouter） */
+function NavigationProgress() {
+  const location = useLocation()
+  const [active, setActive] = useState(false)
+  const [prevPathname, setPrevPathname] = useState(location.pathname)
+
+  useEffect(() => {
+    if (location.pathname !== prevPathname) {
+      setActive(true)
+      setPrevPathname(location.pathname)
+      const timer = setTimeout(() => setActive(false), 300)
+      return () => clearTimeout(timer)
+    }
+  }, [location.pathname, prevPathname])
+
+  return (
+    <div className="fixed top-0 left-0 right-0 z-[9999] h-0.5">
+      {active && (
+        <div className="h-full bg-primary animate-[nav-progress_300ms_ease-out_forwards]" />
+      )}
+    </div>
+  )
 }
 
 function App() {
@@ -55,38 +80,44 @@ function App() {
   if (needsSetup) {
     return (
       <BrowserRouter>
-        <Routes>
-          <Route path="*" element={<Setup />} />
-        </Routes>
+        <ErrorBoundary>
+          <Routes>
+            <Route path="*" element={<Setup />} />
+          </Routes>
+        </ErrorBoundary>
       </BrowserRouter>
     )
   }
 
   return (
     <BrowserRouter>
-      <Routes>
-        <Route path="/login" element={<Login />} />
-        <Route
-          path="/"
-          element={
-            <ProtectedRoute>
-              <Layout />
-            </ProtectedRoute>
-          }
-        >
-          <Route index element={<Dashboard />} />
-          <Route path="channels" element={<Channels />} />
-          <Route path="groups" element={<Groups />} />
-          <Route path="api-keys" element={<ApiKeys />} />
-          <Route path="api-key-stats" element={<ApiKeyStats />} />
-          <Route path="stats/models" element={<ModelStats />} />
-          <Route path="stats/channels" element={<ChannelStats />} />
-          <Route path="logs" element={<Logs />} />
-          <Route path="playground" element={<Playground />} />
-          <Route path="models" element={<Models />} />
-          <Route path="settings" element={<Settings />} />
-        </Route>
-      </Routes>
+      <ErrorBoundary>
+        <NavigationProgress />
+        <Routes>
+          <Route path="/login" element={<Login />} />
+          <Route
+            path="/"
+            element={
+              <ProtectedRoute>
+                <Layout />
+              </ProtectedRoute>
+            }
+          >
+            <Route index element={<Dashboard />} />
+            <Route path="channels" element={<Channels />} />
+            <Route path="groups" element={<Groups />} />
+            <Route path="api-keys" element={<ApiKeys />} />
+            <Route path="api-key-stats" element={<ApiKeyStats />} />
+            <Route path="stats/models" element={<ModelStats />} />
+            <Route path="stats/channels" element={<ChannelStats />} />
+            <Route path="logs" element={<Logs />} />
+            <Route path="playground" element={<Playground />} />
+            <Route path="models" element={<Models />} />
+            <Route path="settings" element={<Settings />} />
+          </Route>
+          <Route path="*" element={<NotFound />} />
+        </Routes>
+      </ErrorBoundary>
     </BrowserRouter>
   )
 }

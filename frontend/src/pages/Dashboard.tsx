@@ -80,24 +80,24 @@ export function Dashboard() {
     if (customStart && customEnd) setCustomMode(true)
   }
 
-  const sortedDaily = useMemo(() =>
+  const chartData = useMemo(() =>
     [...(dailyQuery.data ?? [])].sort((a, b) => a.date.localeCompare(b.date))
   , [dailyQuery.data])
 
-  const daily = dailyQuery.data ?? []
+  const rawDaily = dailyQuery.data ?? []
 
   const summary = useMemo(() => {
-    const requests = daily.reduce((s, d) => s + d.request_count, 0)
-    const success = daily.reduce((s, d) => s + d.success_count, 0)
-    const failure = daily.reduce((s, d) => s + d.failure_count, 0)
-    const inputTokens = daily.reduce((s, d) => s + d.input_tokens, 0)
-    const outputTokens = daily.reduce((s, d) => s + d.output_tokens, 0)
-    const cacheReadTokens = daily.reduce((s, d) => s + d.cache_read_tokens, 0)
-    const cacheCreationTokens = daily.reduce((s, d) => s + d.cache_creation_tokens, 0)
-    const cost = daily.reduce((s, d) => s + d.total_cost, 0)
+    const requests = rawDaily.reduce((s, d) => s + d.request_count, 0)
+    const success = rawDaily.reduce((s, d) => s + d.success_count, 0)
+    const failure = rawDaily.reduce((s, d) => s + d.failure_count, 0)
+    const inputTokens = rawDaily.reduce((s, d) => s + d.input_tokens, 0)
+    const outputTokens = rawDaily.reduce((s, d) => s + d.output_tokens, 0)
+    const cacheReadTokens = rawDaily.reduce((s, d) => s + d.cache_read_tokens, 0)
+    const cacheCreationTokens = rawDaily.reduce((s, d) => s + d.cache_creation_tokens, 0)
+    const cost = rawDaily.reduce((s, d) => s + d.total_cost, 0)
     const successRate = requests > 0 ? ((success / requests) * 100) : 0
     return { requests, success, failure, inputTokens, outputTokens, cacheReadTokens, cacheCreationTokens, cost, successRate }
-  }, [daily])
+  }, [rawDaily])
 
   const latency = latencyQuery.data
   const p50 = latency?.p50_latency_ms ?? 0
@@ -234,11 +234,11 @@ export function Dashboard() {
         {/* 图表区域 */}
         <div className="p-5 space-y-5">
           <div className="grid gap-5 md:grid-cols-2">
-            <AreaChartCard title="请求趋势" data={sortedDaily} dataKey="request_count" stroke={C_BLUE} emptyText="暂无请求数据" loading={dailyQuery.isLoading} />
-            <TokenAreaChart data={sortedDaily} loading={dailyQuery.isLoading} />
+            <AreaChartCard title="请求趋势" data={chartData} dataKey="request_count" stroke={C_BLUE} emptyText="暂无请求数据" loading={dailyQuery.isLoading} />
+            <TokenAreaChart data={chartData} loading={dailyQuery.isLoading} />
           </div>
 
-          <DailyCostBarChart data={sortedDaily} loading={dailyQuery.isLoading} />
+          <DailyCostBarChart data={chartData} loading={dailyQuery.isLoading} />
         </div>
       </div>
 

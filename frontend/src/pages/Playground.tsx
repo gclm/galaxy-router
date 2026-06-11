@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
-import { apiKeysApi } from '@/api/api-keys'
 import { statsApi } from '@/api/stats'
 import { PageHeader } from '@/components/common/PageHeader'
-import type { ApiKey, RequestLog, EndpointType } from '@/api/types'
+import { useApiKeys } from '@/api/query-hooks'
+import type { RequestLog, EndpointType } from '@/api/types'
 import { ENDPOINT_LABELS } from '@/api/types'
 import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -146,7 +146,6 @@ type TabType = 'rendered' | 'request' | 'raw'
 export function Playground() {
   const saved = useRef(loadConfig())
 
-  const [apiKeys, setApiKeys] = useState<ApiKey[]>([])
   const [selectedApiKeyId, setSelectedApiKeyId] = useState(saved.current.selectedApiKeyId || '')
   const [models, setModels] = useState<string[]>([])
   const [selectedModel, setSelectedModel] = useState(saved.current.selectedModel || '')
@@ -169,6 +168,10 @@ export function Playground() {
   const startTimeRef = useRef(0)
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
+  // 获取 API Key 列表（React Query）
+  const { data: apiKeysData } = useApiKeys()
+  const apiKeys = (apiKeysData?.items ?? []).filter((k) => k.enabled)
+
   const selectedApiKey = apiKeys.find((k) => k.id === selectedApiKeyId)
   const canStream = STREAMABLE_PROTOCOLS.has(protocol)
   const showParams = PARAMS_SUPPORTED.has(protocol)
@@ -189,16 +192,13 @@ export function Playground() {
     return () => { if (saveTimerRef.current) clearTimeout(saveTimerRef.current) }
   }, [selectedApiKeyId, protocol, selectedModel, temperature, maxTokens, stream])
 
-  // 获取 API Key 列表
+  // 首次加载时自动选择第一个可用 Key
   useEffect(() => {
-    apiKeysApi.list().then((keys) => {
-      setApiKeys(keys.filter((k) => k.enabled))
-      if (keys.length > 0 && !selectedApiKeyId) {
-        const first = keys.find((k) => k.enabled)
-        if (first) setSelectedApiKeyId(first.id)
-      }
-    })
-  }, [])
+    if (apiKeys.length > 0 && !selectedApiKeyId) {
+      const first = apiKeys.find((k) => k.enabled)
+      if (first) setSelectedApiKeyId(first.id)
+    }
+  }, [apiKeys.length, selectedApiKeyId])
 
   // 切换 API Key 时刷新模型列表
   useEffect(() => {

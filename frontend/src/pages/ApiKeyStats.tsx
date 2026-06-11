@@ -1,6 +1,6 @@
 import { useState, useMemo } from 'react'
 import { useStatsApiKeys } from '@/api/query-hooks'
-import { PageHeader, FilterBar, EmptyState, SummaryCard, ViewToggle } from '@/components/common'
+import { PageHeader, FilterBar, SummaryCard, ViewToggle, DataTable } from '@/components/common'
 import { DistributionPieChart, CostBarChart } from '@/components/charts'
 import { formatNumber, formatCost } from '@/lib/utils'
 
@@ -10,7 +10,7 @@ export function ApiKeyStats() {
   const [search, setSearch] = useState('')
   const [days, setDays] = useState(7)
 
-  const { data, isLoading } = useStatsApiKeys(days)
+  const { data, isLoading, refetch } = useStatsApiKeys(days)
   const stats = data ?? []
 
   const chartData = useMemo(() =>
@@ -68,7 +68,7 @@ export function ApiKeyStats() {
           searchValue={search}
           onSearchChange={setSearch}
           searchPlaceholder="搜索 Key 名称..."
-          onRefresh={() => {}}
+          onRefresh={() => refetch()}
           loading={isLoading}
           extra={
             <select
@@ -99,56 +99,45 @@ export function ApiKeyStats() {
 
       {/* 表格区域 */}
       {showTable && (
-        <div className="rounded-2xl border bg-card overflow-hidden">
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b bg-muted/50">
-                  <th className="text-left px-4 py-3 font-medium">Key 名称</th>
-                  <th className="text-right px-4 py-3 font-medium">请求量</th>
-                  <th className="text-right px-4 py-3 font-medium">成功</th>
-                  <th className="text-right px-4 py-3 font-medium">失败</th>
-                  <th className="text-right px-4 py-3 font-medium">成功率</th>
-                  <th className="text-right px-4 py-3 font-medium">输入 Token</th>
-                  <th className="text-right px-4 py-3 font-medium">输出 Token</th>
-                  <th className="text-right px-4 py-3 font-medium">成本</th>
-                </tr>
-              </thead>
-              <tbody>
-                <EmptyState
-                  loading={isLoading}
-                  isEmpty={!isLoading && filtered.length === 0}
-                  loadingText="加载中..."
-                  emptyText={search ? '没有匹配的 Key' : '暂无统计数据'}
-                  colSpan={8}
-                />
-                {!isLoading && filtered.map((row) => {
-                  const rate = row.request_count > 0
-                    ? ((row.success_count / row.request_count) * 100).toFixed(1)
-                    : '-'
-                  return (
-                    <tr
-                      key={row.api_key_id}
-                      className="border-b last:border-0 hover:bg-muted/30 transition-colors"
-                    >
-                      <td className="px-4 py-3">
-                        <p className="font-medium">{row.api_key_name || '未知'}</p>
-                        <p className="text-xs text-muted-foreground font-mono">{row.api_key_id.slice(0, 12)}...</p>
-                      </td>
-                      <td className="px-4 py-3 text-right tabular-nums">{formatNumber(row.request_count)}</td>
-                      <td className="px-4 py-3 text-right tabular-nums text-green-600">{formatNumber(row.success_count)}</td>
-                      <td className="px-4 py-3 text-right tabular-nums text-destructive">{formatNumber(row.failure_count)}</td>
-                      <td className="px-4 py-3 text-right tabular-nums">{rate}%</td>
-                      <td className="px-4 py-3 text-right tabular-nums text-muted-foreground">{formatNumber(row.input_tokens)}</td>
-                      <td className="px-4 py-3 text-right tabular-nums text-muted-foreground">{formatNumber(row.output_tokens)}</td>
-                      <td className="px-4 py-3 text-right tabular-nums">{formatCost(row.total_cost)}</td>
-                    </tr>
-                  )
-                })}
-              </tbody>
-            </table>
-          </div>
-        </div>
+        <DataTable
+          columns={[
+            { header: 'Key 名称' },
+            { header: '请求量', align: 'right' },
+            { header: '成功', align: 'right' },
+            { header: '失败', align: 'right' },
+            { header: '成功率', align: 'right' },
+            { header: '输入 Token', align: 'right' },
+            { header: '输出 Token', align: 'right' },
+            { header: '成本', align: 'right' },
+          ]}
+          loading={isLoading}
+          isEmpty={!isLoading && filtered.length === 0}
+          emptyText={search ? '没有匹配的 Key' : '暂无统计数据'}
+        >
+          {filtered.map((row) => {
+            const rate = row.request_count > 0
+              ? ((row.success_count / row.request_count) * 100).toFixed(1)
+              : '-'
+            return (
+              <tr
+                key={row.api_key_id}
+                className="border-b last:border-0 hover:bg-muted/30 transition-colors"
+              >
+                <td className="px-4 py-3">
+                  <p className="font-medium">{row.api_key_name || '未知'}</p>
+                  <p className="text-xs text-muted-foreground font-mono">{row.api_key_id.slice(0, 12)}...</p>
+                </td>
+                <td className="px-4 py-3 text-right tabular-nums">{formatNumber(row.request_count)}</td>
+                <td className="px-4 py-3 text-right tabular-nums text-green-600">{formatNumber(row.success_count)}</td>
+                <td className="px-4 py-3 text-right tabular-nums text-destructive">{formatNumber(row.failure_count)}</td>
+                <td className="px-4 py-3 text-right tabular-nums">{rate}%</td>
+                <td className="px-4 py-3 text-right tabular-nums text-muted-foreground">{formatNumber(row.input_tokens)}</td>
+                <td className="px-4 py-3 text-right tabular-nums text-muted-foreground">{formatNumber(row.output_tokens)}</td>
+                <td className="px-4 py-3 text-right tabular-nums">{formatCost(row.total_cost)}</td>
+              </tr>
+            )
+          })}
+        </DataTable>
       )}
     </div>
   )

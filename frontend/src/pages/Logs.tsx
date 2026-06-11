@@ -5,9 +5,7 @@ import { useAutoRefresh } from '@/hooks/useAutoRefresh'
 import { ENDPOINT_LABELS } from '@/api/types'
 import type { EndpointType, ChannelAttempt } from '@/api/types'
 import { Button } from '@/components/ui/button'
-import { Pagination } from '@/components/Pagination'
-import { EmptyState } from '@/components/common'
-import { PageHeader } from '@/components/common/PageHeader'
+import { DataTable, PageHeader } from '@/components/common'
 import {
   Dialog,
   DialogContent,
@@ -99,7 +97,7 @@ export function Logs() {
   const { data: logDetail, isLoading: detailLoading } = useLogDetail(detailLogId)
 
   const { enabled: autoRefresh, toggle: toggleAutoRefresh } = useAutoRefresh({
-    refetch: () => { refetch() },
+    refetch,
     defaultInterval: 30,
     storageKey: 'logs-refresh',
     defaultEnabled: false,
@@ -118,14 +116,12 @@ export function Logs() {
   }
 
   const handleRefresh = () => {
-    // Triggered by FilterBar button; React Query refetches on focus/window focus
-    // We can force a refetch by toggling a key, but for simplicity we rely on staleTime
-    window.dispatchEvent(new Event('focus'))
+    refetch()
   }
 
   return (
     <div className="space-y-4">
-      <PageHeader subtitle="查看每次 API 请求的详细记录" />
+      <PageHeader title="请求日志" subtitle="查看每次 API 请求的详细记录" />
 
       {/* 筛选栏 */}
       <div className="flex items-center gap-3 flex-wrap">
@@ -171,97 +167,92 @@ export function Logs() {
       </div>
 
       {/* 表格 */}
-      <div className="rounded-2xl border bg-card overflow-hidden">
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="border-b bg-muted/50">
-                <th className="text-left px-4 py-3 font-medium whitespace-nowrap">时间</th>
-                <th className="text-left px-4 py-3 font-medium">模型</th>
-                <th className="text-left px-4 py-3 font-medium">渠道</th>
-                <th className="text-center px-4 py-3 font-medium">端点</th>
-                <th className="text-center px-4 py-3 font-medium">类型</th>
-                <th className="text-center px-4 py-3 font-medium">状态</th>
-                <th className="text-right px-4 py-3 font-medium">输入</th>
-                <th className="text-right px-4 py-3 font-medium">输出</th>
-                <th className="text-right px-4 py-3 font-medium">耗时</th>
-                <th className="text-right px-4 py-3 font-medium">TTFT</th>
-                <th className="text-right px-4 py-3 font-medium">成本</th>
-              </tr>
-            </thead>
-            <tbody>
-              <EmptyState
-                loading={isLoading}
-                isEmpty={!isLoading && logs.length === 0}
-                loadingText="加载中..."
-                emptyText="暂无请求记录"
-                colSpan={11}
-              />
-              {!isLoading && logs.length > 0 && logs.map((log) => (
-                <tr
-                  key={log.id}
-                  className="border-b last:border-0 hover:bg-muted/30 transition-colors cursor-pointer"
-                  onClick={() => openDetail(log.id)}
-                >
-                  <td className="px-4 py-3 text-xs text-muted-foreground whitespace-nowrap">{formatDate(log.created_at)}</td>
-                  <td className="px-4 py-3">
-                    <div>
-                      <p className="font-medium text-sm">{log.requested_model}</p>
-                      {log.actual_model && log.actual_model !== log.requested_model && (
-                        <p className="text-xs text-muted-foreground">→ {log.actual_model}</p>
-                      )}
-                    </div>
-                  </td>
-                  <td className="px-4 py-3 text-muted-foreground text-xs">{log.channel_name ?? '-'}</td>
-                  <td className="px-4 py-3 text-center">
-                    <span className="inline-flex items-center rounded-md bg-primary/10 px-1.5 py-0.5 text-xs font-medium text-primary">
-                      {log.endpoint_type ? (ENDPOINT_LABELS[log.endpoint_type as EndpointType] ?? log.endpoint_type) : '-'}
-                    </span>
-                  </td>
-                  <td className="px-4 py-3 text-center">
-                    <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${
-                      log.request_type === 'passthrough'
-                        ? 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400'
-                        : 'bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400'
-                    }`}>
-                      {log.request_type === 'passthrough' ? '直通' : '转换'}
-                    </span>
-                    {log.is_stream && (
-                      <span className="ml-1 inline-flex items-center rounded-full px-1.5 py-0.5 text-xs font-medium bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400">
-                        流式
-                      </span>
-                    )}
-                  </td>
-                  <td className="px-4 py-3 text-center">
-                    {log.error_message ? (
-                      <span className="inline-flex items-center gap-1 text-destructive text-xs">
-                        <XCircle className="h-3.5 w-3.5" />
-                        {log.status_code ?? 'ERR'}
-                      </span>
-                    ) : (
-                      <span className="inline-flex items-center gap-1 text-green-600 text-xs">
-                        <CheckCircle2 className="h-3.5 w-3.5" />
-                        {log.status_code ?? 200}
-                      </span>
-                    )}
-                  </td>
-                  <td className="px-4 py-3 text-right text-xs">{formatNumber(log.input_tokens)}</td>
-                  <td className="px-4 py-3 text-right text-xs">{formatNumber(log.output_tokens)}</td>
-                  <td className="px-4 py-3 text-right text-xs text-muted-foreground">
-                    {formatLatency(log.latency_ms)}
-                  </td>
-                  <td className="px-4 py-3 text-right text-xs text-muted-foreground">
-                    {log.ttft_ms != null ? formatLatency(log.ttft_ms) : '-'}
-                  </td>
-                  <td className="px-4 py-3 text-right text-xs">{formatCost(log.cost)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-
-        <Pagination total={total} page={page} pageSize={pageSize} onPageChange={setPage} onPageSizeChange={setPageSize} pageSizeOptions={[20, 50, 100]} />
-      </div>
+      <DataTable
+        columns={[
+          { header: '时间', className: 'whitespace-nowrap' },
+          { header: '模型' },
+          { header: '渠道' },
+          { header: '端点', align: 'center' },
+          { header: '类型', align: 'center' },
+          { header: '状态', align: 'center' },
+          { header: '输入', align: 'right' },
+          { header: '输出', align: 'right' },
+          { header: '耗时', align: 'right' },
+          { header: 'TTFT', align: 'right' },
+          { header: '成本', align: 'right' },
+        ]}
+        loading={isLoading}
+        isEmpty={!isLoading && logs.length === 0}
+        emptyText="暂无请求记录"
+        pagination={{
+          total,
+          page,
+          pageSize,
+          onPageChange: setPage,
+          onPageSizeChange: setPageSize,
+          pageSizeOptions: [20, 50, 100],
+        }}
+      >
+        {logs.map((log) => (
+          <tr
+            key={log.id}
+            className="border-b last:border-0 hover:bg-muted/30 transition-colors cursor-pointer"
+            onClick={() => openDetail(log.id)}
+          >
+            <td className="px-4 py-3 text-xs text-muted-foreground whitespace-nowrap">{formatDate(log.created_at)}</td>
+            <td className="px-4 py-3">
+              <div>
+                <p className="font-medium text-sm">{log.requested_model}</p>
+                {log.actual_model && log.actual_model !== log.requested_model && (
+                  <p className="text-xs text-muted-foreground">→ {log.actual_model}</p>
+                )}
+              </div>
+            </td>
+            <td className="px-4 py-3 text-muted-foreground text-xs">{log.channel_name ?? '-'}</td>
+            <td className="px-4 py-3 text-center">
+              <span className="inline-flex items-center rounded-md bg-primary/10 px-1.5 py-0.5 text-xs font-medium text-primary">
+                {log.endpoint_type ? (ENDPOINT_LABELS[log.endpoint_type as EndpointType] ?? log.endpoint_type) : '-'}
+              </span>
+            </td>
+            <td className="px-4 py-3 text-center">
+              <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${
+                log.request_type === 'passthrough'
+                  ? 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400'
+                  : 'bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400'
+              }`}>
+                {log.request_type === 'passthrough' ? '直通' : '转换'}
+              </span>
+              {log.is_stream && (
+                <span className="ml-1 inline-flex items-center rounded-full px-1.5 py-0.5 text-xs font-medium bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400">
+                  流式
+                </span>
+              )}
+            </td>
+            <td className="px-4 py-3 text-center">
+              {log.error_message ? (
+                <span className="inline-flex items-center gap-1 text-destructive text-xs">
+                  <XCircle className="h-3.5 w-3.5" />
+                  {log.status_code ?? 'ERR'}
+                </span>
+              ) : (
+                <span className="inline-flex items-center gap-1 text-green-600 text-xs">
+                  <CheckCircle2 className="h-3.5 w-3.5" />
+                  {log.status_code ?? 200}
+                </span>
+              )}
+            </td>
+            <td className="px-4 py-3 text-right text-xs">{formatNumber(log.input_tokens)}</td>
+            <td className="px-4 py-3 text-right text-xs">{formatNumber(log.output_tokens)}</td>
+            <td className="px-4 py-3 text-right text-xs text-muted-foreground">
+              {formatLatency(log.latency_ms)}
+            </td>
+            <td className="px-4 py-3 text-right text-xs text-muted-foreground">
+              {log.ttft_ms != null ? formatLatency(log.ttft_ms) : '-'}
+            </td>
+            <td className="px-4 py-3 text-right text-xs">{formatCost(log.cost)}</td>
+          </tr>
+        ))}
+      </DataTable>
 
       {/* 详情弹窗 */}
       <Dialog open={!!detailLogId} onOpenChange={(open) => { if (!open) closeDetail() }}>

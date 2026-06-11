@@ -1,10 +1,17 @@
 use axum::{
     Json,
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::StatusCode,
 };
 use serde::{Deserialize, Serialize};
-use sqlx::{AssertSqlSafe, SqlitePool};
+use sqlx::{AssertSqlSafe, Row, SqlitePool};
+
+/// 分页响应
+#[derive(Debug, Serialize)]
+pub struct PaginatedResponse<T: Serialize> {
+    pub items: Vec<T>,
+    pub total: i64,
+}
 
 use crate::api::middleware::ApiKeyCache;
 use crate::api::response::generate_id;
@@ -55,6 +62,17 @@ pub struct ApiKeyState {
     pub timezone_offset: i32,
 }
 
+/// 列表查询参数
+#[derive(Debug, Deserialize)]
+pub struct ListApiKeysQuery {
+    pub search: Option<String>,
+    pub status: Option<String>,
+    pub sort_by: Option<String>,
+    pub sort_order: Option<String>,
+    pub page: Option<i32>,
+    pub page_size: Option<i32>,
+}
+
 /// 空字符串转 None
 fn empty_to_none(s: String) -> Option<String> {
     if s.is_empty() { None } else { Some(s) }
@@ -69,48 +87,97 @@ pub fn parse_supported_models(models_str: &str) -> Vec<String> {
         .collect()
 }
 
-/// 获取 API Key 列表
+/// 获取 API Key 列表（支持搜索、筛选、排序、分页）
 pub async fn list(
     State(state): State<ApiKeyState>,
-) -> Result<Json<ApiResponse<Vec<ApiKey>>>, (StatusCode, Json<ApiError>)> {
-    let tz = tz_modifier(state.timezone_offset);
-    let keys = sqlx::query_as::<_, (String, String, String, bool, String, i32, i32, String, String, String)>(
-        AssertSqlSafe(format!("SELECT id, name, api_key, enabled, supported_models, COALESCE(rate_limit_rpm, 0), COALESCE(rate_limit_tpm, 0), COALESCE(allowed_groups, ''), datetime(created_at, '{tz}') as created_at, datetime(updated_at, '{tz}') as updated_at FROM api_keys ORDER BY created_at DESC").as_str()),
-    )
-    .fetch_all(&state.pool)
-    .await
-    .map_err(|e| ApiError::internal_error(e.to_string()))?;
+    Query(query): Query<ListApiKeysQuery>,
+) -> Result<Json<ApiResponse<PaginatedResponse<ApiKey>>>, (StatusCode, Json<ApiError>)> {
+    let page = query.page.unwrap_or(1).max(1);
+    let page_size = query.page_size.unwrap_or(20).clamp(1, 100);
+    let offset = (page - 1) * page_size;
 
-    let result: Vec<ApiKey> = keys
-        .into_iter()
-        .map(
-            |(
-                id,
-                name,
-                api_key,
-                enabled,
-                supported_models,
-                rate_limit_rpm,
-                rate_limit_tpm,
-                allowed_groups,
-                created_at,
-                updated_at,
-            )| ApiKey {
-                id,
-                name,
-                api_key,
-                enabled,
-                supported_models: empty_to_none(supported_models),
-                rate_limit_rpm,
-                rate_limit_tpm,
-                allowed_groups: empty_to_none(allowed_groups),
-                created_at,
-                updated_at,
-            },
-        )
+    let order_field = match query.sort_by.as_deref() {
+        Some("name") => "name",
+        _ => "created_at",
+    };
+    let order_dir = match query.sort_order.as_deref() {
+        Some("asc") => "ASC",
+        _ => "DESC",
+    };
+
+    // Count
+    let mut count_builder = sqlx::QueryBuilder::new("SELECT COUNT(*) FROM api_keys");
+    let _has_where = push_where(&mut count_builder, &query);
+    let count_row = count_builder
+        .build()
+        .fetch_one(&state.pool)
+        .await
+        .map_err(|e| ApiError::internal_error(e.to_string()))?;
+    let total: i64 = sqlx::Row::get(&count_row, 0);
+
+    // Data
+    let tz = tz_modifier(state.timezone_offset);
+    let mut data_builder = sqlx::QueryBuilder::new(format!(
+        "SELECT id, name, api_key, enabled, COALESCE(supported_models, '') as supported_models, COALESCE(rate_limit_rpm, 0) as rate_limit_rpm, COALESCE(rate_limit_tpm, 0) as rate_limit_tpm, COALESCE(allowed_groups, '') as allowed_groups, datetime(created_at, '{}') as created_at, datetime(updated_at, '{}') as updated_at FROM api_keys",
+        tz, tz
+    ));
+    push_where(&mut data_builder, &query);
+    data_builder.push(format!(" ORDER BY {} {} ", order_field, order_dir));
+    data_builder.push(" LIMIT ");
+    data_builder.push_bind(page_size);
+    data_builder.push(" OFFSET ");
+    data_builder.push_bind(offset);
+
+    let rows = data_builder
+        .build()
+        .fetch_all(&state.pool)
+        .await
+        .map_err(|e| ApiError::internal_error(e.to_string()))?;
+
+    let items: Vec<ApiKey> = rows
+        .iter()
+        .map(|row| ApiKey {
+            id: row.get("id"),
+            name: row.get("name"),
+            api_key: row.get("api_key"),
+            enabled: row.get("enabled"),
+            supported_models: empty_to_none(row.get::<String, _>("supported_models")),
+            rate_limit_rpm: row.get("rate_limit_rpm"),
+            rate_limit_tpm: row.get("rate_limit_tpm"),
+            allowed_groups: empty_to_none(row.get::<String, _>("allowed_groups")),
+            created_at: row.get("created_at"),
+            updated_at: row.get("updated_at"),
+        })
         .collect();
 
-    Ok(Json(ApiResponse::success(result)))
+    Ok(Json(ApiResponse::success(PaginatedResponse { items, total })))
+}
+
+fn push_where(
+    builder: &mut sqlx::QueryBuilder<sqlx::Sqlite>,
+    query: &ListApiKeysQuery,
+) -> bool {
+    let mut has_where = false;
+
+    if let Some(ref search) = query.search
+        && !search.is_empty()
+    {
+        builder.push(" WHERE name LIKE ");
+        builder.push_bind(format!("%{search}%"));
+        has_where = true;
+    }
+
+    if let Some(ref status) = query.status {
+        if has_where {
+            builder.push(" AND enabled = ");
+        } else {
+            builder.push(" WHERE enabled = ");
+        }
+        builder.push_bind(status == "enabled");
+        has_where = true;
+    }
+
+    has_where
 }
 
 /// 创建 API Key
