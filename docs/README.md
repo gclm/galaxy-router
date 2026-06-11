@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="frontend/public/brand.svg" alt="Galaxy Router" width="120" />
+  <img src="../frontend/public/brand.svg" alt="Galaxy Router" width="120" />
   <h1>Galaxy Router</h1>
 </div>
 
