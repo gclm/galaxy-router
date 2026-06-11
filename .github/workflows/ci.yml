@@ -29,13 +29,12 @@ jobs:
 
       - run: cd frontend && pnpm install --frozen-lockfile && pnpm build
 
-      # 上传前端产物，供后续 job 使用
       - uses: actions/upload-artifact@v4
         with:
           name: frontend-dist
           path: frontend/dist
 
-  # 后端检查（使用 make check）
+  # 后端 lint + 测试 + 覆盖率（合并为一个 job，共享编译产物）
   backend:
     name: backend
     needs: frontend
@@ -46,63 +45,36 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Cache cargo
-        uses: actions/cache@v4
+      - name: Cache Rust
+        uses: Swatinem/rust-cache@v2
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-cargo-
+          key: ci
 
-      - name: Install dependencies
+      - name: Install system dependencies
         run: sudo apt-get update && sudo apt-get install -y libsqlite3-dev
 
-      # 下载前端产物
       - uses: actions/download-artifact@v4
         with:
           name: frontend-dist
           path: frontend/dist
 
-      # 使用 make check 统一入口
-      - run: make check
+      # lint + 测试
+      - name: Clippy + Test
+        run: make check
 
-  # 覆盖率（独立 job，不使用 make）
-  coverage:
-    name: coverage gate
-    needs: frontend
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v5
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache cargo
+      # 缓存 tarpaulin 二进制（避免每次从源码编译 ~3min）
+      - name: Cache tarpaulin
+        id: cache-tarpaulin
         uses: actions/cache@v4
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-coverage-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-cargo-coverage-
-
-      - name: Install dependencies
-        run: sudo apt-get update && sudo apt-get install -y libsqlite3-dev
-
-      # 下载前端产物
-      - uses: actions/download-artifact@v4
-        with:
-          name: frontend-dist
-          path: frontend/dist
+          path: ~/.cargo/bin/cargo-tarpaulin
+          key: tarpaulin-0.35.4
 
       - name: Install tarpaulin
+        if: steps.cache-tarpaulin.outputs.cache-hit != 'true'
         run: cargo install cargo-tarpaulin --version 0.35.4 --locked
 
-      - name: Run coverage gate
-        # --fail-under 锁底：协议转换重构后覆盖率下降，当前 ~48.6%，待补测试后上调
-        # --out Xml 输出供 GitHub Actions summary 渲染
-        # --timeout 防止 SQLite 并发死锁卡死 CI
+      # --skip-clean 复用上面 make check 的编译产物
+      # --fail-under 锁底：当前 ~48.6%，待补测试后上调
+      - name: Coverage gate
         run: cargo tarpaulin --all-targets --skip-clean --timeout 300 --fail-under 48 --out Xml
