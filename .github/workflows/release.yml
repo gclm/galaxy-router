@@ -95,10 +95,10 @@ jobs:
           name: frontend-dist
           path: frontend/dist
 
-      # 使用 make release 构建（macOS）
+      # 使用 cargo 直接构建（macOS）
       - name: Build binary (macOS)
         if: runner.os == 'macOS'
-        run: make release
+        run: cargo build --release --target ${{ matrix.target }}
 
       # 使用 cross 构建（Linux/Windows）
       - name: Build binary (Linux/Windows via cross)
