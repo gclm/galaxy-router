@@ -18,9 +18,11 @@ AI 协议互转代理网关，支持 OpenAI Chat Completions、OpenAI Responses�
 ## 文档
 
 | 文档 | 说明 |
-|---|---|
-| [安装指南](docs/installation.md) | Homebrew、Docker、源码构建、二进制下载 |
-| [使用手册](docs/user-guide.md) | 完整功能说明，含界面截图 |
+|------|------|
+| [installation.md](installation.md) | 安装指南（Homebrew/Docker/源码构建/GitHub Release） |
+| [user-guide.md](user-guide.md) | 用户手册（核心概念、渠道/分组/API Key 管理、统计分析） |
+| [client-setup.md](client-setup.md) | 客户端配置指南（Codex CLI / Claude Code / Cursor / Cline / OpenClaw / Hermes） |
+
 
 ## 快速开始
 
