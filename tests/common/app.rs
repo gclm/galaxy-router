@@ -12,6 +12,7 @@ use sqlx::SqlitePool;
 use tower::ServiceExt;
 
 /// 测试应用构建器，统一管理 DB + Router + JWT + API Key
+#[allow(dead_code)]
 pub struct TestApp {
     pub router: axum::Router,
     pub pool: SqlitePool,
@@ -25,6 +26,7 @@ pub struct TestApp {
     api_key_id: Option<String>,
 }
 
+#[allow(dead_code)]
 impl TestApp {
     /// 最小构建：空 DB + Router，无用户
     pub async fn new_empty() -> Self {

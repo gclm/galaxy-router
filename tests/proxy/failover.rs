@@ -1,7 +1,5 @@
 use axum::http::{Method, StatusCode};
 use super::common::{app::TestApp, assert_status, mock};
-use wiremock::{Mock, MockServer, ResponseTemplate};
-use wiremock::matchers::{method, path};
 
 // ============================================================
 // Failover — 渠道故障转移

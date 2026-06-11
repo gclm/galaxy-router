@@ -8,7 +8,7 @@ fn scheduler_trace_builder_records_skip_circuit_success_and_failure_sequence() {
         .skipped()
         .channel("ch-a", "primary")
         .reason("model not allowed")
-        .score(3.14)
+        .score(2.78)
         .finish();
 
     builder
@@ -40,7 +40,7 @@ fn scheduler_trace_builder_records_skip_circuit_success_and_failure_sequence() {
     assert_eq!(traces[0].channel_name.as_deref(), Some("primary"));
     assert_eq!(traces[0].requested_model, "gpt-4o");
     assert_eq!(traces[0].reason.as_deref(), Some("model not allowed"));
-    assert_eq!(traces[0].score, Some(3.14));
+    assert_eq!(traces[0].score, Some(2.78));
 
     assert_eq!(traces[1].attempt_no, 2);
     assert_eq!(traces[1].status, AttemptStatus::CircuitBreak);

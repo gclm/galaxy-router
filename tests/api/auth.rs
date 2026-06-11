@@ -1,5 +1,5 @@
 use axum::http::{Method, StatusCode};
-use super::common::{app::TestApp, assert_status, to_json};
+use super::common::{app::TestApp, assert_status};
 
 // ============================================================
 // Auth — init / login / me / password
