@@ -15,7 +15,7 @@ import {
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
-const DOCS_URL = 'https://github.com/gclm/galaxy-router/blob/main/docs/client-setup.md'
+const DOCS_URL = 'https://github.com/gclm/galaxy-router/blob/main/docs/README.md'
 
 interface NavItem {
   title: string
