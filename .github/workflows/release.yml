@@ -69,21 +69,27 @@ jobs:
         with:
           key: ${{ matrix.target }}
 
-      # 缓存 cross 二进制
-      - name: Cache cross
-        id: cache-cross
+      # 缓存 cross + binstall 二进制
+      - name: Cache cross toolchain
         if: runner.os == 'Linux'
+        id: cache-cross
         uses: actions/cache@v4
         with:
-          path: ~/.cargo/bin/cross
-          key: cross-1
+          path: |
+            ~/.cargo/bin/cross
+            ~/.cargo/bin/cargo-binstall
+          key: cross-binstall-1
+
+      - name: Install binstall
+        if: runner.os == 'Linux' && steps.cache-cross.outputs.cache-hit != 'true'
+        run: curl -LsSf https://raw.githubusercontent.com/cargo-bins/cargo-binstall/main/install-from-binstall-release.sh | bash
 
       - name: Install cross
         if: runner.os == 'Linux' && steps.cache-cross.outputs.cache-hit != 'true'
-        run: cargo install cross --locked
+        run: cargo binstall cross --locked --no-confirm
 
-      - name: Install sccache
-        uses: mozilla-actions/sccache-action@v0.0.5
+      - name: Configure sccache
+        uses: mozilla-actions/sccache-action@v0.0.9
 
       - name: Install system dependencies (Linux)
         if: runner.os == 'Linux'
