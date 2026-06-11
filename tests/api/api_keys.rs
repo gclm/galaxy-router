@@ -19,7 +19,7 @@ async fn test_api_keys_create_returns_key_starting_with_gp() {
     let body = create_key_via_api(&app, r#"{"name":"test-key"}"#).await;
     assert_eq!(body["code"], 0);
     let key = body["data"]["api_key"].as_str().unwrap();
-    assert!(key.starts_with("gp-"), "API key should start with 'gp-', got: {key}");
+    assert!(key.starts_with("sk-gr-"), "API key should start with 'sk-gr-', got: {key}");
     assert!(body["data"]["id"].is_string());
 }
 

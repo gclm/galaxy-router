@@ -4,7 +4,7 @@
 set -e
 
 BASE_URL="http://127.0.0.1:8080"
-API_KEY="${API_KEY:-gp-test-key}"
+API_KEY="${API_KEY:-sk-gr-test-key}"
 MODEL="mimo-v2.5-pro"
 UA_HEADER="User-Agent: HermesAgent/0.14.0"
 

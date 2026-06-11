@@ -55,7 +55,7 @@ async fn test_proxy_chat_invalid_api_key_returns_401() {
                 Method::POST,
                 "/v1/chat/completions",
                 r#"{"model":"gpt-4o","messages":[]}"#,
-                "gp-nonexistent-key",
+                "sk-gr-nonexistent-key",
             ),
         )
         .await;

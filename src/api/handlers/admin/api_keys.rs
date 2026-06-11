@@ -185,7 +185,7 @@ pub async fn create(
     }
 
     let id = generate_id();
-    let api_key = format!("gp-{}", generate_id());
+    let api_key = format!("sk-gr-{}", generate_id());
     let supported_models = req.supported_models.unwrap_or_default();
     let rate_limit_rpm = req.rate_limit_rpm.unwrap_or(0);
     let rate_limit_tpm = req.rate_limit_tpm.unwrap_or(0);

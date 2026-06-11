@@ -121,7 +121,7 @@ API Key 是分发给客户端使用的密钥。客户端在请求时通过 `Auth
 ```bash
 # OpenAI 兼容接口
 curl http://127.0.0.1:8080/v1/chat/completions \
-  -H "Authorization: Bearer gp-xxxx" \
+  -H "Authorization: Bearer sk-gr-xxxx" \
   -H "Content-Type: application/json" \
   -d '{
     "model": "gpt-4o",
@@ -130,7 +130,7 @@ curl http://127.0.0.1:8080/v1/chat/completions \
 
 # Anthropic 兼容接口
 curl http://127.0.0.1:8080/v1/messages \
-  -H "x-api-key: gp-xxxx" \
+  -H "x-api-key: sk-gr-xxxx" \
   -H "anthropic-version: 2023-06-01" \
   -H "Content-Type: application/json" \
   -d '{
@@ -147,7 +147,7 @@ curl http://127.0.0.1:8080/v1/messages \
 from openai import OpenAI
 
 client = OpenAI(
-    api_key="gp-xxxx",
+    api_key="sk-gr-xxxx",
     base_url="http://127.0.0.1:8080/v1"
 )
 
@@ -155,6 +155,16 @@ response = client.chat.completions.create(
     model="gpt-4o",
     messages=[{"role": "user", "content": "Hello"}]
 )
+```
+
+### 编程工具配置
+
+Galaxy Router 支持配置到常见的 AI 编程工具中，包括 Codex CLI、Claude Code、Cursor、Cline、OpenClaw、Hermes 等。详细的配置步骤请参考 [客户端配置指南](client-setup.md)。
+
+也可以使用交互式配置脚本：
+
+```bash
+bash scripts/setup-client.sh
 ```
 
 ### 支持的代理端点

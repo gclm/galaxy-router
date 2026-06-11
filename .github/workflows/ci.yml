@@ -62,17 +62,23 @@ jobs:
       - name: Clippy
         run: cargo clippy -- -D warnings
 
-      # 缓存 tarpaulin 二进制（避免每次从源码编译 ~3min）
-      - name: Cache tarpaulin
+      # 缓存 tarpaulin 预编译二进制（binstall 下载 ~5s，cargo install 编译 ~3min）
+      - name: Cache tarpaulin binary
         id: cache-tarpaulin
         uses: actions/cache@v4
         with:
-          path: ~/.cargo/bin/cargo-tarpaulin
-          key: tarpaulin-0.35.4
+          path: |
+            ~/.cargo/bin/cargo-tarpaulin
+            ~/.cargo/bin/cargo-binstall
+          key: tarpaulin-binstall-0.35.4
+
+      - name: Install binstall
+        if: steps.cache-tarpaulin.outputs.cache-hit != 'true'
+        run: curl -LsSf https://raw.githubusercontent.com/cargo-bins/cargo-binstall/main/install-from-binstall-release.sh | bash
 
       - name: Install tarpaulin
         if: steps.cache-tarpaulin.outputs.cache-hit != 'true'
-        run: cargo install cargo-tarpaulin --version 0.35.4 --locked
+        run: cargo binstall cargo-tarpaulin --version 0.35.4 --locked --no-confirm
 
       # tarpaulin 兼管测试 + 覆盖率（不重复跑测试）
       # --fail-under 锁底：当前 ~48.6%，待补测试后上调

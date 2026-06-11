@@ -139,7 +139,7 @@ async fn test_e2e_proxy_route_rejects_disabled_api_key() {
             Request::builder()
                 .method("POST")
                 .uri("/v1/chat/completions")
-                .header("authorization", "Bearer gp-test-active-key")
+                .header("authorization", "Bearer sk-gr-test-active-key")
                 .header("content-type", "application/json")
                 .body(Body::from(
                     r#"{"model":"gpt-4o","messages":[{"role":"user","content":"hi"}]}"#,
@@ -163,7 +163,7 @@ async fn build_test_app_with_key(enabled: bool) -> axum::Router {
     sqlx::query("INSERT INTO api_keys (id, name, api_key, enabled) VALUES (?, ?, ?, ?)")
         .bind("key-1")
         .bind("test-key")
-        .bind("gp-test-active-key")
+        .bind("sk-gr-test-active-key")
         .bind(enabled)
         .execute(&pool)
         .await
@@ -237,7 +237,7 @@ async fn test_e2e_anthropic_messages_with_x_api_key_header() {
             Request::builder()
                 .method("POST")
                 .uri("/v1/messages")
-                .header("x-api-key", "gp-test-active-key")
+                .header("x-api-key", "sk-gr-test-active-key")
                 .header("anthropic-version", "2023-06-01")
                 .header("content-type", "application/json")
                 .body(Body::from(
@@ -294,7 +294,7 @@ async fn test_e2e_embeddings_route_reaches_handler() {
             Request::builder()
                 .method("POST")
                 .uri("/v1/embeddings")
-                .header("authorization", "Bearer gp-test-active-key")
+                .header("authorization", "Bearer sk-gr-test-active-key")
                 .header("content-type", "application/json")
                 .body(Body::from(
                     r#"{"model":"text-embedding-3-small","input":"hi"}"#,
@@ -315,7 +315,7 @@ async fn test_e2e_images_generations_route_reaches_handler() {
             Request::builder()
                 .method("POST")
                 .uri("/v1/images/generations")
-                .header("authorization", "Bearer gp-test-active-key")
+                .header("authorization", "Bearer sk-gr-test-active-key")
                 .header("content-type", "application/json")
                 .body(Body::from(r#"{"model":"dall-e-3","prompt":"a cat"}"#))
                 .unwrap(),
@@ -333,7 +333,7 @@ async fn test_e2e_responses_route_reaches_handler() {
             Request::builder()
                 .method("POST")
                 .uri("/v1/responses")
-                .header("authorization", "Bearer gp-test-active-key")
+                .header("authorization", "Bearer sk-gr-test-active-key")
                 .header("content-type", "application/json")
                 .body(Body::from(r#"{"model":"gpt-4o","input":"hi"}"#))
                 .unwrap(),
@@ -351,7 +351,7 @@ async fn test_e2e_models_list_route_reaches_handler() {
             Request::builder()
                 .method("GET")
                 .uri("/v1/models")
-                .header("authorization", "Bearer gp-test-active-key")
+                .header("authorization", "Bearer sk-gr-test-active-key")
                 .body(Body::empty())
                 .unwrap(),
         )

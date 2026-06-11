@@ -72,7 +72,7 @@ from openai import OpenAI
 
 client = OpenAI(
     base_url="http://127.0.0.1:8080/v1",
-    api_key="gp-your-api-key"
+    api_key="sk-gr-your-api-key"
 )
 response = client.chat.completions.create(
     model="gpt-4o",

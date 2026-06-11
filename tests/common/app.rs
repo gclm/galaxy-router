@@ -193,7 +193,7 @@ impl TestApp {
     /// 通过 SQL 直接插入 API Key，返回 (id, key_string)
     pub async fn insert_api_key(&self, name: &str, enabled: bool) -> (String, String) {
         let id = uuid::Uuid::now_v7().to_string();
-        let key_string = format!("gp-test-{}", &id[..8]);
+        let key_string = format!("sk-gr-test-{}", &id[..8]);
         sqlx::query(
             "INSERT INTO api_keys (id, name, api_key, enabled) VALUES (?, ?, ?, ?)",
         )

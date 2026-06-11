@@ -261,7 +261,7 @@ async fn test_api_key_crud() {
     let pool = db.pool().clone();
 
     let key_id = uuid::Uuid::now_v7().to_string();
-    let api_key = format!("gp-{}", uuid::Uuid::now_v7());
+    let api_key = format!("sk-gr-{}", uuid::Uuid::now_v7());
 
     sqlx::query("INSERT INTO api_keys (id, name, api_key, enabled) VALUES (?, ?, ?, ?)")
         .bind(&key_id)

@@ -47,7 +47,7 @@ async fn test_backup_import_valid() {
         "data": {
             "channels": [],
             "groups": [],
-            "api_keys": [{"name": "imported-key", "api_key": "gp-imported-001", "enabled": true}],
+            "api_keys": [{"name": "imported-key", "api_key": "sk-gr-imported-001", "enabled": true}],
             "settings": [{"key": "scheduler.top_k", "value": "5"}]
         }
     }"#;
