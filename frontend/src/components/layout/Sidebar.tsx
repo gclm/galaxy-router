@@ -11,8 +11,11 @@ import {
   Settings,
   Cpu,
   Activity,
+  BookOpen,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
+
+const DOCS_URL = 'https://github.com/gclm/galaxy-router/blob/main/docs/client-setup.md'
 
 interface NavItem {
   title: string
@@ -113,7 +116,21 @@ export function Sidebar({ collapsed }: { collapsed: boolean }) {
           </div>
         ))}
       </nav>
-      <div className="border-t border-sidebar-border p-3">
+      <div className="border-t border-sidebar-border p-3 space-y-1">
+        <a
+          href={DOCS_URL}
+          target="_blank"
+          rel="noopener noreferrer"
+          title={collapsed ? '客户端配置指南' : undefined}
+          className={cn(
+            'flex items-center gap-3 rounded-xl text-sm font-medium transition-all duration-200',
+            collapsed ? 'justify-center px-2 py-2.5' : 'px-3 py-2.5',
+            'text-sidebar-foreground/70 hover:bg-sidebar-accent/50 hover:text-sidebar-foreground'
+          )}
+        >
+          <BookOpen className="h-4 w-4 shrink-0" />
+          {!collapsed && <span>客户端配置</span>}
+        </a>
         <Link
           to="/settings"
           title={collapsed ? '设置' : undefined}
