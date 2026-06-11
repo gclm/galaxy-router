@@ -1,6 +1,6 @@
 [package]
 name = "galaxy-router"
-version = "0.0.8"
+version = "1.0.0-alpha"
 edition = "2024"
 license = "Apache-2.0"
 description = "AI 协议互转代理网关"
