@@ -29,6 +29,8 @@
 - **`HeaderValue::from_str` 会 panic**：用户输入作为 header value（如 API Key）时，必须先 `validate_header_value()` 校验，否则 CRLF / 控制字符会 panic
 - **`models` 字段解析**：`parse_models` 用 `serde_json::from_str`，空字符串和非法 JSON 返回空 Vec，不要假设一定有值
 - **`ProxyCache` 双层结构**：`groups`、`channels`、`compiled_regex` 各有独立缓存，失效时需要逐个处理
+- **（前端）`navigator.clipboard` 受 Secure Context 限制**：只在 HTTPS/localhost/file:// 下可用,HTTP 部署下为 `undefined`,裸调 `.writeText` 会抛 `Cannot read properties of undefined`。前端复制统一走 `frontend/src/lib/utils.ts::copyText`(已含 `execCommand` 降级),勿裸调
+- **（前端）API Key 预算是独立实体**：`budget_limits` 需 `api_key_id` 才能写入,create api key 接口不带预算。前端创建时设预算必须两步——先 `createApiKey` 拿到 `key.id` → `onSuccess` 里调 `setBudgetMutation`(见 `ApiKeys.tsx::handleCreate`)
 
 ## 调试技巧
 

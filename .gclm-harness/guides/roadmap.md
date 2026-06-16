@@ -18,8 +18,10 @@
 
 - `ApiKeys.tsx` 表单逻辑内联（~680 行），后续维护时建议抽成 `ApiKeyForm` 组件
 
-## 已完成（最近 10 条）
+## 已完成（最近 15 条）
 
+- ✅ 2026-06-16 fix: 复制 API Key 在 HTTP 非安全上下文崩溃 — `utils.ts::copyText` 加 execCommand 降级(`ApiKeys.tsx`/`Logs.tsx`)
+- ✅ 2026-06-16 feat: 创建 API Key 时支持设置预算限额 — 前端两步编排(create→onSuccess 调 setBudget),后端零改
 - ✅ 2026-06-16 feat: SSE 流内错误状态码归因(502→429) — 限流不触发 channel 黑名单(阶段 2,多 key 重试改造收尾)
 - ✅ 2026-06-16 feat: per-key 熔断 — circuit_breaker per-key + 黑名单 channel 级,单 key 受限不再连累整渠道(阶段 1)
 - ✅ 2026-06-16 fix: glm-5.2 限流不换 key — `KEY_NEEDLES` 补中文限流词(速率限制/频率限制),多 key 重试健壮性改造 阶段 0 止血

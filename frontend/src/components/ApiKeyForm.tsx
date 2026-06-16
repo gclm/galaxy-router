@@ -71,14 +71,12 @@ export function ApiKeyForm({
       allowed_groups: selectedGroups.length > 0 ? selectedGroups.join(',') : undefined,
     }
 
-    // 编辑模式附带 budget
-    if (apiKey) {
-      const monthly = budgetMonthly ? parseFloat(budgetMonthly) : 0
-      const daily = budgetDaily ? parseFloat(budgetDaily) : 0
-      if (monthly > 0 || daily > 0) {
-        data.budget_monthly = monthly
-        data.budget_daily = daily
-      }
+    // 附带预算(创建/编辑都支持)
+    const monthly = budgetMonthly ? parseFloat(budgetMonthly) : 0
+    const daily = budgetDaily ? parseFloat(budgetDaily) : 0
+    if (monthly > 0 || daily > 0) {
+      data.budget_monthly = monthly
+      data.budget_daily = daily
     }
 
     onSubmit(data)
@@ -207,39 +205,37 @@ export function ApiKeyForm({
         </div>
       </div>
 
-      {/* Budget（仅编辑模式） */}
-      {apiKey && (
-        <div>
-          <label className="block text-sm font-medium mb-2">预算限制 (USD)</label>
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="block text-xs text-muted-foreground mb-1">月限额 ($)</label>
-              <input
-                type="number"
-                value={budgetMonthly}
-                onChange={(e) => setBudgetMonthly(e.target.value)}
-                className="input"
-                placeholder="不限"
-                step="0.01"
-                min="0"
-              />
-            </div>
-            <div>
-              <label className="block text-xs text-muted-foreground mb-1">日限额 ($)</label>
-              <input
-                type="number"
-                value={budgetDaily}
-                onChange={(e) => setBudgetDaily(e.target.value)}
-                className="input"
-                placeholder="不限"
-                step="0.01"
-                min="0"
-              />
-            </div>
+      {/* Budget（创建/编辑都支持） */}
+      <div>
+        <label className="block text-sm font-medium mb-2">预算限制 (USD)</label>
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className="block text-xs text-muted-foreground mb-1">月限额 ($)</label>
+            <input
+              type="number"
+              value={budgetMonthly}
+              onChange={(e) => setBudgetMonthly(e.target.value)}
+              className="input"
+              placeholder="不限"
+              step="0.01"
+              min="0"
+            />
           </div>
-          <p className="text-xs text-muted-foreground mt-1">留空表示不限制，超出后请求将返回 402</p>
+          <div>
+            <label className="block text-xs text-muted-foreground mb-1">日限额 ($)</label>
+            <input
+              type="number"
+              value={budgetDaily}
+              onChange={(e) => setBudgetDaily(e.target.value)}
+              className="input"
+              placeholder="不限"
+              step="0.01"
+              min="0"
+            />
+          </div>
         </div>
-      )}
+        <p className="text-xs text-muted-foreground mt-1">留空表示不限制，超出后请求将返回 402</p>
+      </div>
 
       {/* Buttons */}
       <div className="flex justify-end gap-2">

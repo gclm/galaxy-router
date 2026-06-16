@@ -95,6 +95,14 @@ export function ApiKeys() {
     const { budget_monthly, budget_daily, ...keyData } = data
     createMutation.mutate(keyData, {
       onSuccess: (key) => {
+        // 创建成功后,若填了预算则设置(预算是独立实体,需 key.id)
+        if (budget_monthly !== undefined || budget_daily !== undefined) {
+          setBudgetMutation.mutate({
+            api_key_id: key.id,
+            monthly_limit_usd: budget_monthly ?? 0,
+            daily_limit_usd: budget_daily ?? 0,
+          })
+        }
         setNewKeyResult(key)
         toast.success('API Key 创建成功')
       },

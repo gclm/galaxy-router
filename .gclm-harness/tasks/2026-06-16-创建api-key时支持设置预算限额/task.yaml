@@ -1,0 +1,9 @@
+type: feature
+complexity: simple
+sop: sop/feature.md
+status: completed
+feature: 2026-06-16-创建api-key时支持设置预算限额
+title: 创建api-key时支持设置预算限额
+created: '2026-06-16'
+completed: '2026-06-16'
+notes: ''
