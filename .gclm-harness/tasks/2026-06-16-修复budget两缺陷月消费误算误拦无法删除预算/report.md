@@ -19,3 +19,9 @@
 
 ## 顺手发现
 - chrome-mcp `fill` 对 React 受控 input 无效(只改 DOM value,不触发 onChange,React valueTracker 不感知)。测 React 表单需用 `evaluate_script` 走 valueTracker + dispatch input event——这导致问题1 的首次"chrome 复现"是假象。
+
+## 补充修复:无消费时 SUM 解码失败
+
+首版上线后发现:`check_budget` 消费查询 `SUM(...)` 在该 key **无消费记录**时返回 INTEGER 0,sqlx 按 `f64` 解码失败("Rust f64 not compatible with SQL INTEGER"),误报 402 "查询消费失败"。根因:首版修复漏了 `CAST AS REAL`(`metrics/query` stats 查询有,`check_budget` 没有)。
+- 补丁:两列加 `CAST(... AS REAL)` + 新增 `check_budget_no_usage_decodes_cleanly` 回归测试。
+- **为什么首次没排查出**:限额 E2E 和 cargo 回归都注入 REAL cost,SUM 返回 REAL、decode 正常,从没覆盖"无消费 → INTEGER 0"分支。

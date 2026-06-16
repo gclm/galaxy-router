@@ -33,10 +33,11 @@ async fn check_budget(pool: &SqlitePool, key_id: &str) -> Result<(), String> {
     };
 
     // 查询累计消费（月消费只算当月,日消费只算当日,均按 UTC,与 created_at 存储一致）
+    // CAST AS REAL: 无消费时 SUM 返回 INTEGER 0,sqlx 按 f64 解码会失败(与 stats 查询一致)
     let (monthly_cost, daily_cost): (f64, f64) = sqlx::query_as(
         r#"SELECT
-            COALESCE(SUM(CASE WHEN strftime('%Y-%m', created_at) = strftime('%Y-%m', 'now') THEN COALESCE(cost, 0) ELSE 0 END), 0),
-            COALESCE(SUM(CASE WHEN date(created_at) = date('now') THEN COALESCE(cost, 0) ELSE 0 END), 0)
+            CAST(COALESCE(SUM(CASE WHEN strftime('%Y-%m', created_at) = strftime('%Y-%m', 'now') THEN COALESCE(cost, 0) ELSE 0 END), 0) AS REAL),
+            CAST(COALESCE(SUM(CASE WHEN date(created_at) = date('now') THEN COALESCE(cost, 0) ELSE 0 END), 0) AS REAL)
         FROM usage_logs WHERE api_key_id = ?"#,
     )
     .bind(key_id)
@@ -573,5 +574,33 @@ mod tests {
         .unwrap();
         // 当月 15 >= 10 → 拦截
         assert!(check_budget(&pool, key_id).await.is_err());
+    }
+
+    /// 回归:无消费记录时 SUM 返回 INTEGER 0,须能正确 decode 为 f64
+    /// (曾因漏 CAST AS REAL 报 "Rust f64 not compatible with SQL INTEGER")
+    #[tokio::test]
+    async fn check_budget_no_usage_decodes_cleanly() {
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        sqlx::migrate!("src/db/migrations").run(&pool).await.unwrap();
+        let key_id = "019ecf15-0000-7000-8000-000000000003";
+
+        sqlx::query("INSERT INTO api_keys (id, name, api_key) VALUES (?, 't', 'sk-t3')")
+            .bind(key_id)
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO budget_limits (id, api_key_id, monthly_limit_usd) VALUES ('b3', ?, 10.0)",
+        )
+        .bind(key_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+        // 无 usage_logs → SUM 为 INTEGER 0,修复前 sqlx 按 f64 解码失败
+        assert!(check_budget(&pool, key_id).await.is_ok());
     }
 }
