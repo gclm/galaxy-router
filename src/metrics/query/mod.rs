@@ -46,8 +46,35 @@ impl StatsState {
         chrono::Utc::now() + chrono::Duration::hours(self.timezone_offset as i64)
     }
 
-    fn today_local(&self) -> String {
-        self.now_local().format("%Y-%m-%d").to_string()
+    /// 本地"最近 days 天(含今天)"对应的 UTC 时间范围 [start, end)。
+    /// created_at 以 UTC 存储,用裸列 `created_at >= ? AND created_at < ?` 比较才能命中
+    /// idx_usage_logs_created_at(避免 `date(datetime(created_at,...))` 让索引失效、全表扫)。
+    fn range_utc_days(&self, days: i32) -> (String, String) {
+        let tz = self.timezone_offset as i64;
+        let today = (chrono::Utc::now() + chrono::Duration::hours(tz)).date_naive();
+        let start = today - chrono::Duration::days((days.max(1) - 1) as i64);
+        let end = today + chrono::Duration::days(1);
+        let to_utc = |d: chrono::NaiveDate| {
+            (d.and_hms_opt(0, 0, 0).unwrap() - chrono::Duration::hours(tz))
+                .format("%Y-%m-%d %H:%M:%S")
+                .to_string()
+        };
+        (to_utc(start), to_utc(end))
+    }
+
+    /// 本地日期范围 [start_local, end_local](含两端)对应的 UTC 范围 [start, end_next_day)。
+    fn range_utc_between(&self, start_local: &str, end_local: &str) -> (String, String) {
+        let tz = self.timezone_offset as i64;
+        let today = (chrono::Utc::now() + chrono::Duration::hours(tz)).date_naive();
+        let start = chrono::NaiveDate::parse_from_str(start_local, "%Y-%m-%d").unwrap_or(today);
+        let end =
+            chrono::NaiveDate::parse_from_str(end_local, "%Y-%m-%d").unwrap_or(today) + chrono::Duration::days(1);
+        let to_utc = |d: chrono::NaiveDate| {
+            (d.and_hms_opt(0, 0, 0).unwrap() - chrono::Duration::hours(tz))
+                .format("%Y-%m-%d %H:%M:%S")
+                .to_string()
+        };
+        (to_utc(start), to_utc(end))
     }
 }
 
@@ -206,9 +233,6 @@ pub struct PagedResult<T> {
 
 impl StatsState {
     pub async fn get_overview(&self) -> Result<StatsOverview, sqlx::Error> {
-        let today = self.today_local();
-        let tz = self.tz_modifier();
-
         let total: (i64, i64, i64, f64) = sqlx::query_as(
             "SELECT
                 COUNT(*),
@@ -220,20 +244,20 @@ impl StatsState {
         .fetch_one(&self.pool)
         .await?;
 
-        let today_sql = format!(
+        let (utc_start, utc_end) = self.range_utc_days(1);
+        let today_stats: (i64, i64, i64, f64) = sqlx::query_as(
             "SELECT
                 COUNT(*),
                 COALESCE(SUM(input_tokens), 0),
                 COALESCE(SUM(output_tokens), 0),
                 CAST(COALESCE(SUM(COALESCE(cost, 0)), 0.0) AS REAL)
             FROM usage_logs
-            WHERE date(datetime(created_at, '{}')) = ?",
-            tz
-        );
-        let today_stats: (i64, i64, i64, f64) = sqlx::query_as(AssertSqlSafe(today_sql))
-            .bind(&today)
-            .fetch_one(&self.pool)
-            .await?;
+            WHERE created_at >= ? AND created_at < ?",
+        )
+        .bind(utc_start)
+        .bind(utc_end)
+        .fetch_one(&self.pool)
+        .await?;
 
         Ok(StatsOverview {
             total_requests: total.0,
@@ -255,35 +279,26 @@ impl StatsState {
         &self,
         days: i32,
     ) -> Result<(Option<f64>, Option<f64>, Option<f64>), sqlx::Error> {
-        let start_date = (self.now_local() - chrono::Duration::days(days as i64))
-            .format("%Y-%m-%d")
-            .to_string();
-        let tz = self.tz_modifier();
+        let (utc_start, utc_end) = self.range_utc_days(days);
 
-        let sql = format!(
+        let latencies: Vec<i32> = sqlx::query_scalar(
             "SELECT latency_ms FROM usage_logs \
              WHERE latency_ms IS NOT NULL AND latency_ms > 0 \
-             AND date(datetime(created_at, '{}')) >= ? \
+             AND created_at >= ? AND created_at < ? \
              ORDER BY latency_ms ASC",
-            tz
-        );
-
-        let latencies: Vec<i32> = sqlx::query_scalar(AssertSqlSafe(sql))
-            .bind(&start_date)
-            .fetch_all(&self.pool)
-            .await?;
+        )
+        .bind(utc_start)
+        .bind(utc_end)
+        .fetch_all(&self.pool)
+        .await?;
 
         Ok(compute_percentiles(&latencies))
     }
 
     /// 获取按模型统计
     pub async fn get_model_stats(&self, days: i32) -> Result<Vec<ModelStats>, sqlx::Error> {
-        let start_date = (self.now_local() - chrono::Duration::days(days as i64))
-            .format("%Y-%m-%d")
-            .to_string();
-        let tz = self.tz_modifier();
-
-        let sql = format!(
+        let (utc_start, utc_end) = self.range_utc_days(days);
+        let stats = sqlx::query_as::<_, (String, i32, i32, i32, f64)>(
             "SELECT
                 requested_model,
                 COUNT(*),
@@ -291,15 +306,14 @@ impl StatsState {
                 COALESCE(SUM(output_tokens), 0),
                 CAST(COALESCE(SUM(COALESCE(cost, 0)), 0.0) AS REAL)
             FROM usage_logs
-            WHERE date(datetime(created_at, '{}')) >= ?
+            WHERE created_at >= ? AND created_at < ?
             GROUP BY requested_model
             ORDER BY COUNT(*) DESC",
-            tz
-        );
-        let stats = sqlx::query_as::<_, (String, i32, i32, i32, f64)>(AssertSqlSafe(sql))
-            .bind(&start_date)
-            .fetch_all(&self.pool)
-            .await?;
+        )
+        .bind(utc_start)
+        .bind(utc_end)
+        .fetch_all(&self.pool)
+        .await?;
 
         Ok(stats
             .into_iter()
@@ -315,12 +329,8 @@ impl StatsState {
 
     /// 获取按渠道统计
     pub async fn get_channel_stats(&self, days: i32) -> Result<Vec<ChannelStats>, sqlx::Error> {
-        let start_date = (self.now_local() - chrono::Duration::days(days as i64))
-            .format("%Y-%m-%d")
-            .to_string();
-        let tz = self.tz_modifier();
-
-        let sql = format!(
+        let (utc_start, utc_end) = self.range_utc_days(days);
+        let rows: Vec<ChannelStatsRow> = sqlx::query_as(
             "SELECT
                 ul.channel_id,
                 COALESCE(c.name, 'unknown'),
@@ -332,15 +342,14 @@ impl StatsState {
                 CAST(COALESCE(SUM(COALESCE(ul.cost, 0)), 0.0) AS REAL)
             FROM usage_logs ul
             LEFT JOIN channels c ON ul.channel_id = c.id
-            WHERE date(datetime(ul.created_at, '{}')) >= ?
+            WHERE ul.created_at >= ? AND ul.created_at < ?
             GROUP BY ul.channel_id
             ORDER BY COUNT(*) DESC",
-            tz
-        );
-        let rows: Vec<ChannelStatsRow> = sqlx::query_as(AssertSqlSafe(sql))
-            .bind(&start_date)
-            .fetch_all(&self.pool)
-            .await?;
+        )
+        .bind(utc_start)
+        .bind(utc_end)
+        .fetch_all(&self.pool)
+        .await?;
 
         Ok(rows
             .into_iter()
@@ -364,7 +373,7 @@ impl StatsState {
         let tz = self.tz_modifier();
 
         if days <= 1 {
-            let today = self.today_local();
+            let (utc_start, utc_end) = self.range_utc_days(1);
             let sql = format!(
                 "SELECT
                     strftime('%H:00', datetime(created_at, '{}')),
@@ -377,22 +386,21 @@ impl StatsState {
                     COALESCE(SUM(cache_creation_tokens), 0),
                     CAST(COALESCE(SUM(COALESCE(cost, 0)), 0.0) AS REAL)
                 FROM usage_logs
-                WHERE date(datetime(created_at, '{}')) = ?
+                WHERE created_at >= ? AND created_at < ?
                 GROUP BY strftime('%H', datetime(created_at, '{}'))
                 ORDER BY strftime('%H', datetime(created_at, '{}')) ASC",
-                tz, tz, tz, tz
+                tz, tz, tz
             );
             let rows: Vec<DailyRow> = sqlx::query_as(AssertSqlSafe(sql))
-                .bind(&today)
+                .bind(utc_start)
+                .bind(utc_end)
                 .fetch_all(&self.pool)
                 .await?;
 
             return Ok(self.fill_hourly(rows));
         }
 
-        let start_date = (self.now_local() - chrono::Duration::days(days as i64))
-            .format("%Y-%m-%d")
-            .to_string();
+        let (utc_start, utc_end) = self.range_utc_days(days);
 
         let sql = format!(
             "SELECT
@@ -406,13 +414,14 @@ impl StatsState {
                 COALESCE(SUM(cache_creation_tokens), 0),
                 CAST(COALESCE(SUM(COALESCE(cost, 0)), 0.0) AS REAL)
             FROM usage_logs
-            WHERE date(datetime(created_at, '{}')) >= ?
+            WHERE created_at >= ? AND created_at < ?
             GROUP BY date(datetime(created_at, '{}'))
             ORDER BY date(datetime(created_at, '{}')) ASC",
-            tz, tz, tz, tz
+            tz, tz, tz
         );
         let rows: Vec<DailyRow> = sqlx::query_as(AssertSqlSafe(sql))
-            .bind(&start_date)
+            .bind(utc_start)
+            .bind(utc_end)
             .fetch_all(&self.pool)
             .await?;
 
@@ -426,6 +435,7 @@ impl StatsState {
         end: &str,
     ) -> Result<Vec<DailyStats>, sqlx::Error> {
         let tz = self.tz_modifier();
+        let (utc_start, utc_end) = self.range_utc_between(start, end);
         let sql = format!(
             "SELECT
                 date(datetime(created_at, '{}')),
@@ -438,14 +448,14 @@ impl StatsState {
                 COALESCE(SUM(cache_creation_tokens), 0),
                 CAST(COALESCE(SUM(COALESCE(cost, 0)), 0.0) AS REAL)
             FROM usage_logs
-            WHERE date(datetime(created_at, '{}')) >= ? AND date(datetime(created_at, '{}')) <= ?
+            WHERE created_at >= ? AND created_at < ?
             GROUP BY date(datetime(created_at, '{}'))
             ORDER BY date(datetime(created_at, '{}')) ASC",
-            tz, tz, tz, tz, tz
+            tz, tz, tz
         );
         let rows: Vec<DailyRow> = sqlx::query_as(AssertSqlSafe(sql))
-            .bind(start)
-            .bind(end)
+            .bind(utc_start)
+            .bind(utc_end)
             .fetch_all(&self.pool)
             .await?;
 
@@ -458,8 +468,8 @@ impl StatsState {
         start: &str,
         end: &str,
     ) -> Result<Vec<ModelStats>, sqlx::Error> {
-        let tz = self.tz_modifier();
-        let sql = format!(
+        let (utc_start, utc_end) = self.range_utc_between(start, end);
+        let stats = sqlx::query_as::<_, (String, i32, i32, i32, f64)>(
             "SELECT
                 requested_model,
                 COUNT(*),
@@ -467,16 +477,14 @@ impl StatsState {
                 COALESCE(SUM(output_tokens), 0),
                 CAST(COALESCE(SUM(COALESCE(cost, 0)), 0.0) AS REAL)
             FROM usage_logs
-            WHERE date(datetime(created_at, '{}')) >= ? AND date(datetime(created_at, '{}')) <= ?
+            WHERE created_at >= ? AND created_at < ?
             GROUP BY requested_model
             ORDER BY COUNT(*) DESC",
-            tz, tz
-        );
-        let stats = sqlx::query_as::<_, (String, i32, i32, i32, f64)>(AssertSqlSafe(sql))
-            .bind(start)
-            .bind(end)
-            .fetch_all(&self.pool)
-            .await?;
+        )
+        .bind(utc_start)
+        .bind(utc_end)
+        .fetch_all(&self.pool)
+        .await?;
 
         Ok(stats
             .into_iter()
@@ -496,8 +504,8 @@ impl StatsState {
         start: &str,
         end: &str,
     ) -> Result<Vec<ChannelStats>, sqlx::Error> {
-        let tz = self.tz_modifier();
-        let sql = format!(
+        let (utc_start, utc_end) = self.range_utc_between(start, end);
+        let rows: Vec<ChannelStatsRow> = sqlx::query_as(
             "SELECT
                 ul.channel_id,
                 COALESCE(c.name, 'unknown'),
@@ -509,15 +517,14 @@ impl StatsState {
                 CAST(COALESCE(SUM(COALESCE(ul.cost, 0)), 0.0) AS REAL)
             FROM usage_logs ul
             LEFT JOIN channels c ON ul.channel_id = c.id
-            WHERE date(datetime(ul.created_at, '{}')) >= ? AND date(datetime(ul.created_at, '{}')) <= ?
+            WHERE ul.created_at >= ? AND ul.created_at < ?
             GROUP BY ul.channel_id
-            ORDER BY COUNT(*) DESC", tz, tz
-        );
-        let rows: Vec<ChannelStatsRow> = sqlx::query_as(AssertSqlSafe(sql))
-            .bind(start)
-            .bind(end)
-            .fetch_all(&self.pool)
-            .await?;
+            ORDER BY COUNT(*) DESC",
+        )
+        .bind(utc_start)
+        .bind(utc_end)
+        .fetch_all(&self.pool)
+        .await?;
 
         Ok(rows
             .into_iter()
