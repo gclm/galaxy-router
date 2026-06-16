@@ -8,3 +8,4 @@ pub mod model_info;
 pub mod settings;
 pub mod stats;
 pub mod system_info;
+pub mod update_check;

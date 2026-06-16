@@ -331,6 +331,17 @@ export interface SystemInfo {
   api_key_count: number
 }
 
+// Update check types
+export interface UpdateCheck {
+  current_version: string
+  latest_version: string
+  has_update: boolean
+  release_url: string
+  release_notes: string
+  published_at: string
+  checked_at: number
+}
+
 // Settings types
 export interface SettingItem {
   key: string

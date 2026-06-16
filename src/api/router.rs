@@ -23,6 +23,7 @@ use crate::api::handlers::admin::model_info::{self, ModelsState};
 use crate::api::handlers::admin::settings::{self, SettingsState};
 use crate::api::handlers::admin::stats::{self, StatsApiState};
 use crate::api::handlers::admin::system_info::{self, SystemInfoState};
+use crate::api::handlers::admin::update_check;
 use crate::api::handlers::proxy::{chat, embeddings, images, messages, models, responses};
 use crate::api::middleware::require_admin_auth;
 use crate::config::{AppConfig, QueuingConfig};
@@ -90,6 +91,8 @@ pub async fn create_router(
         pool: pool.clone(),
         start_time: std::sync::Arc::new(std::time::Instant::now()),
     };
+
+    let update_check_state = update_check::UpdateCheckState::from_pool(&pool).await;
 
     let settings_state = SettingsState {
         pool: pool.clone(),
@@ -187,6 +190,12 @@ pub async fn create_router(
             Router::new()
                 .route("/", get(system_info::get))
                 .with_state(system_info_state),
+        )
+        .nest(
+            "/update-check",
+            Router::new()
+                .route("/", get(update_check::get))
+                .with_state(update_check_state),
         )
         .nest(
             "/settings",

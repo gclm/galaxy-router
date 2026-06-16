@@ -91,6 +91,8 @@ const ALLOWED_SETTING_KEYS: &[&str] = &[
     "proxy.enabled",
     "proxy.url",
     "cors.allow_origins",
+    "github.repo",
+    "update.mirror",
 ];
 
 pub async fn update(

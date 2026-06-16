@@ -8,7 +8,9 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
-import { User, LogOut, Settings, Sun, Moon, Monitor, PanelLeftClose, PanelLeft } from 'lucide-react'
+import { User, LogOut, Settings, Sun, Moon, Monitor, PanelLeftClose, PanelLeft, Download } from 'lucide-react'
+import { useUpdateCheck } from '@/api/query-hooks'
+import { UpdateCheckDialog } from '@/components/UpdateCheckDialog'
 
 type Theme = 'light' | 'dark' | 'system'
 
@@ -63,6 +65,8 @@ export function Header({ collapsed, onToggleCollapse }: { collapsed: boolean; on
   const navigate = useNavigate()
   const location = useLocation()
   const [theme, setTheme] = useState<Theme>(getStoredTheme())
+  const [updateOpen, setUpdateOpen] = useState(false)
+  const updateCheck = useUpdateCheck()
 
   useEffect(() => {
     applyTheme(theme)
@@ -98,6 +102,18 @@ export function Header({ collapsed, onToggleCollapse }: { collapsed: boolean; on
         <Button
           variant="ghost"
           size="icon"
+          onClick={() => setUpdateOpen(true)}
+          title="检查更新"
+          className="relative"
+        >
+          <Download className="h-5 w-5" />
+          {updateCheck.data?.has_update && (
+            <span className="absolute right-1.5 top-1.5 h-2 w-2 rounded-full bg-red-500 ring-2 ring-background" />
+          )}
+        </Button>
+        <Button
+          variant="ghost"
+          size="icon"
           onClick={cycleTheme}
           title={theme === 'light' ? '亮色模式' : theme === 'dark' ? '暗色模式' : '跟随系统'}
         >
@@ -126,6 +142,13 @@ export function Header({ collapsed, onToggleCollapse }: { collapsed: boolean; on
           </DropdownMenuContent>
         </DropdownMenu>
       </div>
+      <UpdateCheckDialog
+        data={updateCheck.data}
+        isLoading={updateCheck.isLoading}
+        isError={updateCheck.isError}
+        open={updateOpen}
+        onOpenChange={setUpdateOpen}
+      />
     </header>
   )
 }

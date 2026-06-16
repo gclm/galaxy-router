@@ -14,7 +14,7 @@ import {
   useResetBackup,
 } from '@/api/query-hooks'
 import { toast } from 'sonner'
-import { User, Shield, TrendingUp, Sliders, Server, Database, Globe } from 'lucide-react'
+import { User, Shield, TrendingUp, Sliders, Server, Database, Globe, RefreshCw } from 'lucide-react'
 
 const tabs = [
   { id: 'account', label: '账户安全', icon: Shield },
@@ -23,6 +23,7 @@ const tabs = [
   { id: 'cors', label: '跨域设置', icon: Globe },
   { id: 'backup', label: '数据备份', icon: Database },
   { id: 'proxy', label: '上游代理', icon: Globe },
+  { id: 'update', label: '版本更新', icon: RefreshCw },
   { id: 'infra', label: '基础配置', icon: Server },
 ] as const
 
@@ -58,6 +59,10 @@ const fieldDefs: Record<string, FieldDef[]> = {
   proxy: [
     { key: 'proxy.enabled', label: '启用上游代理', description: '通过代理服务器转发请求到上游 API', type: 'switch' },
     { key: 'proxy.url', label: '代理地址', description: '如 http://127.0.0.1:7890', type: 'text' },
+  ],
+  update: [
+    { key: 'github.repo', label: 'GitHub 仓库', description: 'owner/repo，用于检查版本更新', type: 'text' },
+    { key: 'update.mirror', label: '下载镜像', description: 'api.github.com 失败时走镜像下载 release-info.json（如 https://ghfast.top/），留空=不启用', type: 'text' },
   ],
 }
 

@@ -15,6 +15,7 @@ import type {
   CreateApiKeyRequest,
   UpdateApiKeyRequest,
   SystemInfo,
+  UpdateCheck,
   ChangePasswordRequest,
 } from '@/api/types'
 
@@ -123,6 +124,16 @@ export function useSystemInfo() {
     queryKey: ['system-info'],
     queryFn: () => apiClient.get<SystemInfo>('/system-info'),
     staleTime: 5 * 60_000,
+  })
+}
+
+export function useUpdateCheck() {
+  return useQuery({
+    queryKey: ['update-check'],
+    queryFn: () => apiClient.get<UpdateCheck>('/update-check'),
+    refetchInterval: 60 * 60_000, // 1 小时轮询
+    refetchOnMount: 'always',
+    retry: false, // 国内 GitHub 不稳，失败不重试避免雪上加霜
   })
 }
 
