@@ -95,8 +95,8 @@ export function ApiKeys() {
     const { budget_monthly, budget_daily, ...keyData } = data
     createMutation.mutate(keyData, {
       onSuccess: (key) => {
-        // 创建成功后,若填了预算则设置(预算是独立实体,需 key.id)
-        if (budget_monthly !== undefined || budget_daily !== undefined) {
+        // 创建时仅当填了预算(>0)才设置,避免给新 key 写无意义的 0 记录
+        if ((budget_monthly ?? 0) > 0 || (budget_daily ?? 0) > 0) {
           setBudgetMutation.mutate({
             api_key_id: key.id,
             monthly_limit_usd: budget_monthly ?? 0,

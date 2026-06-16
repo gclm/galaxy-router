@@ -1,0 +1,9 @@
+type: issue
+complexity: simple
+sop: sop/issue.md
+status: in_progress
+feature: 2026-06-16-修复budget两缺陷月消费误算误拦无法删除预算
+title: 修复budget两缺陷:月消费误算误拦+无法删除预算
+created: '2026-06-16'
+completed: null
+notes: ''

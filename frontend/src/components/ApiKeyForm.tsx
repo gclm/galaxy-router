@@ -71,13 +71,9 @@ export function ApiKeyForm({
       allowed_groups: selectedGroups.length > 0 ? selectedGroups.join(',') : undefined,
     }
 
-    // 附带预算(创建/编辑都支持)
-    const monthly = budgetMonthly ? parseFloat(budgetMonthly) : 0
-    const daily = budgetDaily ? parseFloat(budgetDaily) : 0
-    if (monthly > 0 || daily > 0) {
-      data.budget_monthly = monthly
-      data.budget_daily = daily
-    }
+    // 附带预算(创建/编辑都支持;即使 0 也附——编辑时 0 表示清除预算)
+    data.budget_monthly = budgetMonthly ? parseFloat(budgetMonthly) : 0
+    data.budget_daily = budgetDaily ? parseFloat(budgetDaily) : 0
 
     onSubmit(data)
   }

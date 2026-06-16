@@ -32,10 +32,10 @@ async fn check_budget(pool: &SqlitePool, key_id: &str) -> Result<(), String> {
         return Ok(()); // 无预算限制
     };
 
-    // 查询累计消费
+    // 查询累计消费（月消费只算当月,日消费只算当日,均按 UTC,与 created_at 存储一致）
     let (monthly_cost, daily_cost): (f64, f64) = sqlx::query_as(
         r#"SELECT
-            COALESCE(SUM(COALESCE(cost, 0)), 0),
+            COALESCE(SUM(CASE WHEN strftime('%Y-%m', created_at) = strftime('%Y-%m', 'now') THEN COALESCE(cost, 0) ELSE 0 END), 0),
             COALESCE(SUM(CASE WHEN date(created_at) = date('now') THEN COALESCE(cost, 0) ELSE 0 END), 0)
         FROM usage_logs WHERE api_key_id = ?"#,
     )
@@ -493,5 +493,85 @@ mod tests {
         assert!(validate_header_value("sk-abc\r\nfoo").is_err());
         assert!(validate_header_value("sk-abc\0").is_err());
         assert!(validate_header_value("sk-abc\x7f").is_err());
+    }
+
+    /// 回归:月预算只算当月消费,历史月份不计入(修复"一设就被拦")
+    #[tokio::test]
+    async fn check_budget_monthly_ignores_previous_month() {
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        sqlx::migrate!("src/db/migrations").run(&pool).await.unwrap();
+        let key_id = "019ecf15-0000-7000-8000-000000000001";
+
+        sqlx::query("INSERT INTO api_keys (id, name, api_key) VALUES (?, 't', 'sk-t')")
+            .bind(key_id)
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO budget_limits (id, api_key_id, monthly_limit_usd) VALUES ('b1', ?, 10.0)",
+        )
+        .bind(key_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+        // 上月消费 100(全部历史超 10,但不在当月)
+        sqlx::query(
+            "INSERT INTO usage_logs (id, api_key_id, requested_model, cost, created_at) VALUES ('u1', ?, 'm', 100.0, datetime('now','-1 month'))",
+        )
+        .bind(key_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+        // 当月消费 1(当月未超 10)
+        sqlx::query(
+            "INSERT INTO usage_logs (id, api_key_id, requested_model, cost) VALUES ('u2', ?, 'm', 1.0)",
+        )
+        .bind(key_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+        // 修复前 monthly_cost=101>=10 误拦;修复后只算当月 1<10 → Ok
+        assert!(
+            check_budget(&pool, key_id).await.is_ok(),
+            "月预算应只算当月消费(1),不应把上月历史(100)计入"
+        );
+    }
+
+    /// 当月消费超额仍应拦截(确认修复没破坏正常拦截)
+    #[tokio::test]
+    async fn check_budget_blocks_when_current_month_exceeds() {
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        sqlx::migrate!("src/db/migrations").run(&pool).await.unwrap();
+        let key_id = "019ecf15-0000-7000-8000-000000000002";
+
+        sqlx::query("INSERT INTO api_keys (id, name, api_key) VALUES (?, 't', 'sk-t2')")
+            .bind(key_id)
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO budget_limits (id, api_key_id, monthly_limit_usd) VALUES ('b2', ?, 10.0)",
+        )
+        .bind(key_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO usage_logs (id, api_key_id, requested_model, cost) VALUES ('u3', ?, 'm', 15.0)",
+        )
+        .bind(key_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+        // 当月 15 >= 10 → 拦截
+        assert!(check_budget(&pool, key_id).await.is_err());
     }
 }
