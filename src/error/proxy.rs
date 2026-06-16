@@ -137,6 +137,8 @@ fn classify_upstream(status: StatusCode, body: &str) -> ErrorClass {
     const KEY_NEEDLES: &[&str] = &[
         "余额不足",
         "无可用资源包",
+        "速率限制",
+        "频率限制",
         "insufficient_quota",
         "quota exceeded",
         "resource exhausted",
@@ -314,6 +316,24 @@ mod tests {
         // 5xx 含余额字样：Key 重试优先
         assert_eq!(
             classify_upstream(StatusCode::INTERNAL_SERVER_ERROR, "insufficient_quota"),
+            ErrorClass::KeyRetryable
+        );
+    }
+
+    #[test]
+    fn classify_upstream_chinese_rate_limit_is_key_retryable() {
+        // 回归:智谱 1302「您的账户已达到速率限制」流式经 SSE 分支被标成 502,
+        // 但 body 含中文限流语义,应识别为 KeyRetryable 触发换 key。
+        // 复现自生产 usage_logs(glm-5.2 限流只试 1 个 key 就 502)。
+        assert_eq!(
+            classify_upstream(
+                StatusCode::BAD_GATEWAY,
+                "[1302][您的账户已达到速率限制，请您控制请求频率]"
+            ),
+            ErrorClass::KeyRetryable
+        );
+        assert_eq!(
+            classify_upstream(StatusCode::BAD_GATEWAY, "请求过于频繁，触发速率限制"),
             ErrorClass::KeyRetryable
         );
     }

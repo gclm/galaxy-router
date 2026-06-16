@@ -24,6 +24,7 @@
 - **协议转换 null 字段**：上游返回的 JSON 可能有 null 字段，转换时需要显式处理（`068741f` 修过）
 - **流式 tool_calls 碎片化**：SSE 流中 tool_calls 分片到达，拼接日志时需要缓冲（`54f4802` 修过）
 - **上游 Key 余额不足但返回 5xx**：`classify_upstream` 会检查 body 关键词（"insufficient_quota" 等）来识别 Key 问题，新增 Key 相关错误时需要同步更新 `KEY_NEEDLES`
+- **国内上游限流常以中文 body + 非 429 返回**：智谱 GLM Coding Plan 的 1302 限流藏在响应体内（流式 SSE 分支 `stream_executor.rs:272` 还会把它标成 502），只能靠 `KEY_NEEDLES` 的中文关键词（"速率限制"/"频率限制"）识别为 `KeyRetryable` 触发换 key。新增上游时按语义族（限流/额度/鉴权）覆盖中英文，不要只按上游枚举
 - **`sqlx::migrate!()` 宏在编译期扫描 `src/db/migrations/`**：路径是相对 `Cargo.toml` 的，文件名格式 `{version}_{name}.sql`，version 必须递增
 - **`HeaderValue::from_str` 会 panic**：用户输入作为 header value（如 API Key）时，必须先 `validate_header_value()` 校验，否则 CRLF / 控制字符会 panic
 - **`models` 字段解析**：`parse_models` 用 `serde_json::from_str`，空字符串和非法 JSON 返回空 Vec，不要假设一定有值
