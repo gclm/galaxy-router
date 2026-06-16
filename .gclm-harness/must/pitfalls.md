@@ -31,6 +31,9 @@
 - **`ProxyCache` 双层结构**：`groups`、`channels`、`compiled_regex` 各有独立缓存，失效时需要逐个处理
 - **（前端）`navigator.clipboard` 受 Secure Context 限制**：只在 HTTPS/localhost/file:// 下可用,HTTP 部署下为 `undefined`,裸调 `.writeText` 会抛 `Cannot read properties of undefined`。前端复制统一走 `frontend/src/lib/utils.ts::copyText`(已含 `execCommand` 降级),勿裸调
 - **（前端）API Key 预算是独立实体**：`budget_limits` 需 `api_key_id` 才能写入,create api key 接口不带预算。前端创建时设预算必须两步——先 `createApiKey` 拿到 `key.id` → `onSuccess` 里调 `setBudgetMutation`(见 `ApiKeys.tsx::handleCreate`)
+- **按时间范围查 `created_at` 别套函数**：`WHERE date(datetime(created_at,'+8h')) >= ?` 会令 `idx_usage_logs_created_at` 失效、全表扫(仪表盘曾因此卡 pending)。改用 UTC 范围裸列 `created_at >= ? AND created_at < ?`(helper `metrics/query/mod.rs::range_utc_days/between`)。同理 `check_budget` 月消费须按当月过滤,否则全部历史计入→"一设就被拦"
+- **chrome-mcp `fill` 对 React 受控 input 无效**：只改 DOM value,不触发 React `onChange`(valueTracker 不感知),submit 仍发旧值。测 React 表单清空/改值要用 `evaluate_script` 走 native setter + `dispatchEvent(new Event('input',{bubbles}))`
+- **SQLite 聚合 `SUM` 返回类型不固定**：全 INTEGER 输入时返回 INTEGER,含 REAL 才返回 REAL。sqlx 按 `f64` 解码 INTEGER 会报 "not compatible with SQL INTEGER"(曾让 `check_budget` 在 key 无消费时抛 402 "查询消费失败")。聚合 REAL 列须外层 `CAST(... AS REAL)`(`check_budget`、`metrics/query` stats 查询均如此)
 
 ## 调试技巧
 
