@@ -30,8 +30,8 @@ galaxy-router
 ├── scheduler/           # ★ 负载均衡
 │   ├── selector.rs      # select_channel — 加权随机选择 + Top-K
 │   ├── scoring.rs       # 评分算法（priority/load/queue/error_rate/ttft）
-│   ├── capacity.rs      # 渠道容量管理（并发槽位 + 熔断）
-│   ├── circuit.rs       # 熔断器（failure_threshold → blacklist）
+│   ├── capacity.rs      # 渠道容量管理（并发槽位 permit）
+│   ├── circuit.rs       # 熔断器（per-key：channel_id:key_hint 粒度，executor 内检查）
 │   ├── state.rs         # LoadBalancerState（全局调度状态）
 │   ├── runtime.rs       # RuntimeChannelState（单渠道运行时状态）
 │   ├── sticky.rs        # 粘性会话（session_hash → channel_id 映射）
@@ -122,7 +122,7 @@ api ──→ relay ──→ scheduler
 
 1. **缓存一致性**：渠道/分组 CRUD 后必须 `cache.invalidate()`，否则代理请求用的是旧数据
 2. **Key 轮换不重复**：`api_key_attempts()` 用 `AtomicU64` 计数器确保同渠道多 Key 时均匀分布
-3. **熔断阈值**：渠道连续失败 N 次（`failure_threshold`）进入黑名单，`blacklist_minutes` 后自动恢复
+3. **两层容错**：① per-key 熔断器（`circuit_breaker[channel_id:key_hint]`，executor key 循环内 `is_tripped` 检查 + `record_failure/success`，单 key 失败只熔断自己，不连累同渠道其他 key）；② channel 黑名单（`ChannelStatus`，全 key 失败累计 `failure_threshold` 次拉黑 `blacklist_minutes`，`is_channel_available` 据此判断渠道可用性）
 4. **粘性会话**：同一 `x-session-hash` 在 TTL 内固定同一渠道，避免对话上下文中断
 5. **API Key 认证双路径**：支持 `Authorization: Bearer` 和 `x-api-key` header
 
