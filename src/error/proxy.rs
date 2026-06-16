@@ -251,13 +251,24 @@ fn render_status_and_message(e: &ProxyError) -> (StatusCode, String) {
 /// 兼容封装：仅根据 status + body 判断上游错误是否需要换 Key
 ///
 /// 内部委托给 `ProxyError::is_key_retryable`，避免散落的多处独立判断。
-#[allow(dead_code)]
 pub fn is_key_retryable_upstream_error(status: StatusCode, body: &str) -> bool {
     ProxyError::UpstreamError {
         status,
         body: body.to_string(),
     }
     .is_key_retryable()
+}
+
+/// SSE 流内错误的 HTTP 状态归因
+///
+/// 上游返回 2xx 但 SSE 流内含错误时（如智谱 1302 限流藏在流里），根据错误体归因
+/// 状态码：限流/鉴权语义 → 429（触发换 key、不触发 channel 黑名单），其他保持 502。
+pub fn sse_stream_error_status(body: &str) -> StatusCode {
+    if is_key_retryable_upstream_error(StatusCode::BAD_GATEWAY, body) {
+        StatusCode::TOO_MANY_REQUESTS
+    } else {
+        StatusCode::BAD_GATEWAY
+    }
 }
 
 #[cfg(test)]
@@ -335,6 +346,20 @@ mod tests {
         assert_eq!(
             classify_upstream(StatusCode::BAD_GATEWAY, "请求过于频繁，触发速率限制"),
             ErrorClass::KeyRetryable
+        );
+    }
+
+    #[test]
+    fn sse_stream_error_status_classifies_rate_limit_as_429() {
+        // SSE 流内错误归因：限流体应归因为 429（触发换 key、不触发 channel 黑名单）
+        assert_eq!(
+            sse_stream_error_status("[1302][您的账户已达到速率限制]"),
+            StatusCode::TOO_MANY_REQUESTS
+        );
+        // 非限流错误保持 502
+        assert_eq!(
+            sse_stream_error_status("upstream overloaded"),
+            StatusCode::BAD_GATEWAY
         );
     }
 

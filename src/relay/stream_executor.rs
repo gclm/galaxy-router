@@ -19,7 +19,7 @@ use crate::relay::run::{
     RelayAttemptError, RelayCandidate, RelayRequest, RelayStreamAttemptExecutor,
     RelayStreamAttemptResult, RelayStreamSuccess,
 };
-use crate::error::proxy::ProxyError;
+use crate::error::proxy::{ProxyError, sse_stream_error_status};
 use crate::relay::state::ProxyState;
 use crate::scheduler::selector::SelectionResult;
 use axum::http::StatusCode;
@@ -270,7 +270,7 @@ impl ProxyStreamRelayExecutor {
                 &active_decremented_clone,
             );
             return Err(ProxyError::UpstreamError {
-                status: StatusCode::BAD_GATEWAY,
+                status: sse_stream_error_status(&error),
                 body: error,
             });
         }
