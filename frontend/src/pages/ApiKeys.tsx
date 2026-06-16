@@ -17,7 +17,7 @@ import {
   useDeleteBudget,
 } from '@/api/query-hooks'
 import type { BudgetLimit } from '@/api/types'
-import { formatDate, maskKey } from '@/lib/utils'
+import { formatDate, maskKey, copyText } from '@/lib/utils'
 import { toast } from 'sonner'
 import {
   Plus,
@@ -85,7 +85,7 @@ export function ApiKeys() {
   }
 
   const copyToClipboard = async (key: string) => {
-    await navigator.clipboard.writeText(key)
+    await copyText(key)
     setCopiedKey(key)
     setTimeout(() => setCopiedKey((prev) => (prev === key ? null : prev)), 2000)
   }

@@ -39,3 +39,35 @@ export function fmtTokens(n: number): string {
   if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`
   return n.toLocaleString()
 }
+
+/**
+ * 复制文本到剪贴板。优先用 Clipboard API(需安全上下文 HTTPS/localhost),
+ * 不可用时降级到 execCommand,保证 HTTP 部署也能复制。
+ * 返回是否复制成功,不抛异常。
+ */
+export async function copyText(text: string): Promise<boolean> {
+  if (navigator.clipboard) {
+    try {
+      await navigator.clipboard.writeText(text)
+      return true
+    } catch {
+      // 安全上下文下仍可能被权限拒绝,降级到 execCommand
+    }
+  }
+  const ta = document.createElement('textarea')
+  ta.value = text
+  ta.style.position = 'fixed'
+  ta.style.top = '0'
+  ta.style.opacity = '0'
+  document.body.appendChild(ta)
+  ta.focus()
+  ta.select()
+  let ok = false
+  try {
+    ok = document.execCommand('copy')
+  } catch {
+    // execCommand 失败时 ok 保持初始值 false
+  }
+  document.body.removeChild(ta)
+  return ok
+}

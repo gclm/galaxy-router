@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { formatDate, formatNumber, formatCost, formatLatency } from '@/lib/utils'
+import { formatDate, formatNumber, formatCost, formatLatency, copyText } from '@/lib/utils'
 import { useLogs, useLogDetail, useLogModels, useChannels } from '@/api/query-hooks'
 import { useAutoRefresh } from '@/hooks/useAutoRefresh'
 import { ENDPOINT_LABELS } from '@/api/types'
@@ -31,8 +31,8 @@ import {
 
 function CopyButton({ text }: { text: string }) {
   const [copied, setCopied] = useState(false)
-  const handleCopy = () => {
-    navigator.clipboard.writeText(text)
+  const handleCopy = async () => {
+    await copyText(text)
     setCopied(true)
     setTimeout(() => setCopied(false), 2000)
   }
