@@ -62,7 +62,7 @@ const fieldDefs: Record<string, FieldDef[]> = {
   ],
   update: [
     { key: 'github.repo', label: 'GitHub 仓库', description: 'owner/repo，用于检查版本更新', type: 'text' },
-    { key: 'update.mirror', label: '下载镜像', description: 'api.github.com 失败时走镜像下载 release-info.json（如 https://ghfast.top/），留空=不启用', type: 'text' },
+    { key: 'update.mirror', label: '下载镜像', description: 'api.github.com 失败时走镜像下载 release-info.json，默认 https://ghfast.top/，可改为其他 github.com 加速前缀，清空=不启用', type: 'text' },
   ],
 }
 
