@@ -154,6 +154,9 @@ export function Settings() {
         {activeTab === 'proxy' && (
           <FieldSetTab category="proxy" settingMap={settingMap} onUpdate={handleUpdate} />
         )}
+        {activeTab === 'update' && (
+          <FieldSetTab category="update" settingMap={settingMap} onUpdate={handleUpdate} />
+        )}
         {activeTab === 'infra' && infra && <InfraTab config={infra} />}
       </div>
     </div>
