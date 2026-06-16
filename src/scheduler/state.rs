@@ -221,10 +221,7 @@ impl LoadBalancerState {
         }
         self.runtime_manager
             .record_success(channel_id, latency_ms, ttft_ms);
-        // 通知熔断器（使用空的 key_hint，后续可扩展）
-        self.circuit_breaker
-            .record_success(channel_id, "default")
-            .await;
+        // per-key 熔断由 executor 在 key 循环内直接调用 circuit_breaker
     }
 
     /// 记录请求失败
@@ -243,16 +240,19 @@ impl LoadBalancerState {
             }
         }
         self.runtime_manager.record_failure(channel_id);
-        // 通知熔断器
-        self.circuit_breaker
-            .record_failure(channel_id, "default")
-            .await;
+        // per-key 熔断由 executor 在 key 循环内直接调用 circuit_breaker
     }
 
-    /// 检查渠道是否可用（使用熔断器）
+    /// 检查渠道是否可用（channel 级：查黑名单）
+    ///
+    /// per-key 熔断由 executor 在 key 循环内通过 `circuit_breaker` 直接检查；
+    /// 此处只做 channel 级粗过滤（全 key 失败导致的黑名单）。
     pub async fn is_channel_available(&self, channel_id: &str) -> bool {
-        let (tripped, _) = self.circuit_breaker.is_tripped(channel_id, "default").await;
-        !tripped
+        let states = self.channel_states.read().await;
+        match states.get(channel_id) {
+            None => true, // 无运行时统计，视为可用
+            Some(status) => status.is_available(),
+        }
     }
 
     /// 确保渠道状态存在（惰性初始化）
@@ -473,5 +473,25 @@ mod tests {
         assert_eq!(stats.avg_latency_ms(), 300.0);
         assert_eq!(stats.avg_ttft_ms(), 42.0);
         assert!(stats.health() < 1.0);
+    }
+
+    #[tokio::test]
+    async fn is_channel_available_reflects_blacklist() {
+        // is_channel_available 走 channel 级黑名单（全 key 失败才拉黑），
+        // 不再查 circuit_breaker[default]
+        let lb = LoadBalancerState::new();
+        lb.ensure_channel_status("ch1", 10).await;
+
+        // 初始可用
+        assert!(lb.is_channel_available("ch1").await);
+
+        // 连续失败达阈值 → channel 拉黑
+        for _ in 0..lb.blacklist_threshold {
+            lb.record_failure("ch1", true).await;
+        }
+        assert!(
+            !lb.is_channel_available("ch1").await,
+            "达阈值的 channel 应被拉黑"
+        );
     }
 }

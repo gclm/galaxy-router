@@ -133,6 +133,23 @@ impl RelayAttemptExecutor for ProxyRelayExecutor {
 
         for upstream_api_key in &api_key_attempts {
             let key_hint = selection.channel.key_hint(upstream_api_key);
+
+            // per-key 熔断：该 key 已熔断则跳过，直接试下一个 key
+            let (tripped, _) = self
+                .state
+                .lb_state
+                .circuit_breaker
+                .is_tripped(&candidate.channel_id, &key_hint)
+                .await;
+            if tripped {
+                tracing::debug!(
+                    "key 熔断跳过: channel={}, key={}",
+                    candidate.channel_id,
+                    key_hint
+                );
+                continue;
+            }
+
             let mut local_attempts = Vec::new();
 
             let result = self
@@ -159,6 +176,12 @@ impl RelayAttemptExecutor for ProxyRelayExecutor {
                     .is_key_retryable();
 
                     if is_key_retryable {
+                        // per-key 熔断：记录该 key 失败，连续失败会熔断此 key（不影响其他 key）
+                        self.state
+                            .lb_state
+                            .circuit_breaker
+                            .record_failure(&candidate.channel_id, &key_hint)
+                            .await;
                         tracing::warn!(
                             "key retry: channel={}, status={}, trying next key",
                             candidate.channel_id,
@@ -290,6 +313,12 @@ impl ProxyRelayExecutor {
         self.state
             .lb_state
             .record_success(&prepared.channel_id, latency_ms as f64)
+            .await;
+        // per-key 熔断：成功重置该 key 的熔断状态
+        self.state
+            .lb_state
+            .circuit_breaker
+            .record_success(&prepared.channel_id, upstream_key_hint)
             .await;
 
         let final_body = if prepared.needs_conversion {

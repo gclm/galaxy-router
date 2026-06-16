@@ -327,4 +327,22 @@ mod tests {
         let (tripped, _) = breaker.is_tripped("ch1", "key1").await;
         assert!(!tripped);
     }
+
+    #[tokio::test]
+    async fn test_circuit_per_key_isolation_within_channel() {
+        // 同一 channel 的不同 key 独立熔断：key1 熔断不影响 key2
+        let breaker = CircuitBreaker::new(CircuitConfig {
+            failure_threshold: 2,
+            ..Default::default()
+        });
+
+        breaker.record_failure("ch1", "key1").await;
+        breaker.record_failure("ch1", "key1").await;
+        let (tripped, _) = breaker.is_tripped("ch1", "key1").await;
+        assert!(tripped, "key1 连续失败应熔断");
+
+        // 同 channel 的 key2 不受影响
+        let (tripped, _) = breaker.is_tripped("ch1", "key2").await;
+        assert!(!tripped, "key1 熔断不应影响同 channel 的 key2");
+    }
 }

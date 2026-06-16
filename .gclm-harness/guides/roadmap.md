@@ -20,6 +20,7 @@
 
 ## 已完成（最近 10 条）
 
+- ✅ 2026-06-16 feat: per-key 熔断 — circuit_breaker per-key + 黑名单 channel 级,单 key 受限不再连累整渠道(阶段 1)
 - ✅ 2026-06-16 fix: glm-5.2 限流不换 key — `KEY_NEEDLES` 补中文限流词(速率限制/频率限制),多 key 重试健壮性改造 阶段 0 止血
 - ✅ 2026-06-10 refactor: 前端全面优化 — 15 条审计问题修复 + SortHeader/DataTable 通用组件抽取
 - ✅ 2026-06-10 refactor: Admin API RESTful 规范化 — 前后端路径同步

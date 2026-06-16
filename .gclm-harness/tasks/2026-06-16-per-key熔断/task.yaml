@@ -1,0 +1,9 @@
+type: issue
+complexity: moderate
+sop: sop/issue.md
+status: completed
+feature: 2026-06-16-per-key熔断
+title: per-key 熔断 — 单 key 受限不再连累整渠道
+created: '2026-06-16'
+completed: '2026-06-16'
+notes: '多key重试健壮性改造 阶段1。circuit_breaker 从 channel:default 改 per-key,executor key循环内检查/记录;channel级可用性改由 ChannelStatus 黑名单负责。顺带修正:健康探测失败不再污染生产 default 熔断器。当前 Gate 1(design 待 approved)。'
