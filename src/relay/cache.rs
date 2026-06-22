@@ -166,6 +166,8 @@ mod tests {
             timeout_secs: 300,
             max_concurrency: 0,
             extras: None,
+            failure_threshold: 3,
+            blacklist_minutes: 10,
         }
     }
 

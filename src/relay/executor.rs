@@ -106,7 +106,13 @@ impl RelayAttemptExecutor for ProxyRelayExecutor {
         self.state.lb_state.is_channel_available(channel_id).await
     }
 
-    async fn on_attempt_failed(&self, channel_id: &str, _status_code: u16, is_server_error: bool) {
+    async fn on_attempt_failed(&self, channel_id: &str, error: &ProxyError) {
+        // key-retryable 错误（401/402/429/503/余额不足等）已经走 per-key 熔断器，
+        // 不应计入渠道级黑名单，否则上游瞬时过载（如 mimo 503）会把整个渠道连带健康的端点一起拉黑。
+        if error.is_key_retryable() {
+            return;
+        }
+        let is_server_error = matches!(error.classify(), crate::error::proxy::ErrorClass::UpstreamRetryable);
         self.state
             .lb_state
             .record_failure(channel_id, is_server_error)
@@ -128,8 +134,40 @@ impl RelayAttemptExecutor for ProxyRelayExecutor {
             }
         };
 
+        // 503 同渠道退避重试（参考 sub2api HandleSelectionExhausted 模式）：
+        // 所有真正执行的 key 都返回 503 → 上游瞬时过载，共享资源问题，
+        // 换 key 无效。等 2s 后清掉 per-key 熔断器再试同一批 key。
+        let first_pass = self.run_key_loop(&selection, candidate).await;
+        if first_pass.should_retry_503() {
+            tracing::warn!(
+                "所有 key 返回 503，2s 后同渠道重试: channel={}",
+                candidate.channel_id
+            );
+            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+            self.state
+                .lb_state
+                .circuit_breaker
+                .reset_channel(&candidate.channel_id)
+                .await;
+            return self.run_key_loop(&selection, candidate).await.into_result();
+        }
+        first_pass.into_result()
+    }
+}
+
+impl ProxyRelayExecutor {
+    /// 单轮遍历所有 key，执行代理请求。
+    ///
+    /// 返回 KeyLoopOutcome 让上层判断是否要做"503 同渠道退避重试"。
+    async fn run_key_loop(
+        &self,
+        selection: &SelectionResult,
+        candidate: &RelayCandidate,
+    ) -> KeyLoopOutcome {
         let api_key_attempts = self.state.api_key_attempts(&selection.channel);
         let mut last_error = None;
+        let mut executed_count = 0u32;
+        let mut all_executed_503 = true;
 
         for upstream_api_key in &api_key_attempts {
             let key_hint = selection.channel.key_hint(upstream_api_key);
@@ -153,7 +191,12 @@ impl RelayAttemptExecutor for ProxyRelayExecutor {
             let mut local_attempts = Vec::new();
 
             let result = self
-                .execute_proxy_request(upstream_api_key, &key_hint, &selection, &mut local_attempts)
+                .execute_proxy_request(
+                    upstream_api_key,
+                    &key_hint,
+                    selection,
+                    &mut local_attempts,
+                )
                 .await;
 
             if let Ok(mut stats) = self.attempt_stats.lock() {
@@ -162,18 +205,26 @@ impl RelayAttemptExecutor for ProxyRelayExecutor {
 
             match result {
                 Ok(success) => {
-                    return RelayAttemptResult {
-                        response: Ok(String::from_utf8_lossy(&success.body).to_string()),
-                        response_written: false,
-                    };
+                    return KeyLoopOutcome::Success(
+                        String::from_utf8_lossy(&success.body).to_string(),
+                    );
                 }
                 Err(ProxyError::UpstreamError { status, body }) => {
-                    let error = RelayAttemptError::new(status.as_u16(), sanitize_error_body(&body));
-                    let is_key_retryable = ProxyError::UpstreamError {
+                    executed_count += 1;
+                    let upstream_error = ProxyError::UpstreamError {
                         status,
                         body: body.clone(),
+                    };
+                    let error = RelayAttemptError::from_proxy_error(upstream_error);
+                    let is_key_retryable = error
+                        .proxy_error
+                        .as_ref()
+                        .map(|e| e.is_key_retryable())
+                        .unwrap_or(false);
+
+                    if status != axum::http::StatusCode::SERVICE_UNAVAILABLE {
+                        all_executed_503 = false;
                     }
-                    .is_key_retryable();
 
                     if is_key_retryable {
                         // per-key 熔断：记录该 key 失败，连续失败会熔断此 key（不影响其他 key）
@@ -191,25 +242,137 @@ impl RelayAttemptExecutor for ProxyRelayExecutor {
                         continue;
                     }
 
-                    return RelayAttemptResult {
-                        response: Err(error),
-                        response_written: false,
-                    };
+                    return KeyLoopOutcome::NonKeyRetryableError(error);
                 }
                 Err(e) => {
-                    return RelayAttemptResult {
-                        response: Err(RelayAttemptError::new(502, e.to_string())),
-                        response_written: false,
-                    };
+                    return KeyLoopOutcome::NonKeyRetryableError(
+                        RelayAttemptError::from_proxy_error(e),
+                    );
                 }
             }
         }
 
-        RelayAttemptResult {
-            response: Err(
-                last_error.unwrap_or_else(|| RelayAttemptError::new(500, "all api keys exhausted"))
-            ),
-            response_written: false,
+        KeyLoopOutcome::AllKeysTried {
+            last_error,
+            all_executed_503: executed_count > 0 && all_executed_503,
+        }
+    }
+}
+
+/// run_key_loop 的返回结果。把"成功 / 非 key-retryable 失败 / 所有 key 已尝试"
+/// 三种情况显式区分开，方便上层决策是否做 503 同渠道退避重试。
+enum KeyLoopOutcome {
+    Success(String),
+    NonKeyRetryableError(RelayAttemptError),
+    AllKeysTried {
+        last_error: Option<RelayAttemptError>,
+        /// 所有真正执行过的 key 都返回 503
+        all_executed_503: bool,
+    },
+}
+
+impl KeyLoopOutcome {
+    /// 是否应该做 503 同渠道退避重试
+    fn should_retry_503(&self) -> bool {
+        matches!(
+            self,
+            KeyLoopOutcome::AllKeysTried {
+                all_executed_503: true,
+                ..
+            }
+        )
+    }
+
+    /// 转换为 RelayAttemptResult
+    fn into_result(self) -> RelayAttemptResult {
+        match self {
+            KeyLoopOutcome::Success(body) => RelayAttemptResult {
+                response: Ok(body),
+                response_written: false,
+            },
+            KeyLoopOutcome::NonKeyRetryableError(err)
+            | KeyLoopOutcome::AllKeysTried {
+                last_error: Some(err),
+                ..
+            } => RelayAttemptResult {
+                response: Err(err),
+                response_written: false,
+            },
+            KeyLoopOutcome::AllKeysTried {
+                last_error: None, ..
+            } => RelayAttemptResult {
+                response: Err(RelayAttemptError::new(500, "all api keys exhausted")),
+                response_written: false,
+            },
+        }
+    }
+}
+
+#[cfg(test)]
+mod outcome_tests {
+    use super::*;
+
+    #[test]
+    fn key_loop_outcome_all_503_triggers_retry() {
+        let outcome = KeyLoopOutcome::AllKeysTried {
+            last_error: Some(RelayAttemptError::new(503, "upstream overloaded")),
+            all_executed_503: true,
+        };
+        assert!(
+            outcome.should_retry_503(),
+            "所有执行过的 key 都返回 503 时应触发同渠道退避重试"
+        );
+    }
+
+    #[test]
+    fn key_loop_outcome_mixed_errors_no_retry() {
+        // 有执行过的 key 返回 429/500，非全部 503 → 不触发重试
+        let outcome = KeyLoopOutcome::AllKeysTried {
+            last_error: Some(RelayAttemptError::new(500, "upstream overloaded")),
+            all_executed_503: false,
+        };
+        assert!(!outcome.should_retry_503());
+    }
+
+    #[test]
+    fn key_loop_outcome_no_execution_no_retry() {
+        // 所有 key 都被熔断跳过，没有任何执行 → 不触发重试
+        let outcome = KeyLoopOutcome::AllKeysTried {
+            last_error: None,
+            all_executed_503: false,
+        };
+        assert!(!outcome.should_retry_503());
+    }
+
+    #[test]
+    fn key_loop_outcome_success_no_retry() {
+        let outcome = KeyLoopOutcome::Success("ok".to_string());
+        assert!(!outcome.should_retry_503());
+    }
+
+    #[test]
+    fn key_loop_outcome_into_result_carries_last_error() {
+        let outcome = KeyLoopOutcome::AllKeysTried {
+            last_error: Some(RelayAttemptError::new(503, "upstream overloaded")),
+            all_executed_503: false,
+        };
+        let result = outcome.into_result();
+        match result.response {
+            Err(e) => assert_eq!(e.status_code, 503),
+            Ok(_) => panic!("应返回 last_error"),
+        }
+    }
+
+    #[test]
+    fn key_loop_outcome_all_keys_tried_no_error_falls_back_to_500() {
+        let outcome = KeyLoopOutcome::AllKeysTried {
+            last_error: None,
+            all_executed_503: false,
+        };
+        let result = outcome.into_result();
+        match result.response {
+            Err(e) => assert_eq!(e.status_code, 500),
+            Ok(_) => panic!("应返回 all api keys exhausted"),
         }
     }
 }
@@ -226,7 +389,12 @@ impl ProxyRelayExecutor {
         let channel_id = selection.channel.id.clone();
         self.state
             .lb_state
-            .ensure_channel_status(&channel_id, selection.channel.max_concurrency)
+            .ensure_channel_status(
+                &channel_id,
+                selection.channel.max_concurrency,
+                selection.channel.failure_threshold,
+                selection.channel.blacklist_minutes,
+            )
             .await;
         self.state.lb_state.increment_active(&channel_id).await;
         let _guard = ActiveRequestGuard {
@@ -340,11 +508,6 @@ impl ProxyRelayExecutor {
             body: final_body,
         })
     }
-}
-
-/// 截断过长的错误消息
-fn sanitize_error_body(body: &str) -> String {
-    body[..body.len().min(500)].to_string()
 }
 
 #[cfg(test)]

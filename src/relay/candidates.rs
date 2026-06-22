@@ -153,8 +153,8 @@ mod tests {
     #[tokio::test]
     async fn scheduler_selection_integration_prefers_healthy_low_latency() {
         let lb = LoadBalancerState::new();
-        lb.ensure_channel_status("ch-fast", 10).await;
-        lb.ensure_channel_status("ch-slow", 10).await;
+        lb.ensure_channel_status("ch-fast", 10, 3, 10).await;
+        lb.ensure_channel_status("ch-slow", 10, 3, 10).await;
 
         // ch-fast: 低延迟、无错误
         lb.record_success("ch-fast", 50.0).await;
@@ -194,8 +194,8 @@ mod tests {
     #[tokio::test]
     async fn scheduler_selection_integration_full_capacity_load_penalty() {
         let lb = LoadBalancerState::new();
-        lb.ensure_channel_status("ch-idle", 10).await;
-        lb.ensure_channel_status("ch-busy", 10).await;
+        lb.ensure_channel_status("ch-idle", 10, 3, 10).await;
+        lb.ensure_channel_status("ch-busy", 10, 3, 10).await;
 
         // ch-busy: 9/10 负载
         for _ in 0..9 {

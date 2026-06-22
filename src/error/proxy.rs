@@ -11,7 +11,7 @@ pub enum ErrorFormat {
 }
 
 /// 代理错误
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug, Clone, PartialEq, thiserror::Error)]
 pub enum ProxyError {
     #[error("数据库错误: {0}")]
     DatabaseError(String),
@@ -126,9 +126,13 @@ impl ProxyError {
 }
 
 fn classify_upstream(status: StatusCode, body: &str) -> ErrorClass {
+    // 429 / 503 都是上游"瞬时过载"类错误，应优先尝试换 key（参考 sub2api 对 503 的特殊处理）
     if matches!(
         status,
-        StatusCode::UNAUTHORIZED | StatusCode::PAYMENT_REQUIRED | StatusCode::TOO_MANY_REQUESTS
+        StatusCode::UNAUTHORIZED
+            | StatusCode::PAYMENT_REQUIRED
+            | StatusCode::TOO_MANY_REQUESTS
+            | StatusCode::SERVICE_UNAVAILABLE
     ) {
         return ErrorClass::KeyRetryable;
     }
@@ -305,13 +309,18 @@ mod tests {
 
     #[test]
     fn classify_upstream_distinguishes_key_retryable() {
-        // Key 相关：401 / 402 / 429
+        // Key 相关：401 / 402 / 429 / 503
         assert_eq!(
             classify_upstream(StatusCode::UNAUTHORIZED, ""),
             ErrorClass::KeyRetryable
         );
         assert_eq!(
             classify_upstream(StatusCode::TOO_MANY_REQUESTS, ""),
+            ErrorClass::KeyRetryable
+        );
+        // 503：上游瞬时过载（如 mimo "Service temporarily unavailable"），优先换 key，不进渠道黑名单
+        assert_eq!(
+            classify_upstream(StatusCode::SERVICE_UNAVAILABLE, ""),
             ErrorClass::KeyRetryable
         );
         // 5xx 非 Key 字样：可换渠道重试

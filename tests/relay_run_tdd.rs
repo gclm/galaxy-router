@@ -1,4 +1,5 @@
 use async_trait::async_trait;
+use galaxy_router::error::proxy::ProxyError;
 use galaxy_router::relay::run::{
     RelayAttemptError, RelayAttemptExecutor, RelayAttemptResult, RelayCandidate, RelayRequest,
     RelayRun,
@@ -16,7 +17,7 @@ struct FakeExecutor {
     response_written_at: Arc<Mutex<Option<usize>>>,
     /// 标记为不可用（熔断）的渠道列表
     unavailable_channels: Arc<Mutex<Vec<String>>>,
-    /// 记录 on_attempt_failed 回调
+    /// 记录 on_attempt_failed 回调：(channel_id, status_code, is_server_error)
     failure_feedback: Arc<Mutex<Vec<(String, u16, bool)>>>,
 }
 
@@ -62,7 +63,15 @@ impl RelayAttemptExecutor for FakeExecutor {
             .any(|c| c == channel_id)
     }
 
-    async fn on_attempt_failed(&self, channel_id: &str, status_code: u16, is_server_error: bool) {
+    async fn on_attempt_failed(&self, channel_id: &str, error: &ProxyError) {
+        let status_code = match error {
+            ProxyError::UpstreamError { status, .. } => status.as_u16(),
+            _ => 502,
+        };
+        let is_server_error = matches!(
+            error.classify(),
+            galaxy_router::error::proxy::ErrorClass::UpstreamRetryable
+        );
         self.failure_feedback.lock().expect("mutex").push((
             channel_id.to_string(),
             status_code,

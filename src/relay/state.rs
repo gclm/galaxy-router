@@ -186,8 +186,8 @@ impl ProxyState {
         }
 
         // 2. 缓存未命中，查询数据库
-        let result = sqlx::query_as::<_, (String, String, String, String, String, String, i32, i32, String)>(
-            "SELECT id, name, api_keys, endpoints, models, custom_headers, COALESCE(timeout_secs, 300), COALESCE(max_concurrency, 0), extras FROM channels WHERE id = ? AND enabled = 1"
+        let result = sqlx::query_as::<_, (String, String, String, String, String, String, i32, i32, String, i32, i32)>(
+            "SELECT id, name, api_keys, endpoints, models, custom_headers, COALESCE(timeout_secs, 300), COALESCE(max_concurrency, 0), extras, COALESCE(failure_threshold, 3), COALESCE(blacklist_minutes, 10) FROM channels WHERE id = ? AND enabled = 1"
         )
         .bind(channel_id)
         .fetch_optional(&self.pool)
@@ -204,6 +204,8 @@ impl ProxyState {
             timeout_secs,
             max_concurrency,
             extras_str,
+            failure_threshold,
+            blacklist_minutes,
         ) = result.ok_or_else(|| ProxyError::ChannelNotFound("渠道不存在或已禁用".to_string()))?;
 
         let api_keys: Vec<UpstreamApiKey> = parse_api_keys(&api_keys_str);
@@ -225,6 +227,8 @@ impl ProxyState {
             timeout_secs: timeout_secs as u64,
             max_concurrency: max_concurrency as u32,
             extras,
+            failure_threshold: failure_threshold as u64,
+            blacklist_minutes: blacklist_minutes as i64,
         };
 
         // 3. 写入缓存

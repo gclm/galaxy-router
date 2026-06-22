@@ -28,6 +28,10 @@ pub struct ChannelStatus {
     pub last_used_at: Arc<RwLock<Instant>>,
     /// 最大并发数（0=不限制）
     pub max_concurrency: u32,
+    /// 渠道级黑名单触发阈值（连续失败次数）。来自 channels.failure_threshold
+    pub blacklist_threshold: u64,
+    /// 渠道级黑名单时长（分钟）。来自 channels.blacklist_minutes
+    pub blacklist_minutes: i64,
 }
 
 impl ChannelStatus {
@@ -45,6 +49,9 @@ impl ChannelStatus {
             active_requests: Arc::new(AtomicU64::new(0)),
             last_used_at: Arc::new(RwLock::new(Instant::now())),
             max_concurrency: 0,
+            // 默认值，ensure_channel_status 会用渠道配置覆盖
+            blacklist_threshold: 3,
+            blacklist_minutes: 10,
         }
     }
 
@@ -82,8 +89,19 @@ impl ChannelStatus {
         self.success_count += 1;
         self.last_success = Some(Utc::now());
 
-        // 成功时将失败计数减半（衰减而非清零），避免单次成功洗白
-        self.failure_count = self.failure_count.saturating_div(2);
+        // 失败计数衰减：
+        //   1) 若距上次失败超过 30 分钟（TTL），直接清零（参考 axonhub FailureStatsTTL）
+        //   2) 否则折半，避免单次成功洗白
+        const FAILURE_TTL: chrono::TimeDelta = chrono::TimeDelta::minutes(30);
+        let ttl_expired = self
+            .last_failure
+            .map(|t| Utc::now() - t >= FAILURE_TTL)
+            .unwrap_or(true);
+        if ttl_expired {
+            self.failure_count = 0;
+        } else {
+            self.failure_count = self.failure_count.saturating_div(2);
+        }
 
         // 解除拉黑
         if self.failure_count == 0 {
@@ -102,8 +120,18 @@ impl ChannelStatus {
         *self.last_used_at.write().await = Instant::now();
     }
 
-    /// 记录失败
+    /// 记录失败（带 TTL 衰减）
+    ///
+    /// 若距上次失败超过 30 分钟，计数器重置为 1 再递增，避免历史 sporadic 失败累积导致渠道黑名单。
     pub fn record_failure(&mut self) {
+        const FAILURE_TTL: chrono::TimeDelta = chrono::TimeDelta::minutes(30);
+        let ttl_expired = self
+            .last_failure
+            .map(|t| Utc::now() - t >= FAILURE_TTL)
+            .unwrap_or(true);
+        if ttl_expired {
+            self.failure_count = 0;
+        }
         self.failure_count += 1;
         self.last_failure = Some(Utc::now());
     }
@@ -138,10 +166,6 @@ pub struct LoadBalancerState {
     sticky_manager: StickySessionManager,
     /// 熔断器（新增）
     pub circuit_breaker: CircuitBreaker,
-    /// 拉黑阈值（连续失败次数）
-    pub blacklist_threshold: u64,
-    /// 拉黑时长（分钟）
-    pub blacklist_minutes: i64,
     /// 容量管理器（RAII permit 方式跟踪并发）
     capacity_manager: ChannelCapacityManager,
     /// 调度器运行时指标
@@ -162,8 +186,6 @@ impl LoadBalancerState {
             channel_states: Arc::new(RwLock::new(HashMap::new())),
             sticky_manager: StickySessionManager::default(),
             circuit_breaker: CircuitBreaker::new(CircuitConfig::default()),
-            blacklist_threshold: 3,
-            blacklist_minutes: 10,
             capacity_manager: ChannelCapacityManager::new(),
             scheduler_metrics: SchedulerMetrics::new(),
             runtime_manager: ChannelRuntimeManager::new(),
@@ -224,7 +246,7 @@ impl LoadBalancerState {
         // per-key 熔断由 executor 在 key 循环内直接调用 circuit_breaker
     }
 
-    /// 记录请求失败
+    /// 记录请求失败（渠道级黑名单使用渠道自身的阈值与时长）
     pub async fn record_failure(&self, channel_id: &str, should_blacklist: bool) {
         // 更新统计
         {
@@ -233,9 +255,14 @@ impl LoadBalancerState {
                 status.record_failure();
 
                 // 检查是否需要拉黑
-                if should_blacklist && status.failure_count >= self.blacklist_threshold {
-                    status.blacklist(self.blacklist_minutes);
-                    tracing::warn!("渠道 {} 被拉黑 {} 分钟", channel_id, self.blacklist_minutes);
+                if should_blacklist && status.failure_count >= status.blacklist_threshold {
+                    status.blacklist(status.blacklist_minutes);
+                    tracing::warn!(
+                        "渠道 {} 被拉黑 {} 分钟 (failure_count={})",
+                        channel_id,
+                        status.blacklist_minutes,
+                        status.failure_count
+                    );
                 }
             }
         }
@@ -256,14 +283,24 @@ impl LoadBalancerState {
     }
 
     /// 确保渠道状态存在（惰性初始化）
-    pub async fn ensure_channel_status(&self, channel_id: &str, max_concurrency: u32) {
+    ///
+    /// `failure_threshold` / `blacklist_minutes` 来自 channels 表，用于渠道级黑名单判定。
+    /// 每次调用都会同步最新配置到 ChannelStatus，以便用户在 DB 修改后能立即生效。
+    pub async fn ensure_channel_status(
+        &self,
+        channel_id: &str,
+        max_concurrency: u32,
+        failure_threshold: u64,
+        blacklist_minutes: i64,
+    ) {
         let states = self.channel_states.read().await;
         if states.contains_key(channel_id) {
-            // 更新 max_concurrency 如果已存在
             drop(states);
             let mut states = self.channel_states.write().await;
             if let Some(status) = states.get_mut(channel_id) {
                 status.max_concurrency = max_concurrency;
+                status.blacklist_threshold = failure_threshold;
+                status.blacklist_minutes = blacklist_minutes;
             }
             return;
         }
@@ -272,10 +309,14 @@ impl LoadBalancerState {
         // Double-check after acquiring write lock
         if let Some(status) = states.get_mut(channel_id) {
             status.max_concurrency = max_concurrency;
+            status.blacklist_threshold = failure_threshold;
+            status.blacklist_minutes = blacklist_minutes;
             return;
         }
         let mut status = ChannelStatus::new(channel_id);
         status.max_concurrency = max_concurrency;
+        status.blacklist_threshold = failure_threshold;
+        status.blacklist_minutes = blacklist_minutes;
         states.insert(channel_id.to_string(), status);
     }
 
@@ -363,12 +404,37 @@ mod tests {
     async fn record_success_halves_failure_count() {
         let mut s = sample_status();
         s.failure_count = 4;
+        // TTL 依赖 last_failure：设定为刚刚，避免 30min 衰减把计数清零
+        s.last_failure = Some(Utc::now());
         s.record_success(100.0).await;
         assert_eq!(s.failure_count, 2);
         s.record_success(100.0).await;
         assert_eq!(s.failure_count, 1);
         s.record_success(100.0).await;
         assert_eq!(s.failure_count, 0);
+    }
+
+    #[tokio::test]
+    async fn record_success_clears_failure_when_ttl_expired() {
+        // 30 分钟内无失败 → 单次成功直接清零（axonhub FailureStatsTTL 模式）
+        let mut s = sample_status();
+        s.failure_count = 5;
+        s.last_failure = Some(Utc::now() - chrono::TimeDelta::minutes(31));
+        s.record_success(100.0).await;
+        assert_eq!(s.failure_count, 0);
+    }
+
+    #[tokio::test]
+    async fn record_failure_resets_after_ttl_gap() {
+        // 两次失败间隔 > 30 分钟 → 第二次失败从 1 开始计，避免历史累积
+        let mut s = sample_status();
+        s.failure_count = 5;
+        s.last_failure = Some(Utc::now() - chrono::TimeDelta::minutes(31));
+        s.record_failure();
+        assert_eq!(s.failure_count, 1);
+        // 短间隔内的后续失败正常累积
+        s.record_failure();
+        assert_eq!(s.failure_count, 2);
     }
 
     #[tokio::test]
@@ -480,13 +546,14 @@ mod tests {
         // is_channel_available 走 channel 级黑名单（全 key 失败才拉黑），
         // 不再查 circuit_breaker[default]
         let lb = LoadBalancerState::new();
-        lb.ensure_channel_status("ch1", 10).await;
+        let threshold = 3u64;
+        lb.ensure_channel_status("ch1", 10, threshold, 10).await;
 
         // 初始可用
         assert!(lb.is_channel_available("ch1").await);
 
         // 连续失败达阈值 → channel 拉黑
-        for _ in 0..lb.blacklist_threshold {
+        for _ in 0..threshold {
             lb.record_failure("ch1", true).await;
         }
         assert!(

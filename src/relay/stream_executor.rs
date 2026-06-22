@@ -146,7 +146,12 @@ impl ProxyStreamRelayExecutor {
         let channel_id = selection.channel.id.clone();
         self.state
             .lb_state
-            .ensure_channel_status(&channel_id, selection.channel.max_concurrency)
+            .ensure_channel_status(
+                &channel_id,
+                selection.channel.max_concurrency,
+                selection.channel.failure_threshold,
+                selection.channel.blacklist_minutes,
+            )
             .await;
         self.state.lb_state.increment_active(&channel_id).await;
         let active_decremented = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -767,7 +772,13 @@ impl RelayStreamAttemptExecutor for ProxyStreamRelayExecutor {
         self.state.lb_state.is_channel_available(channel_id).await
     }
 
-    async fn on_attempt_failed(&self, channel_id: &str, _status_code: u16, is_server_error: bool) {
+    async fn on_attempt_failed(&self, channel_id: &str, error: &ProxyError) {
+        // key-retryable 错误（401/402/429/503/余额不足等）已经走 per-key 熔断器，
+        // 不应计入渠道级黑名单，否则上游瞬时过载（如 mimo 503）会把整个渠道连带健康的端点一起拉黑。
+        if error.is_key_retryable() {
+            return;
+        }
+        let is_server_error = matches!(error.classify(), crate::error::proxy::ErrorClass::UpstreamRetryable);
         self.state
             .lb_state
             .record_failure(channel_id, is_server_error)
@@ -789,8 +800,41 @@ impl RelayStreamAttemptExecutor for ProxyStreamRelayExecutor {
             }
         };
 
+        // 503 同渠道退避重试（参考 sub2api HandleSelectionExhausted 模式）
+        let first_pass = self.run_key_stream_loop(&selection, candidate).await;
+        if first_pass.should_retry_503() {
+            tracing::warn!(
+                "所有 key 返回 503，2s 后同渠道重试 (stream): channel={}",
+                candidate.channel_id
+            );
+            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+            self.state
+                .lb_state
+                .circuit_breaker
+                .reset_channel(&candidate.channel_id)
+                .await;
+            return self
+                .run_key_stream_loop(&selection, candidate)
+                .await
+                .into_stream_result();
+        }
+        first_pass.into_stream_result()
+    }
+}
+
+impl ProxyStreamRelayExecutor {
+    /// 单轮遍历所有 key 执行流式代理请求。
+    ///
+    /// 返回 StreamKeyLoopOutcome 让上层判断是否要做"503 同渠道退避重试"。
+    async fn run_key_stream_loop(
+        &self,
+        selection: &SelectionResult,
+        candidate: &RelayCandidate,
+    ) -> StreamKeyLoopOutcome {
         let api_key_attempts = self.state.api_key_attempts(&selection.channel);
         let mut last_error = None;
+        let mut executed_count = 0u32;
+        let mut all_executed_503 = true;
 
         for upstream_api_key in &api_key_attempts {
             let key_hint = selection.channel.key_hint(upstream_api_key);
@@ -826,7 +870,7 @@ impl RelayStreamAttemptExecutor for ProxyStreamRelayExecutor {
                 .execute_proxy_stream(
                     upstream_api_key,
                     &key_hint,
-                    &selection,
+                    selection,
                     &mut local_attempts,
                     queue_permit,
                 )
@@ -838,24 +882,31 @@ impl RelayStreamAttemptExecutor for ProxyStreamRelayExecutor {
 
             match result {
                 Ok((status, stream, content_type, _ttft)) => {
-                    return RelayStreamAttemptResult {
-                        response: Ok(RelayStreamSuccess {
-                            status,
-                            stream,
-                            content_type,
-                            _capacity_permit: None,
-                        }),
-                        response_written: true,
-                    };
+                    return StreamKeyLoopOutcome::Success(RelayStreamSuccess {
+                        status,
+                        stream,
+                        content_type,
+                        _capacity_permit: None,
+                    });
                 }
                 Err(ProxyError::UpstreamError { status, body }) => {
-                    let error = RelayAttemptError::new(status.as_u16(), sanitize_error_body(&body));
-                    let proxy_error = ProxyError::UpstreamError {
+                    executed_count += 1;
+                    let upstream_error = ProxyError::UpstreamError {
                         status,
                         body: body.clone(),
                     };
-                    if proxy_error.is_key_retryable() {
-                        // per-key 熔断：记录该 key 失败，连续失败会熔断此 key（不影响其他 key）
+                    let error = RelayAttemptError::from_proxy_error(upstream_error);
+                    let is_key_retryable = error
+                        .proxy_error
+                        .as_ref()
+                        .map(|e| e.is_key_retryable())
+                        .unwrap_or(false);
+
+                    if status != axum::http::StatusCode::SERVICE_UNAVAILABLE {
+                        all_executed_503 = false;
+                    }
+
+                    if is_key_retryable {
                         self.state
                             .lb_state
                             .circuit_breaker
@@ -864,29 +915,64 @@ impl RelayStreamAttemptExecutor for ProxyStreamRelayExecutor {
                         last_error = Some(error);
                         continue;
                     }
-                    return RelayStreamAttemptResult {
-                        response: Err(error),
-                        response_written: false,
-                    };
+                    return StreamKeyLoopOutcome::NonKeyRetryableError(error);
                 }
                 Err(e) => {
-                    return RelayStreamAttemptResult {
-                        response: Err(RelayAttemptError::new(502, e.to_string())),
-                        response_written: false,
-                    };
+                    return StreamKeyLoopOutcome::NonKeyRetryableError(
+                        RelayAttemptError::from_proxy_error(e),
+                    );
                 }
             }
         }
 
-        RelayStreamAttemptResult {
-            response: Err(
-                last_error.unwrap_or_else(|| RelayAttemptError::new(500, "all api keys exhausted"))
-            ),
-            response_written: false,
+        StreamKeyLoopOutcome::AllKeysTried {
+            last_error,
+            all_executed_503: executed_count > 0 && all_executed_503,
         }
     }
 }
 
-fn sanitize_error_body(body: &str) -> String {
-    body[..body.len().min(500)].to_string()
+/// 流式 run_key_stream_loop 的返回结果。
+enum StreamKeyLoopOutcome {
+    Success(RelayStreamSuccess),
+    NonKeyRetryableError(RelayAttemptError),
+    AllKeysTried {
+        last_error: Option<RelayAttemptError>,
+        all_executed_503: bool,
+    },
+}
+
+impl StreamKeyLoopOutcome {
+    fn should_retry_503(&self) -> bool {
+        matches!(
+            self,
+            StreamKeyLoopOutcome::AllKeysTried {
+                all_executed_503: true,
+                ..
+            }
+        )
+    }
+
+    fn into_stream_result(self) -> RelayStreamAttemptResult {
+        match self {
+            StreamKeyLoopOutcome::Success(success) => RelayStreamAttemptResult {
+                response: Ok(success),
+                response_written: true,
+            },
+            StreamKeyLoopOutcome::NonKeyRetryableError(err)
+            | StreamKeyLoopOutcome::AllKeysTried {
+                last_error: Some(err),
+                ..
+            } => RelayStreamAttemptResult {
+                response: Err(err),
+                response_written: false,
+            },
+            StreamKeyLoopOutcome::AllKeysTried {
+                last_error: None, ..
+            } => RelayStreamAttemptResult {
+                response: Err(RelayAttemptError::new(500, "all api keys exhausted")),
+                response_written: false,
+            },
+        }
+    }
 }

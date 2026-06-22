@@ -2,6 +2,7 @@ use async_trait::async_trait;
 use futures::StreamExt;
 use std::time::Instant;
 
+use crate::error::proxy::ProxyError;
 use crate::scheduler::capacity::{ChannelCapacityManager, ChannelCapacityPermit};
 use crate::scheduler::trace::{AttemptTrace, AttemptTraceBuilder};
 
@@ -32,10 +33,13 @@ pub struct RelayCandidate {
     pub group_id: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct RelayAttemptError {
     pub status_code: u16,
     pub message: String,
+    /// 原始 ProxyError（用于下游判断是否 key-retryable 等）。
+    /// 仅当错误来自上游错误时存在；来自构建/转换阶段时为 None。
+    pub proxy_error: Option<ProxyError>,
 }
 
 impl RelayAttemptError {
@@ -43,6 +47,29 @@ impl RelayAttemptError {
         Self {
             status_code,
             message: message.into(),
+            proxy_error: None,
+        }
+    }
+
+    /// 构造带原始 ProxyError 的失败结果（上游错误路径）。
+    /// 保留原始分类（KeyRetryable / UpstreamRetryable 等）供下游决策使用。
+    pub fn from_proxy_error(error: ProxyError) -> Self {
+        let status_code = match &error {
+            ProxyError::UpstreamError { status, .. } => status.as_u16(),
+            _ => 502,
+        };
+        // message 需包含错误正文，避免仅显示 "上游错误: 503" 丢失诊断信息
+        let message = match &error {
+            ProxyError::UpstreamError { status, body } => {
+                let truncated = &body[..body.len().min(500)];
+                format!("上游错误: {} {}", status, truncated)
+            }
+            other => other.to_string(),
+        };
+        Self {
+            status_code,
+            message,
+            proxy_error: Some(error),
         }
     }
 }
@@ -63,13 +90,7 @@ pub trait RelayAttemptExecutor: Send + Sync + Clone + 'static {
     }
 
     /// 失败尝试后的反馈回调。默认空操作
-    async fn on_attempt_failed(
-        &self,
-        _channel_id: &str,
-        _status_code: u16,
-        _is_server_error: bool,
-    ) {
-    }
+    async fn on_attempt_failed(&self, _channel_id: &str, _error: &ProxyError) {}
 
     async fn execute(
         &self,
@@ -161,13 +182,15 @@ where
                         .finish();
 
                     // 反馈失败信息给调度器（用于更新 error_rate、熔断等）
-                    let is_server_error = error.status_code >= 500 && error.status_code < 600;
+                    let proxy_error_for_feedback = error.proxy_error.as_ref().cloned().unwrap_or_else(|| {
+                        ProxyError::UpstreamError {
+                            status: axum::http::StatusCode::from_u16(error.status_code)
+                                .unwrap_or(axum::http::StatusCode::BAD_GATEWAY),
+                            body: error.message.clone(),
+                        }
+                    });
                     self.executor
-                        .on_attempt_failed(
-                            &candidate.channel_id,
-                            error.status_code,
-                            is_server_error,
-                        )
+                        .on_attempt_failed(&candidate.channel_id, &proxy_error_for_feedback)
                         .await;
 
                     last_error = Some(error);
@@ -244,13 +267,7 @@ pub trait RelayStreamAttemptExecutor: Send + Sync + Clone + 'static {
         true
     }
 
-    async fn on_attempt_failed(
-        &self,
-        _channel_id: &str,
-        _status_code: u16,
-        _is_server_error: bool,
-    ) {
-    }
+    async fn on_attempt_failed(&self, _channel_id: &str, _error: &ProxyError) {}
 
     async fn execute_stream(
         &self,
@@ -347,13 +364,15 @@ where
                         .score(candidate.score)
                         .finish();
 
-                    let is_server_error = error.status_code >= 500 && error.status_code < 600;
+                    let proxy_error_for_feedback = error.proxy_error.as_ref().cloned().unwrap_or_else(|| {
+                        ProxyError::UpstreamError {
+                            status: axum::http::StatusCode::from_u16(error.status_code)
+                                .unwrap_or(axum::http::StatusCode::BAD_GATEWAY),
+                            body: error.message.clone(),
+                        }
+                    });
                     self.executor
-                        .on_attempt_failed(
-                            &candidate.channel_id,
-                            error.status_code,
-                            is_server_error,
-                        )
+                        .on_attempt_failed(&candidate.channel_id, &proxy_error_for_feedback)
                         .await;
 
                     last_error = Some(error);

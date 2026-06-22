@@ -142,6 +142,22 @@ impl CircuitBreaker {
         }
     }
 
+    /// 重置指定渠道下所有 key 的熔断状态。
+    /// 用于"上游瞬时过载（503）同渠道退避重试"场景：所有 key 都返回 503 时，
+    /// 说明问题在共享上游而不是单个 key，需要清掉 per-key 熔断器再重试。
+    pub async fn reset_channel(&self, channel_id: &str) {
+        let prefix = format!("{}:", channel_id);
+        let mut entries = self.entries.write().await;
+        for (key, entry) in entries.iter_mut() {
+            if key.starts_with(&prefix) {
+                entry.state = CircuitState::Closed;
+                entry.consecutive_failures = 0;
+                entry.trip_count = 0;
+                entry.half_open_probe = false;
+            }
+        }
+    }
+
     /// 记录失败
     pub async fn record_failure(&self, channel_id: &str, key_hint: &str) {
         let key = format!("{}:{}", channel_id, key_hint);
@@ -344,5 +360,33 @@ mod tests {
         // 同 channel 的 key2 不受影响
         let (tripped, _) = breaker.is_tripped("ch1", "key2").await;
         assert!(!tripped, "key1 熔断不应影响同 channel 的 key2");
+    }
+
+    #[tokio::test]
+    async fn test_reset_channel_clears_all_keys() {
+        // reset_channel 用于 503 同渠道退避重试：清掉该渠道下所有 key 的熔断状态
+        let breaker = CircuitBreaker::new(CircuitConfig {
+            failure_threshold: 1,
+            ..Default::default()
+        });
+
+        breaker.record_failure("ch1", "key1").await;
+        breaker.record_failure("ch1", "key2").await;
+        // 其他渠道的 key 作为对照
+        breaker.record_failure("ch2", "keyA").await;
+
+        let (tripped_k1, _) = breaker.is_tripped("ch1", "key1").await;
+        let (tripped_k2, _) = breaker.is_tripped("ch1", "key2").await;
+        let (tripped_other, _) = breaker.is_tripped("ch2", "keyA").await;
+        assert!(tripped_k1 && tripped_k2 && tripped_other, "前置：全部熔断");
+
+        breaker.reset_channel("ch1").await;
+
+        let (tripped_k1, _) = breaker.is_tripped("ch1", "key1").await;
+        let (tripped_k2, _) = breaker.is_tripped("ch1", "key2").await;
+        let (tripped_other, _) = breaker.is_tripped("ch2", "keyA").await;
+        assert!(!tripped_k1, "ch1/key1 应被 reset_channel 重置");
+        assert!(!tripped_k2, "ch1/key2 应被 reset_channel 重置");
+        assert!(tripped_other, "reset_channel(ch1) 不应影响 ch2");
     }
 }

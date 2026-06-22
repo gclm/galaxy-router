@@ -17,6 +17,10 @@ pub struct ChannelInfo {
     pub max_concurrency: u32,
     /// 扩展字段（JSON 自由格式）
     pub extras: Option<serde_json::Map<String, serde_json::Value>>,
+    /// 渠道级黑名单触发阈值（连续失败次数）。默认 3
+    pub failure_threshold: u64,
+    /// 渠道级黑名单时长（分钟）。默认 10
+    pub blacklist_minutes: i64,
 }
 
 impl ChannelInfo {
@@ -114,6 +118,8 @@ mod tests {
             timeout_secs: 300,
             max_concurrency: 0,
             extras: None,
+            failure_threshold: 3,
+            blacklist_minutes: 10,
         }
     }
 
