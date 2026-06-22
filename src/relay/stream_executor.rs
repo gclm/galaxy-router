@@ -6,7 +6,9 @@ use std::sync::{Arc, Mutex};
 
 use crate::api::handlers::admin::channels::EndpointType;
 use crate::metrics::attempt::AttemptStats;
-use crate::metrics::recorder::{channel_attempts_snapshot, record_stream_completion};
+use crate::metrics::recorder::{
+    channel_attempts_snapshot, record_stream_completion, RequestRecord,
+};
 use crate::metrics::usage::{calculate_cost, resolve_stream_usage};
 use crate::protocol::sse::{
     apply_sse_usage, collect_sse_content, extract_error_from_sse, extract_usage_from_sse,
@@ -58,6 +60,77 @@ fn thinking_flag(extras: &Option<serde_json::Map<String, serde_json::Value>>, ke
         .and_then(|v| v.get(key))
         .and_then(|v| v.as_bool())
         .unwrap_or(false)
+}
+
+/// 流式 spawn task 的 panic 兜底。
+///
+/// 背景：tokio::spawn 内的 panic 会让 task 立刻终止，`record_stream_completion` 永远不会被调用，
+/// 请求日志就此丢失（这正是"CC 已失败但 usage_logs 漏记"的典型根因之一）。
+///
+/// 设计：spawn 任务开始时构造一个 guard；spawn 正常结束时调用 `disarm()`，Drop 什么都不做；
+/// spawn panic 时 Drop 触发，起一个独立的 tokio::spawn 写一条简化的失败日志。
+/// Drop 本身再包一层 `catch_unwind`，避免 panic 时二次 panic 把整个进程带走。
+struct StreamPanicGuard {
+    state: ProxyState,
+    record: RequestRecord,
+    armed: bool,
+}
+
+impl StreamPanicGuard {
+    fn new(state: ProxyState, record: RequestRecord) -> Self {
+        Self {
+            state,
+            record,
+            armed: true,
+        }
+    }
+
+    fn disarm(mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for StreamPanicGuard {
+    fn drop(&mut self) {
+        if !self.armed {
+            return;
+        }
+
+        // catch_unwind 兜底：Drop 里任何 panic 都不能冒泡，否则就是二次 panic → 进程 abort
+        let state = self.state.clone();
+        let record = self.record.clone();
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+            tracing::error!(
+                request_id = %record.request_id.as_deref().unwrap_or(""),
+                model = %record.requested_model,
+                "流式 spawn task panic，写兜底失败日志"
+            );
+
+            // 独立 tokio::spawn：使用 detached context，不受客户端断开影响
+            tokio::spawn(async move {
+                // 失败日志：status=500、token=0、空 attempts，但保留 request_id/model/api_key 等关键字段
+                let failed_record = RequestRecord {
+                    status_code: Some(500),
+                    error_message: Some("流式处理 task 内部异常（已兜底记录）".to_string()),
+                    input_tokens: 0,
+                    output_tokens: 0,
+                    cache_read_tokens: 0,
+                    cache_creation_tokens: 0,
+                    cost: None,
+                    latency_ms: None,
+                    ttft_ms: None,
+                    attempts: vec![],
+                    ..record
+                };
+                // 10s 超时，避免 DB 卡死拖住 cleanup task
+                let _ = tokio::time::timeout(
+                    std::time::Duration::from_secs(10),
+                    state.stats_recorder.record_request(failed_record),
+                )
+                .await;
+            });
+        }));
+    }
 }
 
 /// 流式代理执行器：将 RelayStreamRun 的候选迭代与真实 SSE 执行连接。
@@ -334,9 +407,48 @@ impl ProxyStreamRelayExecutor {
         // 流处理 + 统计记录全在一个 spawned task 里
         let active_decremented_spawn = active_decremented.clone();
         let group_id = selection.group_id.clone();
+
+        // 为 spawn task 的 panic 兜底预先构造 RequestRecord（关键字段的快照）。
+        // 即使 spawn 内部 panic，也能由 StreamPanicGuard 的 Drop 写一条简化失败日志，
+        // 保证请求不漏记（"CC 已失败但 usage_logs 缺失"的核心修复之一）。
+        let sc_endpoint_for_guard = sc_client_endpoint.as_str().to_string();
+        let panic_guard = StreamPanicGuard::new(
+            state_clone.clone(),
+            RequestRecord {
+                request_id: Some(request_id_clone.clone()),
+                api_key_id: sc_api_key_id.clone(),
+                channel_id: Some(sc_channel_id.clone()),
+                group_id: group_id.clone(),
+                requested_model: sc_model.clone(),
+                actual_model: Some(sc_target_model.clone()),
+                input_tokens: 0,
+                output_tokens: 0,
+                cache_read_tokens: 0,
+                cache_creation_tokens: 0,
+                cost: None,
+                latency_ms: None,
+                ttft_ms: None,
+                status_code: None,
+                error_message: None,
+                endpoint_type: Some(sc_endpoint_for_guard),
+                request_type: if sc_needs_conversion {
+                    "conversion".to_string()
+                } else {
+                    "passthrough".to_string()
+                },
+                request_content: sc_request_content.clone(),
+                response_content: None,
+                is_stream: true,
+                upstream_key_hint: Some(sc_upstream_key_hint.clone()),
+                attempts: vec![],
+                user_agent: sc_user_agent.clone(),
+            },
+        );
+
         tokio::spawn(async move {
             // permit 随任务生命周期存在，释放 semaphore 许可
             let _permit = permit;
+            let mut _panic_guard = panic_guard;
             let mut stream = std::pin::pin!(upstream_stream);
             let mut last_usage: Option<serde_json::Value> = None;
             let mut input_usage: Option<serde_json::Value> = None;
@@ -741,6 +853,9 @@ impl ProxyStreamRelayExecutor {
                 sc_user_agent,
             )
             .await;
+
+            // 正常路径已经写了完整日志，解除 panic 兜底 guard
+            _panic_guard.disarm();
 
             // 流结束，递减活跃请求数
             if !active_decremented_spawn.load(std::sync::atomic::Ordering::Relaxed) {

@@ -23,7 +23,7 @@ pub struct ChannelAttempt {
 }
 
 /// 记录请求
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct RequestRecord {
     pub request_id: Option<String>,
     pub api_key_id: Option<String>,
@@ -365,6 +365,8 @@ pub(crate) async fn record_stream_completion(
         user_agent,
     };
 
+    // DB 写入放到独立 spawn：脱离调用方 context，避免客户端断开导致 usage_logs 漏记。
+    // 10s timeout 是最后兜底，防止 DB 卡死把 cleanup task 也拖住。
     match stats_recorder.record_request(record).await {
         Ok(()) => {
             if let Some(ref key_id) = rate_limit_key

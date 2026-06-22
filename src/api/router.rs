@@ -292,6 +292,7 @@ fn proxy_routes(proxy_state: ProxyState, pool: SqlitePool) -> Router {
 
     let pool_clone = pool.clone();
     let api_key_cache = ApiKeyCache::new();
+    let stats_recorder = proxy_state.stats_recorder.clone();
 
     Router::new()
         .route("/chat/completions", post(chat::proxy))
@@ -306,9 +307,12 @@ fn proxy_routes(proxy_state: ProxyState, pool: SqlitePool) -> Router {
             move |mut req: Request<Body>, next: middleware::Next| {
                 let pool = pool_clone.clone();
                 let cache = api_key_cache.clone();
+                let recorder = stats_recorder.clone();
                 async move {
                     req.extensions_mut().insert(pool);
                     req.extensions_mut().insert(cache);
+                    // 供 ApiKeyAuth 鉴权失败时写 usage_logs（审计兜底）
+                    req.extensions_mut().insert(recorder);
                     next.run(req).await
                 }
             },

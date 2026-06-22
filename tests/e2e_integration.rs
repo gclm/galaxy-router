@@ -14,6 +14,10 @@ use galaxy_router::metrics::model::ModelRegistry;
 use tower::ServiceExt;
 
 async fn build_test_app() -> axum::Router {
+    build_test_app_with_pool().await.0
+}
+
+async fn build_test_app_with_pool() -> (axum::Router, sqlx::SqlitePool) {
     let db_path = format!("/tmp/galaxy_e2e_{}.db", uuid::Uuid::now_v7());
     let _ = std::fs::remove_file(&db_path);
     let db_url = format!("sqlite:{}?mode=rwc", db_path);
@@ -50,15 +54,16 @@ async fn build_test_app() -> axum::Router {
         },
     };
 
-    create_router(
-        pool,
+    let router = create_router(
+        pool.clone(),
         "test-e2e-secret".to_string(),
         &config.queuing.clone(),
         "127.0.0.1:0",
         config,
         registry,
     )
-    .await
+    .await;
+    (router, pool)
 }
 
 #[tokio::test]
@@ -78,6 +83,93 @@ async fn test_e2e_unauthenticated_proxy_returns_401() {
         .unwrap();
     // POST /v1/chat/completions 无 API Key → 401
     assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+}
+
+/// 鉴权失败也要写 usage_logs（审计兜底）。
+///
+/// 背景：ApiKeyAuth 是 FromRequestParts 提取器，鉴权失败时直接返回错误响应，
+/// 不会进入 handler。如果没有显式记录，usage_logs 会缺失，
+/// 导致"CC 已经失败但请求日志缺失"。
+#[tokio::test]
+async fn test_e2e_auth_failure_writes_usage_log() {
+    let (app, pool) = build_test_app_with_pool().await;
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/chat/completions")
+                .header("content-type", "application/json")
+                .header("user-agent", "audit-test-agent")
+                .body(Body::from(r#"{"model":"gpt-4o","messages":[]}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+
+    // 等待异步 DB 写入完成（record_auth_failure 内同步 await record_request）
+    // 这里直接查询即可，无需额外等待。
+    let row: (i32,) = sqlx::query_as(
+        "SELECT COUNT(*) FROM usage_logs WHERE request_type = 'auth_failure' AND status_code = 401",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(row.0, 1, "鉴权失败应补 1 条 usage_logs");
+
+    // 校验关键字段
+    let (model, agent, err, request_content): (
+        String,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+    ) = sqlx::query_as(
+        "SELECT requested_model, user_agent, error_message, request_content \
+         FROM usage_logs WHERE request_type = 'auth_failure' LIMIT 1",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(model, "proxy:completions", "用 URI 末段作为 model 占位");
+    assert_eq!(agent.as_deref(), Some("audit-test-agent"));
+    assert!(
+        err.as_deref().unwrap_or("").contains("missing_api_key"),
+        "error_message 应含 error_kind 标签：{}",
+        err.unwrap_or_default()
+    );
+    assert_eq!(
+        request_content.as_deref(),
+        Some("POST /chat/completions"),
+        "鉴权阶段 body 不可用，用 method + path 兜底（路由匹配后 URI 已去掉 /v1 前缀）"
+    );
+}
+
+/// 无效 API Key（不是空，而是 DB 里不存在的）同样要写 usage_logs。
+#[tokio::test]
+async fn test_e2e_invalid_api_key_writes_usage_log() {
+    let (app, pool) = build_test_app_with_pool().await;
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/chat/completions")
+                .header("Authorization", "Bearer sk-invalid-key-xyz")
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"model":"gpt-4o","messages":[]}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+
+    let row: (i32,) = sqlx::query_as(
+        "SELECT COUNT(*) FROM usage_logs WHERE request_type = 'auth_failure' \
+         AND error_message LIKE '%invalid_api_key%'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(row.0, 1, "无效 API Key 应补 1 条 usage_logs");
 }
 
 #[tokio::test]

@@ -21,6 +21,7 @@ use sqlx::SqlitePool;
 
 use crate::error::app::ApiError;
 use crate::auth::decode_jwt;
+use crate::metrics::recorder::{RequestRecord, StatsRecorder};
 
 /// 缓存条目 TTL（秒）
 const CACHE_TTL_SECS: u64 = 300;
@@ -138,6 +139,77 @@ impl<S: Send + Sync> FromRequestParts<S> for AuthClaims {
     }
 }
 
+/// 鉴权失败时补一条 usage_logs（审计兜底）。
+///
+/// 背景：ApiKeyAuth 是 FromRequestParts 提取器，鉴权失败时直接返回错误响应，
+/// 不会进入 handler，也不会触发 proxy 层的 save_request_record，
+/// 导致"CC 已失败但 usage_logs 缺失"。本函数在每个失败分支显式调用，覆盖审计盲区。
+///
+/// 注：Parts 不携带 body（body 在 Request 里，Parts 只是 header 等元数据），
+/// 所以 request_content 为 None；model 从 URI 推断（代理路由不含 model 字段）。
+async fn record_auth_failure(
+    parts: &Parts,
+    error_kind: &str,
+    error_message: &str,
+    status_code: StatusCode,
+) {
+    let Some(recorder) = parts.extensions.get::<StatsRecorder>() else {
+        return; // 提取器未注入（不应发生），直接放弃，避免影响正常鉴权返回
+    };
+
+    let request_id = crate::api::response::generate_id();
+    let model = infer_model_from_uri(&parts.uri);
+    let is_stream = false; // 鉴权阶段尚未解析 body，保守标记为非流式
+    let user_agent = parts
+        .headers
+        .get(axum::http::header::USER_AGENT)
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string());
+    let method = parts.method.as_str().to_string();
+    let path = parts.uri.path().to_string();
+
+    let record = RequestRecord {
+        request_id: Some(request_id),
+        api_key_id: None,
+        channel_id: None,
+        group_id: None,
+        requested_model: model,
+        actual_model: None,
+        input_tokens: 0,
+        output_tokens: 0,
+        cache_read_tokens: 0,
+        cache_creation_tokens: 0,
+        cost: None,
+        latency_ms: None,
+        ttft_ms: None,
+        status_code: Some(status_code.as_u16() as i32),
+        error_message: Some(format!("[{}] {}", error_kind, error_message)),
+        endpoint_type: None,
+        request_type: "auth_failure".to_string(),
+        request_content: Some(format!("{} {}", method, path)),
+        response_content: None,
+        is_stream,
+        upstream_key_hint: None,
+        attempts: vec![],
+        user_agent,
+    };
+    let _ = recorder.record_request(record).await;
+}
+
+/// 从代理 URI 推断客户端请求的协议类型（作为 requested_model 占位）。
+///
+/// 代理路由形如 `/v1/chat/completions`、`/v1/responses`、`/v1/messages` 等，
+/// 鉴权失败时尚未解析 body 拿不到真实 model 名，用 endpoint 路径作为可审计标识。
+fn infer_model_from_uri(uri: &axum::http::Uri) -> String {
+    let path = uri.path();
+    // 取 URI 最后一段作为 endpoint 标识
+    path.rsplit('/')
+        .next()
+        .filter(|s| !s.is_empty())
+        .map(|s| format!("proxy:{}", s))
+        .unwrap_or_else(|| "proxy:unknown".to_string())
+}
+
 /// API Key 认证结果（代理 API 认证）
 pub struct ApiKeyAuth {
     pub key_id: String,
@@ -162,6 +234,13 @@ impl<S: Send + Sync> FromRequestParts<S> for ApiKeyAuth {
         };
 
         if api_key.is_empty() {
+            record_auth_failure(
+                parts,
+                "missing_api_key",
+                "缺少 API Key",
+                StatusCode::UNAUTHORIZED,
+            )
+            .await;
             return Err((
                 StatusCode::UNAUTHORIZED,
                 axum::Json(serde_json::json!({
@@ -175,6 +254,13 @@ impl<S: Send + Sync> FromRequestParts<S> for ApiKeyAuth {
             && let Some((id, _name, enabled, rpm, tpm, groups)) = cache.get(&api_key).await
         {
             if !enabled {
+                record_auth_failure(
+                    parts,
+                    "api_key_disabled",
+                    "API Key 已禁用（缓存命中）",
+                    StatusCode::FORBIDDEN,
+                )
+                .await;
                 return Err((
                     StatusCode::FORBIDDEN,
                     axum::Json(serde_json::json!({
@@ -191,29 +277,50 @@ impl<S: Send + Sync> FromRequestParts<S> for ApiKeyAuth {
         }
 
         // 2. 缓存未命中，查询数据库
-        let pool = parts.extensions.get::<SqlitePool>().ok_or_else(|| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                axum::Json(serde_json::json!({
-                    "error": { "message": "数据库配置缺失", "type": "server_error" }
-                })),
-            )
-        })?;
+        let pool = match parts.extensions.get::<SqlitePool>() {
+            Some(p) => p,
+            None => {
+                record_auth_failure(
+                    parts,
+                    "server_misconfigured",
+                    "数据库配置缺失",
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                )
+                .await;
+                return Err((
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    axum::Json(serde_json::json!({
+                        "error": { "message": "数据库配置缺失", "type": "server_error" }
+                    })),
+                ));
+            }
+        };
 
-        let result = sqlx::query_as::<_, (String, String, bool, i32, i32, String)>(
+        let query_result = sqlx::query_as::<_, (String, String, bool, i32, i32, String)>(
             "SELECT id, name, enabled, COALESCE(rate_limit_rpm, 0), COALESCE(rate_limit_tpm, 0), COALESCE(allowed_groups, '') FROM api_keys WHERE api_key = ?",
         )
         .bind(&api_key)
         .fetch_optional(pool)
-        .await
-        .map_err(|_| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                axum::Json(serde_json::json!({
-                    "error": { "message": "数据库查询失败", "type": "server_error" }
-                })),
-            )
-        })?;
+        .await;
+
+        let result = match query_result {
+            Ok(r) => r,
+            Err(e) => {
+                record_auth_failure(
+                    parts,
+                    "db_query_failed",
+                    &format!("数据库查询失败: {}", e),
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                )
+                .await;
+                return Err((
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    axum::Json(serde_json::json!({
+                        "error": { "message": "数据库查询失败", "type": "server_error" }
+                    })),
+                ));
+            }
+        };
 
         match result {
             Some((id, name, enabled, rpm, tpm, groups)) => {
@@ -233,6 +340,13 @@ impl<S: Send + Sync> FromRequestParts<S> for ApiKeyAuth {
                         .await;
                 }
                 if !enabled {
+                    record_auth_failure(
+                        parts,
+                        "api_key_disabled",
+                        "API Key 已禁用（DB 命中）",
+                        StatusCode::FORBIDDEN,
+                    )
+                    .await;
                     return Err((
                         StatusCode::FORBIDDEN,
                         axum::Json(serde_json::json!({
@@ -247,12 +361,21 @@ impl<S: Send + Sync> FromRequestParts<S> for ApiKeyAuth {
                     allowed_groups: groups,
                 })
             }
-            None => Err((
-                StatusCode::UNAUTHORIZED,
-                axum::Json(serde_json::json!({
-                    "error": { "message": "无效的 API Key", "type": "authentication_error" }
-                })),
-            )),
+            None => {
+                record_auth_failure(
+                    parts,
+                    "invalid_api_key",
+                    "无效的 API Key",
+                    StatusCode::UNAUTHORIZED,
+                )
+                .await;
+                Err((
+                    StatusCode::UNAUTHORIZED,
+                    axum::Json(serde_json::json!({
+                        "error": { "message": "无效的 API Key", "type": "authentication_error" }
+                    })),
+                ))
+            }
         }
     }
 }

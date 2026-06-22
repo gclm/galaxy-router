@@ -138,12 +138,34 @@ pub async fn proxy_request(
     client_endpoint: &EndpointType,
 ) -> Result<crate::relay::state::ProxySuccess, ProxyError> {
     let _permit = if let Some(queue) = &state.queue {
-        Some(
-            queue
-                .acquire()
-                .await
-                .map_err(|e| ProxyError::RequestError(format!("排队失败: {}", e)))?,
-        )
+        Some(match queue.acquire().await {
+            Ok(p) => p,
+            Err(e) => {
+                // 排队失败也要写一条 usage_logs，避免"CC 已失败但日志缺失"
+                let err = ProxyError::RequestError(format!("排队失败: {}", e));
+                let request_content = serde_json::to_string(body).ok();
+                let user_agent = headers
+                    .get("user-agent")
+                    .and_then(|v| v.to_str().ok())
+                    .map(|s| s.to_string());
+                save_request_record(
+                    state,
+                    Some(request_id.to_string()),
+                    api_key_id,
+                    None,
+                    body["model"].as_str().unwrap_or("unknown"),
+                    request_content,
+                    None,
+                    &[],
+                    None,
+                    false,
+                    user_agent,
+                    Some(&err),
+                )
+                .await;
+                return Err(err);
+            }
+        })
     } else {
         None
     };
@@ -289,12 +311,34 @@ pub async fn proxy_stream(
     ProxyError,
 > {
     let queue_permit = if let Some(queue) = &state.queue {
-        Some(
-            queue
-                .acquire()
-                .await
-                .map_err(|e| ProxyError::RequestError(format!("排队失败: {}", e)))?,
-        )
+        Some(match queue.acquire().await {
+            Ok(p) => p,
+            Err(e) => {
+                // 排队失败也要写一条 usage_logs，避免"CC 已失败但日志缺失"
+                let err = ProxyError::RequestError(format!("排队失败: {}", e));
+                let request_content = serde_json::to_string(body).ok();
+                let user_agent = headers
+                    .get("user-agent")
+                    .and_then(|v| v.to_str().ok())
+                    .map(|s| s.to_string());
+                save_request_record(
+                    state,
+                    Some(request_id.to_string()),
+                    api_key_id,
+                    None,
+                    body["model"].as_str().unwrap_or("unknown"),
+                    request_content,
+                    None,
+                    &[],
+                    None,
+                    true,
+                    user_agent,
+                    Some(&err),
+                )
+                .await;
+                return Err(err);
+            }
+        })
     } else {
         None
     };
@@ -409,7 +453,7 @@ pub async fn handle_proxy_request(
     let is_stream = body["stream"].as_bool().unwrap_or(false);
     let api_key_id = Some(auth.key_id.as_str());
 
-    // 速率限制检查（RPM + TPM）
+    // 速率限制检查（RPM + TPM）—— 高频路径，不写 usage_logs（避免把限流当请求）
     if let Err(retry_after) = state
         .rate_limiter
         .check_rpm(&auth.key_id, auth.rate_limit_rpm)
@@ -427,6 +471,11 @@ pub async fn handle_proxy_request(
 
     // 预算检查（月/日额度）
     if let Err(msg) = check_budget(&state.pool, &auth.key_id).await {
+        let e = ProxyError::RequestError(format!("预算超限: {}", msg));
+        record_early_failure(
+            state, &request_id, api_key_id, model, &headers, &body, is_stream, &e,
+        )
+        .await;
         return crate::error::proxy::format_budget_error(&msg, error_format);
     }
 
@@ -434,6 +483,10 @@ pub async fn handle_proxy_request(
     if let Err(e) =
         validate_model_access(&state.pool, &auth.key_id, model, &auth.allowed_groups).await
     {
+        record_early_failure(
+            state, &request_id, api_key_id, model, &headers, &body, is_stream, &e,
+        )
+        .await;
         return crate::error::proxy::format_proxy_error(e, error_format);
     }
 
@@ -480,6 +533,43 @@ pub async fn handle_proxy_request(
             Err(e) => crate::error::proxy::format_proxy_error(e, error_format),
         }
     }
+}
+
+/// 在 proxy 执行前的早期失败路径（预算/权限检查）补一条 usage_logs。
+///
+/// 背景：这些路径原本直接返回错误响应而不写 usage_logs，
+/// 导致"CC 已经失败但请求日志缺失"现象（参考 axonhub 每次请求必建 Request 实体的设计）。
+#[allow(clippy::too_many_arguments)]
+async fn record_early_failure(
+    state: &ProxyState,
+    request_id: &str,
+    api_key_id: Option<&str>,
+    model: &str,
+    headers: &HeaderMap,
+    body: &serde_json::Value,
+    is_stream: bool,
+    error: &ProxyError,
+) {
+    let request_content = serde_json::to_string(body).ok();
+    let user_agent = headers
+        .get("user-agent")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string());
+    save_request_record(
+        state,
+        Some(request_id.to_string()),
+        api_key_id,
+        None,
+        model,
+        request_content,
+        None,
+        &[],
+        None,
+        is_stream,
+        user_agent,
+        Some(error),
+    )
+    .await;
 }
 
 #[cfg(test)]
