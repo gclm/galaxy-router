@@ -255,10 +255,13 @@ pub(crate) async fn save_request_record(
                     ProxyError::ModelNotFound(m) => (404, m.clone()),
                     ProxyError::NoAvailableChannel(m) => (503, m.clone()),
                     ProxyError::ModelNotSupported(m) => (400, m.clone()),
+                    ProxyError::DatabaseError(m) => (500, m.clone()),
+                    ProxyError::ChannelNotFound(m) => (404, m.clone()),
+                    ProxyError::RequestError(m) => (502, m.clone()),
+                    ProxyError::TransformError(m) => (500, m.clone()),
                     ProxyError::UpstreamError { status, body } => {
                         (status.as_u16() as i32, format!("上游错误: {} {}", status, &body[..body.len().min(500)]))
                     }
-                    _ => (502, e.to_string()),
                 })
                 .unwrap_or((503, "请求未到达上游".to_string()));
             RequestRecord::minimal_for_select_failure(

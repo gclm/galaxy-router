@@ -414,15 +414,31 @@ pub async fn delete(
     State(state): State<GroupState>,
     Path(id): Path<String>,
 ) -> Result<Json<ApiResponse<()>>, (StatusCode, Json<ApiError>)> {
+    let mut tx = state
+        .pool
+        .begin()
+        .await
+        .map_err(|e| ApiError::internal_error(e.to_string()))?;
+
+    sqlx::query("DELETE FROM group_items WHERE group_id = ?")
+        .bind(&id)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| ApiError::internal_error(e.to_string()))?;
+
     let result = sqlx::query("DELETE FROM groups WHERE id = ?")
         .bind(&id)
-        .execute(&state.pool)
+        .execute(&mut *tx)
         .await
         .map_err(|e| ApiError::internal_error(e.to_string()))?;
 
     if result.rows_affected() == 0 {
         return Err(ApiError::not_found("分组不存在"));
     }
+
+    tx.commit()
+        .await
+        .map_err(|e| ApiError::internal_error(e.to_string()))?;
 
     state.cache.invalidate_all_groups().await;
     Ok(Json(crate::error::app::success_empty()))

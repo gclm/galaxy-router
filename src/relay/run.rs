@@ -56,7 +56,13 @@ impl RelayAttemptError {
     pub fn from_proxy_error(error: ProxyError) -> Self {
         let status_code = match &error {
             ProxyError::UpstreamError { status, .. } => status.as_u16(),
-            _ => 502,
+            ProxyError::NoAvailableChannel(_) => 503,
+            ProxyError::ModelNotSupported(_) => 400,
+            ProxyError::ModelNotFound(_) => 404,
+            ProxyError::DatabaseError(_) => 500,
+            ProxyError::ChannelNotFound(_) => 404,
+            ProxyError::RequestError(_) => 502,
+            ProxyError::TransformError(_) => 500,
         };
         // message 需包含错误正文，避免仅显示 "上游错误: 503" 丢失诊断信息
         let message = match &error {

@@ -65,6 +65,12 @@ pub async fn init(
 
     let user_id = crate::api::response::generate_id();
 
+    let mut tx = state
+        .pool
+        .begin()
+        .await
+        .map_err(|e| ApiError::internal_error(e.to_string()))?;
+
     // INSERT ... WHERE NOT EXISTS 防止并发竞态创建多个管理员
     let inserted = sqlx::query(
         "INSERT INTO users (id, username, password_hash) SELECT ?, ?, ? WHERE NOT EXISTS (SELECT 1 FROM users)"
@@ -72,7 +78,7 @@ pub async fn init(
     .bind(&user_id)
     .bind(&req.username)
     .bind(&password_hash)
-    .execute(&state.pool)
+    .execute(&mut *tx)
     .await
     .map_err(|e| ApiError::internal_error(e.to_string()))?;
 
@@ -85,10 +91,14 @@ pub async fn init(
             "INSERT OR REPLACE INTO settings (key, category, value, description) VALUES ('site.title', 'general', ?, '站点标题')",
         )
         .bind(site_title)
-        .execute(&state.pool)
+        .execute(&mut *tx)
         .await
         .map_err(|e| ApiError::internal_error(e.to_string()))?;
     }
+
+    tx.commit()
+        .await
+        .map_err(|e| ApiError::internal_error(e.to_string()))?;
 
     let token = state
         .jwt_service

@@ -245,6 +245,9 @@ impl ProxyRelayExecutor {
                     return KeyLoopOutcome::NonKeyRetryableError(error);
                 }
                 Err(e) => {
+                    // 仅 UpstreamError 走 key-retryable 路径（上方分支）。
+                    // 其余 ProxyError 变体（DatabaseError / RequestError / TransformError 等）
+                    // 非上游错误，不应触发换 key，直接 NonKeyRetryableError。
                     return KeyLoopOutcome::NonKeyRetryableError(
                         RelayAttemptError::from_proxy_error(e),
                     );

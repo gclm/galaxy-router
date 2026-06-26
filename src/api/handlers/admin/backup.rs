@@ -178,37 +178,45 @@ pub struct ResetResult {
 pub async fn reset(
     State(state): State<BackupState>,
 ) -> Result<Json<ApiResponse<ResetResult>>, (StatusCode, Json<ApiError>)> {
-    let pool = &state.pool;
+    let mut tx = state
+        .pool
+        .begin()
+        .await
+        .map_err(|e| ApiError::internal_error(e.to_string()))?;
 
     let groups_deleted = sqlx::query("DELETE FROM group_items")
-        .execute(pool)
+        .execute(&mut *tx)
         .await
         .map_err(|e| ApiError::internal_error(e.to_string()))?
         .rows_affected();
     let groups_deleted = groups_deleted
         + sqlx::query("DELETE FROM groups")
-            .execute(pool)
+            .execute(&mut *tx)
             .await
             .map_err(|e| ApiError::internal_error(e.to_string()))?
             .rows_affected();
 
     let channels_deleted = sqlx::query("DELETE FROM channels")
-        .execute(pool)
+        .execute(&mut *tx)
         .await
         .map_err(|e| ApiError::internal_error(e.to_string()))?
         .rows_affected();
 
     let api_keys_deleted = sqlx::query("DELETE FROM api_keys")
-        .execute(pool)
+        .execute(&mut *tx)
         .await
         .map_err(|e| ApiError::internal_error(e.to_string()))?
         .rows_affected();
 
     let settings_reset = sqlx::query("DELETE FROM settings")
-        .execute(pool)
+        .execute(&mut *tx)
         .await
         .map_err(|e| ApiError::internal_error(e.to_string()))?
         .rows_affected();
+
+    tx.commit()
+        .await
+        .map_err(|e| ApiError::internal_error(e.to_string()))?;
 
     Ok(Json(ApiResponse::success(ResetResult {
         channels_deleted,

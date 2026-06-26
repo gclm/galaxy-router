@@ -247,8 +247,11 @@ fn render_status_and_message(e: &ProxyError) -> (StatusCode, String) {
         ProxyError::NoAvailableChannel(msg) => (StatusCode::SERVICE_UNAVAILABLE, msg.clone()),
         ProxyError::ModelNotSupported(msg) => (StatusCode::BAD_REQUEST, msg.clone()),
         ProxyError::ModelNotFound(msg) => (StatusCode::NOT_FOUND, msg.clone()),
+        ProxyError::DatabaseError(msg) => (StatusCode::INTERNAL_SERVER_ERROR, msg.clone()),
+        ProxyError::ChannelNotFound(msg) => (StatusCode::NOT_FOUND, msg.clone()),
+        ProxyError::RequestError(msg) => (StatusCode::BAD_GATEWAY, msg.clone()),
+        ProxyError::TransformError(msg) => (StatusCode::INTERNAL_SERVER_ERROR, msg.clone()),
         ProxyError::UpstreamError { status, body } => (*status, sanitize_upstream_error(body)),
-        _ => (StatusCode::BAD_GATEWAY, e.to_string()),
     }
 }
 
@@ -387,9 +390,24 @@ mod tests {
         assert_eq!(s, StatusCode::TOO_MANY_REQUESTS);
         assert!(m.contains("rate limit"));
 
-        // 其他 → 502 + thiserror 格式化
+        // DatabaseError → 500 + 原 message（不是上游问题）
         let (s, m) = render_status_and_message(&ProxyError::DatabaseError("db gone".into()));
+        assert_eq!(s, StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(m, "db gone");
+
+        // ChannelNotFound → 404 + 原 message
+        let (s, m) = render_status_and_message(&ProxyError::ChannelNotFound("ch-x".into()));
+        assert_eq!(s, StatusCode::NOT_FOUND);
+        assert_eq!(m, "ch-x");
+
+        // RequestError → 502 + 原 message（网络层错误）
+        let (s, m) = render_status_and_message(&ProxyError::RequestError("conn refused".into()));
         assert_eq!(s, StatusCode::BAD_GATEWAY);
-        assert!(m.contains("db gone"));
+        assert_eq!(m, "conn refused");
+
+        // TransformError → 500 + 原 message
+        let (s, m) = render_status_and_message(&ProxyError::TransformError("bad json".into()));
+        assert_eq!(s, StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(m, "bad json");
     }
 }
