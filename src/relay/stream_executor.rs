@@ -332,7 +332,7 @@ impl ProxyStreamRelayExecutor {
                 upstream_endpoint: prepared.upstream_endpoint.clone(),
                 needs_conversion: prepared.needs_conversion,
                 latency_ms,
-                status_code: StatusCode::BAD_GATEWAY.as_u16(),
+                status_code: sse_stream_error_status(&error).as_u16(),
                 input_tokens: 0,
                 output_tokens: 0,
                 cache_read: 0,
@@ -780,7 +780,7 @@ impl ProxyStreamRelayExecutor {
                     .lb_state
                     .record_failure(&channel_id_clone, false)
                     .await;
-                (502i32, Some(sanitize_upstream_error(&error)), Some(error))
+                (sse_stream_error_status(&error).as_u16() as i32, Some(sanitize_upstream_error(&error)), Some(error))
             } else {
                 state_clone
                     .lb_state
@@ -908,6 +908,24 @@ impl RelayStreamAttemptExecutor for ProxyStreamRelayExecutor {
         let selection = match self.build_selection(candidate).await {
             Ok(s) => s,
             Err(e) => {
+                // build_selection 失败时也记录 AttemptStats，保证 channel_id/request_type 可观测
+                if let Ok(mut stats) = self.attempt_stats.lock() {
+                    stats.push(AttemptStats {
+                        channel_id: candidate.channel_id.clone(),
+                        target_model: candidate.target_model.clone(),
+                        upstream_endpoint: EndpointType::OpenAiChat,
+                        needs_conversion: false,
+                        latency_ms: 0,
+                        status_code: e.status_code,
+                        input_tokens: 0,
+                        output_tokens: 0,
+                        cache_read: 0,
+                        cache_creation: 0,
+                        cost: None,
+                        error_message: Some(e.message.clone()),
+                        upstream_key_hint: String::new(),
+                    });
+                }
                 return RelayStreamAttemptResult {
                     response: Err(e),
                     response_written: false,

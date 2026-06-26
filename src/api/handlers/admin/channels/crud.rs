@@ -295,9 +295,31 @@ pub async fn delete(
     State(state): State<ChannelState>,
     Path(id): Path<String>,
 ) -> Result<Json<ApiResponse<()>>, (StatusCode, Json<ApiError>)> {
+    let mut tx = state
+        .pool
+        .begin()
+        .await
+        .map_err(|e| ApiError::internal_error(e.to_string()))?;
+
+    // 1. 查询引用该渠道的分组 ID（用于后续清除缓存）
+    let affected_group_ids: Vec<String> =
+        sqlx::query_scalar("SELECT DISTINCT group_id FROM group_items WHERE channel_id = ?")
+            .bind(&id)
+            .fetch_all(&mut *tx)
+            .await
+            .map_err(|e| ApiError::internal_error(e.to_string()))?;
+
+    // 2. 删除 group_items 中的关联记录
+    sqlx::query("DELETE FROM group_items WHERE channel_id = ?")
+        .bind(&id)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| ApiError::internal_error(e.to_string()))?;
+
+    // 3. 删除渠道
     let result = sqlx::query("DELETE FROM channels WHERE id = ?")
         .bind(&id)
-        .execute(&state.pool)
+        .execute(&mut *tx)
         .await
         .map_err(|e| ApiError::internal_error(e.to_string()))?;
 
@@ -305,7 +327,19 @@ pub async fn delete(
         return Err(ApiError::not_found("渠道不存在"));
     }
 
+    // 4. 提交事务
+    tx.commit()
+        .await
+        .map_err(|e| ApiError::internal_error(e.to_string()))?;
+
+    // 5. 清除渠道缓存
     state.cache.invalidate_channel(&id).await;
+
+    // 6. 清除受影响的分组缓存
+    if !affected_group_ids.is_empty() {
+        state.cache.invalidate_all_groups().await;
+    }
+
     Ok(Json(crate::error::app::success_empty()))
 }
 
