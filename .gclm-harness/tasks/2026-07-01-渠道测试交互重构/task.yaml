@@ -1,0 +1,8 @@
+type: feature
+complexity: complex
+sop: sop/feature.md
+status: in-progress
+feature: 2026-07-01-渠道测试交互重构
+title: 渠道测试交互重构 — 端点级测试（合并 test+detect）+ 修并发 bug + thinking 漏报
+created: '2026-07-01'
+notes: '范围（2026-07-01 定稿）：① 删除思维链运行时处理（thinking_normalizer.rs + stream_executor normalizer + 迁移16 DROP thinking_mode + 删 EndpointConfig.extras + 前端 thinking 开关）；② 渠道测试重构：合并 test/detect 为端点级 test_endpoint，返回连通性 + 思维链诊断（thinking_detected/sample，纯展示无应用），probe_endpoint_raw 改 bytes_stream 增量读修并发误判，探测 payload 带 thinking 参数修漏报；删渠道级测试按钮 + 思维链检测区。彻底清理 DB dead 列 + extras。Gate 1 design approved。'
