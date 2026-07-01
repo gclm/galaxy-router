@@ -90,9 +90,6 @@ pub struct EndpointConfig {
     /// 端点级自定义请求头（insert 覆盖客户端，用于按协议配不同 User-Agent 等）
     #[serde(default)]
     pub headers: Vec<CustomHeader>,
-    /// 端点级扩展配置（thinking.extract_tags/fix_signature 等，按端点配）
-    #[serde(default)]
-    pub extras: Option<serde_json::Map<String, serde_json::Value>>,
 }
 
 /// 上游 API Key
@@ -179,61 +176,33 @@ pub struct ChannelState {
     pub timezone_offset: i32,
 }
 
-/// 测试渠道请求
+/// 端点测试请求
 #[derive(Debug, Deserialize)]
-pub struct TestChannelRequest {
+pub struct TestEndpointRequest {
+    pub endpoint_type: String,
     pub model: String,
-    pub test_protocol: String,
     pub api_key: String,
-    pub stream: Option<bool>,
     pub user_agent: Option<String>,
 }
 
-/// 测试渠道响应
+/// 端点测试响应（连通性 + 思维链诊断）
 #[derive(Debug, Serialize)]
-pub struct TestChannelResponse {
+pub struct TestEndpointResponse {
     pub success: bool,
-    pub message: String,
     pub latency_ms: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub time_to_first_token_ms: Option<u64>,
-    pub input_prompt: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub output_content: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub prompt_tokens: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub completion_tokens: Option<u64>,
-}
-
-/// 检测渠道 quirks 请求（所有参数可选）
-#[derive(Debug, Deserialize, Default)]
-pub struct DetectRequest {
-    /// 指定 endpoint 列表（如 `["openai_chat", "anthropic"]`）；不传则测所有启用端点
-    pub endpoints: Option<Vec<String>>,
-    /// 指定 API key；不传则用第一个启用的
-    pub api_key: Option<String>,
-    /// 指定 model；不传则用渠道 models 第一个
-    pub model: Option<String>,
-}
-
-/// 单个 endpoint 的检测结果
-#[derive(Debug, Serialize, Clone)]
-pub struct EndpointDetection {
-    pub endpoint: String,
-    /// 推荐的开关（key 是如 "thinking.extract_tags"）
-    pub recommendations: std::collections::HashMap<String, bool>,
-    /// 检测证据描述
-    pub evidence: String,
-    /// 响应样本（截断到 200 字符）
-    pub sample: String,
-}
-
-/// 检测渠道 quirks 响应
-#[derive(Debug, Serialize)]
-pub struct DetectResponse {
-    /// 渠道级合并推荐（任一 endpoint 建议开启则 true）
-    pub recommendations: std::collections::HashMap<String, bool>,
-    /// 每个 endpoint 的详细检测结果
-    pub endpoint_results: Vec<EndpointDetection>,
+    /// 思维链诊断：响应是否含 <think> 标签（只检测不应用）
+    pub thinking_detected: bool,
+    /// 思维链样本（截断到 200 字符）
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thinking_sample: Option<String>,
 }

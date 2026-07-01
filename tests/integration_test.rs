@@ -487,7 +487,6 @@ async fn test_channel_rejects_crlf_in_api_key() {
             key: "X-Custom".into(),
             value: "value".into(),
         }],
-        extras: None,
     };
     let ch = Channel {
         id: "test".into(),

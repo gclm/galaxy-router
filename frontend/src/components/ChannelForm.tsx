@@ -1,9 +1,9 @@
 import { useState } from 'react'
-import type { Channel, CreateChannelRequest, CustomHeader, EndpointConfig, EndpointType, UpstreamApiKey } from '@/api/types'
+import type { Channel, CreateChannelRequest, CustomHeader, EndpointConfig, EndpointType, TestEndpointResponse, UpstreamApiKey } from '@/api/types'
 import { ENDPOINT_LABELS } from '@/api/types'
 import { channelsApi } from '@/api/channels'
 import { Button } from '@/components/ui/button'
-import { Plus, Trash2, RefreshCw, X } from 'lucide-react'
+import { Plus, Trash2, RefreshCw, X, FlaskConical } from 'lucide-react'
 
 interface ChannelFormProps {
   channel?: Channel
@@ -45,15 +45,13 @@ export function ChannelForm({ channel, onSubmit, onCancel }: ChannelFormProps) {
   const [concurrency, setConcurrency] = useState(channel?.concurrency?.toString() ?? '10')
   const [timeoutSecs, setTimeoutSecs] = useState(channel?.timeout_secs?.toString() ?? '300')
   const [maxConcurrency, setMaxConcurrency] = useState(channel?.max_concurrency?.toString() ?? '0')
-  // Detect 状态
-  const [detecting, setDetecting] = useState(false)
-  const [detectResult, setDetectResult] = useState<import('@/api/types').DetectResponse | null>(null)
-  const [detectError, setDetectError] = useState('')
   const [enabled, setEnabled] = useState(channel?.enabled ?? true)
   const [submitting, setSubmitting] = useState(false)
   const [fetchingModels, setFetchingModels] = useState(false)
   const [fetchError, setFetchError] = useState('')
   const [manualModelInput, setManualModelInput] = useState('')
+  const [endpointTesting, setEndpointTesting] = useState<Record<number, boolean>>({})
+  const [endpointResults, setEndpointResults] = useState<Record<number, TestEndpointResponse>>({})
 
   const handleFetchModels = async () => {
     const validEndpoints = endpoints.filter(ep => ep.base_url.trim() && ep.enabled !== false)
@@ -118,42 +116,6 @@ export function ChannelForm({ channel, onSubmit, onCancel }: ChannelFormProps) {
     }
   }
 
-  const handleDetect = async () => {
-    if (!channel?.id) {
-      setDetectError('请先保存渠道后再检测')
-      return
-    }
-    setDetecting(true)
-    setDetectError('')
-    setDetectResult(null)
-    try {
-      const result = await channelsApi.detectQuirks(channel.id, {})
-      setDetectResult(result)
-    } catch (e: unknown) {
-      setDetectError(e instanceof Error ? e.message : '检测失败')
-    } finally {
-      setDetecting(false)
-    }
-  }
-
-  const applyDetectedRecommendations = () => {
-    if (!detectResult) return
-    // 检测推荐的 thinking.* 应用到所有启用端点的 extras.thinking
-    const thinking: Record<string, boolean> = {}
-    for (const [k, v] of Object.entries(detectResult.recommendations)) {
-      if (k.startsWith('thinking.')) thinking[k.slice('thinking.'.length)] = v
-    }
-    if (Object.keys(thinking).length > 0) {
-      setEndpoints(prev => prev.map(ep => {
-        if (ep.enabled === false) return ep
-        const extras = (ep.extras ?? {}) as Record<string, unknown>
-        const old = (extras.thinking as Record<string, unknown>) ?? {}
-        return { ...ep, extras: { ...extras, thinking: { ...old, ...thinking } } }
-      }))
-    }
-    setDetectResult(null)
-  }
-
   const addApiKey = () => setApiKeys([...apiKeys, { key: '', note: '', enabled: true }])
   const removeApiKey = (index: number) => setApiKeys(apiKeys.filter((_, i) => i !== index))
   const updateApiKey = (index: number, field: keyof UpstreamApiKey, value: string | boolean) => {
@@ -194,21 +156,46 @@ export function ChannelForm({ channel, onSubmit, onCancel }: ChannelFormProps) {
     else headers.push(entry)
     setEndpointHeaders(index, headers)
   }
-  // 端点 thinking 开关（extras.thinking.{extract_tags,fix_signature}）
-  const getEndpointThinking = (index: number, key: string): boolean => {
-    const extras = endpoints[index].extras as Record<string, unknown> | undefined
-    const thinking = extras?.thinking as Record<string, unknown> | undefined
-    return Boolean(thinking?.[key])
-  }
-  const setEndpointThinking = (index: number, key: string, value: boolean) => {
-    const ep = endpoints[index]
-    const extras = (ep.extras ?? {}) as Record<string, unknown>
-    const thinking = { ...((extras.thinking as Record<string, unknown>) ?? {}), [key]: value }
-    const newEndpoints = [...endpoints]
-    newEndpoints[index] = { ...ep, extras: { ...extras, thinking } }
-    setEndpoints(newEndpoints)
-  }
 
+  /** 端点测试：调 testEndpoint 探测连通性 + 思维链诊断（结果仅展示，不驱动配置） */
+  const testEndpoint = async (index: number) => {
+    if (!channel?.id) {
+      alert('请先保存渠道后再测试')
+      return
+    }
+    const ep = endpoints[index]
+    const apiKey = apiKeys.find((k) => k.enabled !== false)?.key
+    const model = models[0]
+    if (!apiKey) {
+      alert('没有可用的 API Key')
+      return
+    }
+    if (!model) {
+      alert('请先添加模型')
+      return
+    }
+    setEndpointTesting((prev) => ({ ...prev, [index]: true }))
+    try {
+      const res = await channelsApi.testEndpoint(channel.id, {
+        endpoint_type: ep.type,
+        model,
+        api_key: apiKey,
+      })
+      setEndpointResults((prev) => ({ ...prev, [index]: res }))
+    } catch (e: unknown) {
+      setEndpointResults((prev) => ({
+        ...prev,
+        [index]: {
+          success: false,
+          latency_ms: 0,
+          error: e instanceof Error ? e.message : '测试失败',
+          thinking_detected: false,
+        },
+      }))
+    } finally {
+      setEndpointTesting((prev) => ({ ...prev, [index]: false }))
+    }
+  }
   return (
     <form onSubmit={handleSubmit} className="space-y-5 px-1">
       {/* 基本信息 */}
@@ -270,6 +257,18 @@ export function ChannelForm({ channel, onSubmit, onCancel }: ChannelFormProps) {
                 />
                 启用
               </label>
+              {channel && (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  onClick={() => testEndpoint(index)}
+                  disabled={endpointTesting[index]}
+                  title="测试端点"
+                >
+                  <FlaskConical className={`h-4 w-4 ${endpointTesting[index] ? 'animate-spin' : ''}`} />
+                </Button>
+              )}
               {endpoints.length > 1 && (
                 <Button type="button" variant="ghost" size="icon" onClick={() => removeEndpoint(index)}>
                   <Trash2 className="h-4 w-4" />
@@ -315,27 +314,34 @@ export function ChannelForm({ channel, onSubmit, onCancel }: ChannelFormProps) {
                 </div>
               ))}
             </div>
-            {/* thinking 开关（extras.thinking） */}
-            <div className="flex flex-wrap items-center gap-x-5 gap-y-2 pl-1 pt-3 mt-1 border-t border-border/60 text-xs text-muted-foreground">
-              <label className="flex items-center gap-1 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={getEndpointThinking(index, 'extract_tags')}
-                  onChange={(e) => setEndpointThinking(index, 'extract_tags', e.target.checked)}
-                  className="rounded"
-                />
-                抽取 &lt;think/&gt; 标签
-              </label>
-              <label className="flex items-center gap-1 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={getEndpointThinking(index, 'fix_signature')}
-                  onChange={(e) => setEndpointThinking(index, 'fix_signature', e.target.checked)}
-                  className="rounded"
-                />
-                修复 GLM signature
-              </label>
-            </div>
+            {endpointResults[index] && (
+              <div className="rounded-md border bg-background p-3 space-y-1 text-xs">
+                {endpointResults[index]!.success ? (
+                  <div className="flex flex-wrap items-center gap-3 text-green-600">
+                    <span>✓ 成功</span>
+                    <span className="text-muted-foreground">{endpointResults[index]!.latency_ms}ms</span>
+                    {endpointResults[index]!.time_to_first_token_ms != null && (
+                      <span className="text-muted-foreground">TTFT {endpointResults[index]!.time_to_first_token_ms}ms</span>
+                    )}
+                    {endpointResults[index]!.prompt_tokens != null && endpointResults[index]!.completion_tokens != null && (
+                      <span className="text-muted-foreground">{endpointResults[index]!.prompt_tokens}→{endpointResults[index]!.completion_tokens} tok</span>
+                    )}
+                  </div>
+                ) : (
+                  <div className="text-red-500">✗ {endpointResults[index]!.error || '测试失败'}</div>
+                )}
+                {endpointResults[index]!.thinking_detected ? (
+                  <div className="text-muted-foreground">
+                    <span>检测到思维链（&lt;think&gt; 标签）</span>
+                    {endpointResults[index]!.thinking_sample && (
+                      <pre className="mt-1 bg-muted p-1 rounded overflow-x-auto whitespace-pre-wrap break-all">{endpointResults[index]!.thinking_sample}</pre>
+                    )}
+                  </div>
+                ) : endpointResults[index]!.success ? (
+                  <div className="text-muted-foreground/70">未检测到 &lt;think&gt; 标签</div>
+                ) : null}
+              </div>
+            )}
           </div>
         ))}
       </section>
@@ -467,82 +473,6 @@ export function ChannelForm({ channel, onSubmit, onCancel }: ChannelFormProps) {
             <input type="number" value={maxConcurrency} onChange={(e) => setMaxConcurrency(e.target.value)} className="input" placeholder="0=不限" />
           </div>
         </div>
-      </section>
-
-      {/* 思维链检测（thinking 配置已移至各端点卡片） */}
-      <section className="space-y-3">
-        <div className="flex items-center justify-between">
-          <div>
-            <h3 className="text-sm font-medium text-muted-foreground">思维链检测</h3>
-            <p className="text-xs text-muted-foreground mt-1">
-              检测上游 thinking 行为，推荐结果可一键应用到各启用端点。具体 thinking.extract_tags / fix_signature 开关在各端点卡片内配置。
-            </p>
-          </div>
-          {channel && (
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              onClick={handleDetect}
-              disabled={detecting}
-            >
-              <RefreshCw className={`h-4 w-4 mr-1 ${detecting ? 'animate-spin' : ''}`} />
-              {detecting ? '检测中...' : '检测上游行为'}
-            </Button>
-          )}
-        </div>
-
-        {detectError && (
-          <p className="text-xs text-red-500">检测失败：{detectError}</p>
-        )}
-
-        {detectResult && (
-          <div className="rounded-md border bg-muted/30 p-3 space-y-2 text-sm">
-            <div className="flex items-center justify-between">
-              <span className="font-medium">渠道级合并推荐</span>
-              <Button type="button" variant="outline" size="sm" onClick={applyDetectedRecommendations}>
-                应用到 extras
-              </Button>
-            </div>
-            {Object.keys(detectResult.recommendations).length === 0 ? (
-              <p className="text-xs text-muted-foreground">
-                未检测到需要开启的修复项（上游实现规范）。
-              </p>
-            ) : (
-              <ul className="text-xs space-y-0.5">
-                {Object.entries(detectResult.recommendations).map(([k, v]) => (
-                  <li key={k}>
-                    <code className="bg-muted px-1 rounded">{k}</code>:{' '}
-                    <span className={v ? 'text-green-600 font-medium' : 'text-muted-foreground'}>
-                      {v ? 'true' : 'false'}
-                    </span>
-                  </li>
-                ))}
-              </ul>
-            )}
-            <details className="text-xs">
-              <summary className="cursor-pointer text-muted-foreground hover:text-foreground">
-                各端点详情
-              </summary>
-              <div className="mt-2 space-y-2">
-                {detectResult.endpoint_results.map((r) => (
-                  <div key={r.endpoint} className="border-l-2 pl-2">
-                    <div className="font-mono text-xs text-muted-foreground">{r.endpoint}</div>
-                    {r.evidence && <div className="text-xs">证据：{r.evidence}</div>}
-                    {r.sample && (
-                      <pre className="text-xs bg-muted p-1 rounded mt-1 overflow-x-auto">
-                        {r.sample}
-                      </pre>
-                    )}
-                    {Object.keys(r.recommendations).length === 0 && (
-                      <div className="text-xs text-muted-foreground">无推荐</div>
-                    )}
-                  </div>
-                ))}
-              </div>
-            </details>
-          </div>
-        )}
       </section>
 
       {/* 操作按钮 */}

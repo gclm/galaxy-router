@@ -9,7 +9,7 @@ import {
 import { Button } from '@/components/ui/button'
 import { StatusBadge } from '@/components/StatusBadge'
 import { formatDate } from '@/lib/utils'
-import { Pencil, FlaskConical } from 'lucide-react'
+import { Pencil } from 'lucide-react'
 
 function maskKey(key: string) {
   if (key.length <= 8) return '****'
@@ -21,10 +21,9 @@ interface ChannelDetailProps {
   open: boolean
   onOpenChange: (open: boolean) => void
   onEdit: () => void
-  onTest: () => void
 }
 
-export function ChannelDetail({ channel, open, onOpenChange, onEdit, onTest }: ChannelDetailProps) {
+export function ChannelDetail({ channel, open, onOpenChange, onEdit }: ChannelDetailProps) {
   if (!channel) return null
 
   const enabledKeys = channel.api_keys.filter((k) => k.enabled !== false).length
@@ -163,10 +162,6 @@ export function ChannelDetail({ channel, open, onOpenChange, onEdit, onTest }: C
 
         {/* 底部操作 */}
         <div className="flex justify-end gap-2 pt-4 border-t">
-          <Button variant="outline" onClick={onTest}>
-            <FlaskConical className="mr-2 h-4 w-4" />
-            测试
-          </Button>
           <Button onClick={onEdit}>
             <Pencil className="mr-2 h-4 w-4" />
             编辑

@@ -7,7 +7,6 @@ import { StatusBadge } from '@/components/StatusBadge'
 import { ConfirmDeleteDialog } from '@/components/ConfirmDeleteDialog'
 import { ChannelForm } from '@/components/ChannelForm'
 import { ChannelDetail } from '@/components/ChannelDetail'
-import { TestModelDialog } from '@/components/TestModelDialog'
 import {
   Dialog,
   DialogContent,
@@ -27,7 +26,6 @@ import {
   Plus,
   Pencil,
   Trash2,
-  FlaskConical,
 } from 'lucide-react'
 
 export function Channels() {
@@ -51,7 +49,6 @@ export function Channels() {
   const [formOpen, setFormOpen] = useState(false)
   const [editingChannel, setEditingChannel] = useState<Channel | null>(null)
   const [detailChannel, setDetailChannel] = useState<Channel | null>(null)
-  const [testChannel, setTestChannel] = useState<Channel | null>(null)
   const [deleteId, setDeleteId] = useState<string | null>(null)
   const [toggleTarget, setToggleTarget] = useState<Channel | null>(null)
 
@@ -251,15 +248,6 @@ export function Channels() {
                     variant="ghost"
                     size="icon"
                     className="h-8 w-8"
-                    onClick={() => setTestChannel(channel)}
-                    title="测试"
-                  >
-                    <FlaskConical className="h-3.5 w-3.5" />
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="h-8 w-8"
                     onClick={() => openEdit(channel)}
                     title="编辑"
                   >
@@ -302,15 +290,6 @@ export function Channels() {
         </DialogContent>
       </Dialog>
 
-      {/* Test Dialog */}
-      <TestModelDialog
-        channel={testChannel}
-        open={!!testChannel}
-        onOpenChange={(open) => {
-          if (!open) setTestChannel(null)
-        }}
-      />
-
       {/* Detail Dialog */}
       <ChannelDetail
         channel={detailChannel}
@@ -321,12 +300,6 @@ export function Channels() {
         onEdit={() => {
           if (detailChannel) {
             openEdit(detailChannel)
-            setDetailChannel(null)
-          }
-        }}
-        onTest={() => {
-          if (detailChannel) {
-            setTestChannel(detailChannel)
             setDetailChannel(null)
           }
         }}

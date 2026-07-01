@@ -1,7 +1,7 @@
 type: feature
 complexity: complex
 sop: sop/feature.md
-status: in-progress
+status: completed
 feature: 2026-07-01-渠道测试交互重构
 title: 渠道测试交互重构 — 端点级测试（合并 test+detect）+ 修并发 bug + thinking 漏报
 created: '2026-07-01'

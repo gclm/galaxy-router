@@ -4,39 +4,29 @@ use axum::{
     http::StatusCode,
 };
 use reqwest::Client;
-use std::collections::HashMap;
 
 use super::crud::get_channel_by_id;
 use super::types::{
-    ChannelState, CustomHeader, DetectRequest, DetectResponse, EndpointConfig, EndpointDetection,
-    EndpointType, TestChannelRequest, TestChannelResponse,
+    ChannelState, CustomHeader, EndpointConfig, EndpointType, TestEndpointRequest,
+    TestEndpointResponse,
 };
 use crate::error::app::{ApiError, ApiResponse};
 
-const TEST_PROMPT: &str = "Hello! Please respond with a brief greeting in one sentence.";
-
-/// 测试渠道 — 直接发送到渠道上游，验证指定 key 能否访问指定模型
-pub async fn test_channel(
+/// 端点测试：对指定端点发流式探测请求，返回连通性 + 思维链诊断（per-endpoint，不合并）。
+///
+/// 一次请求同时拿：
+/// - 连通性（success/latency/ttft/tokens）
+/// - 思维链诊断（响应是否含 `<think>` 标签 + 样本）—— 只检测不应用
+pub async fn test_endpoint(
     State(state): State<ChannelState>,
     Path(id): Path<String>,
-    Json(req): Json<TestChannelRequest>,
-) -> Result<Json<ApiResponse<TestChannelResponse>>, (StatusCode, Json<ApiError>)> {
-    let endpoint_type = parse_protocol(&req.test_protocol)
-        .ok_or_else(|| ApiError::bad_request(format!("不支持的测试协议: {}", req.test_protocol)))?;
+    Json(req): Json<TestEndpointRequest>,
+) -> Result<Json<ApiResponse<TestEndpointResponse>>, (StatusCode, Json<ApiError>)> {
+    let endpoint_type = parse_protocol(&req.endpoint_type)
+        .ok_or_else(|| ApiError::bad_request(format!("不支持的端点类型: {}", req.endpoint_type)))?;
 
-    let use_stream = req.stream.unwrap_or(false);
-
-    let (body, upstream_path) = if use_stream {
-        build_streaming_test_payload(&endpoint_type, &req.model)
-    } else {
-        build_test_payload(&endpoint_type, &req.model)
-    }
-    .ok_or_else(|| {
-        ApiError::bad_request(format!(
-            "协议 {} 不支持{}测试",
-            req.test_protocol,
-            if use_stream { "流式" } else { "" }
-        ))
+    let (body, _upstream_path) = build_probe_payload(&endpoint_type, &req.model).ok_or_else(|| {
+        ApiError::bad_request(format!("端点类型 {} 不支持测试", req.endpoint_type))
     })?;
 
     let channel = get_channel_by_id(&state.pool, &id, state.timezone_offset).await?;
@@ -49,233 +39,58 @@ pub async fn test_channel(
         .endpoints
         .iter()
         .find(|e| e.endpoint_type == endpoint_type && e.enabled)
-        .ok_or_else(|| ApiError::bad_request(format!("渠道没有启用 {} 端点", req.test_protocol)))?;
+        .ok_or_else(|| ApiError::bad_request(format!("渠道没有启用的 {} 端点", req.endpoint_type)))?;
 
-    if use_stream {
-        let (result, latency_ms, ttft, pt, ct) = probe_endpoint_raw(
-            &state.http_client,
-            endpoint,
-            &api_key.key,
-            &body,
-            req.user_agent.as_deref(),
-        )
-        .await;
+    let (result, latency_ms, ttft, pt, ct) = probe_endpoint_raw(
+        &state.http_client,
+        endpoint,
+        &api_key.key,
+        &body,
+        req.user_agent.as_deref(),
+    )
+    .await;
 
-        match result {
-            Ok(content) => Ok(Json(ApiResponse::success(TestChannelResponse {
-                success: true,
-                message: "模型测试成功（流式）".to_string(),
-                latency_ms,
-                time_to_first_token_ms: ttft,
-                input_prompt: TEST_PROMPT.to_string(),
-                output_content: Some(content),
-                prompt_tokens: pt,
-                completion_tokens: ct,
-            }))),
-            Err(msg) => Ok(Json(ApiResponse::success(TestChannelResponse {
-                success: false,
-                message: msg,
-                latency_ms,
-                time_to_first_token_ms: ttft,
-                input_prompt: TEST_PROMPT.to_string(),
-                output_content: None,
-                prompt_tokens: pt,
-                completion_tokens: ct,
-            }))),
-        }
+    let (success, content, error) = match result {
+        Ok(c) => (true, Some(c), None),
+        Err(msg) => (false, None, Some(msg)),
+    };
+    // 思维链诊断：成功时在响应内容里检测 <think> 标签（协议无关字符串匹配）
+    let (thinking_detected, thinking_sample) = if let Some(ref text) = content {
+        detect_thinking(text)
     } else {
-        let start = std::time::Instant::now();
-
-        let mut req_builder = state
-            .http_client
-            .post(format!(
-                "{}{}",
-                endpoint.base_url.trim_end_matches('/'),
-                upstream_path
-            ))
-            .header("Content-Type", "application/json")
-            .timeout(std::time::Duration::from_secs(30));
-
-        match endpoint_type {
-            EndpointType::Anthropic => {
-                req_builder = req_builder
-                    .header("x-api-key", api_key.key.as_str())
-                    .header("anthropic-version", "2023-06-01");
-            }
-            _ => {
-                req_builder =
-                    req_builder.header("Authorization", format!("Bearer {}", api_key.key));
-            }
-        }
-
-        req_builder = inject_custom_headers(req_builder, &endpoint.headers);
-
-        if let Some(ref ua) = req.user_agent
-            && !ua.is_empty()
-        {
-            req_builder = req_builder.header("User-Agent", ua);
-        }
-
-        let resp = req_builder.json(&body).send().await;
-        let latency_ms = start.elapsed().as_millis() as u64;
-
-        match resp {
-            Ok(resp) => {
-                let status = resp.status();
-                let resp_text = resp.text().await.unwrap_or_default();
-
-                if !status.is_success() {
-                    return Ok(Json(ApiResponse::success(TestChannelResponse {
-                        success: false,
-                        message: format!("上游返回 HTTP {}: {}", status, resp_text),
-                        latency_ms,
-                        time_to_first_token_ms: None,
-                        input_prompt: TEST_PROMPT.to_string(),
-                        output_content: None,
-                        prompt_tokens: None,
-                        completion_tokens: None,
-                    })));
-                }
-
-                let resp_body: serde_json::Value =
-                    serde_json::from_str(&resp_text).unwrap_or_default();
-                if resp_body.get("error").is_some() {
-                    let error_msg = resp_body["error"]["message"].as_str().unwrap_or("未知错误");
-                    return Ok(Json(ApiResponse::success(TestChannelResponse {
-                        success: false,
-                        message: format!("模型返回错误: {}", error_msg),
-                        latency_ms,
-                        time_to_first_token_ms: None,
-                        input_prompt: TEST_PROMPT.to_string(),
-                        output_content: None,
-                        prompt_tokens: None,
-                        completion_tokens: None,
-                    })));
-                }
-
-                let content = extract_test_content(&resp_body, &endpoint_type);
-                let (pt, ct) = extract_usage(&resp_body, &endpoint_type);
-                Ok(Json(ApiResponse::success(TestChannelResponse {
-                    success: true,
-                    message: "模型测试成功".to_string(),
-                    latency_ms,
-                    time_to_first_token_ms: None,
-                    input_prompt: TEST_PROMPT.to_string(),
-                    output_content: Some(content),
-                    prompt_tokens: pt,
-                    completion_tokens: ct,
-                })))
-            }
-            Err(e) => Ok(Json(ApiResponse::success(TestChannelResponse {
-                success: false,
-                message: format!("请求上游失败: {}", e),
-                latency_ms,
-                time_to_first_token_ms: None,
-                input_prompt: TEST_PROMPT.to_string(),
-                output_content: None,
-                prompt_tokens: None,
-                completion_tokens: None,
-            }))),
-        }
-    }
-}
-
-/// 检测渠道 quirks：调用上游拿原始响应，分析是否含 `<think/>` 标签或 signature 异常
-pub async fn detect_channel_quirks(
-    State(state): State<ChannelState>,
-    Path(id): Path<String>,
-    Json(req): Json<DetectRequest>,
-) -> Result<Json<ApiResponse<DetectResponse>>, (StatusCode, Json<ApiError>)> {
-    let channel = get_channel_by_id(&state.pool, &id, state.timezone_offset).await?;
-
-    // 选 API key
-    let api_key = req
-        .api_key
-        .as_deref()
-        .and_then(|k| channel.api_keys.iter().find(|ak| ak.key == k && ak.enabled))
-        .or_else(|| channel.api_keys.iter().find(|ak| ak.enabled))
-        .ok_or_else(|| ApiError::bad_request("渠道没有可用的 API Key"))?;
-
-    // 选 model
-    let model = req
-        .model
-        .clone()
-        .or_else(|| channel.models.first().cloned())
-        .ok_or_else(|| ApiError::bad_request("渠道没有可用模型，请指定 model"))?;
-
-    // 选要测的 endpoints
-    let endpoints: Vec<&EndpointConfig> = if let Some(filter) = &req.endpoints {
-        channel
-            .endpoints
-            .iter()
-            .filter(|e| e.enabled && filter.iter().any(|t| t == e.endpoint_type.as_str()))
-            .collect()
-    } else {
-        channel.endpoints.iter().filter(|e| e.enabled).collect()
+        (false, None)
     };
 
-    if endpoints.is_empty() {
-        return Err(ApiError::bad_request("没有启用的端点可检测"));
-    }
-
-    // 为不同 endpoint 并行构造合适的 thinking-启用请求体
-    let endpoint_results: Vec<EndpointDetection> = {
-        let probes = endpoints.into_iter().map(|endpoint| {
-            let client = &state.http_client;
-            let api_key = api_key.key.clone();
-            let model = model.clone();
-            async move {
-                let (body, _upstream_path) =
-                    match build_detect_payload(&endpoint.endpoint_type, &model) {
-                        Some(v) => v,
-                        None => {
-                            return EndpointDetection {
-                                endpoint: endpoint.endpoint_type.as_str().to_string(),
-                                recommendations: HashMap::new(),
-                                evidence: format!(
-                                    "协议 {} 不支持检测",
-                                    endpoint.endpoint_type.as_str()
-                                ),
-                                sample: String::new(),
-                            };
-                        }
-                    };
-                let (result, _latency, _ttft, _pt, _ct) = probe_endpoint_raw(
-                    client,
-                    endpoint,
-                    api_key.as_str(),
-                    &body,
-                    None,
-                )
-                .await;
-                let response_text = match result {
-                    Ok(s) => s,
-                    Err(e) => format!("[探测调用失败: {}]", e),
-                };
-                analyze_response(&endpoint.endpoint_type, &response_text)
-            }
-        });
-        futures::future::join_all(probes).await
-    };
-
-    // 渠道级合并推荐：任一 endpoint 建议开启 → true
-    let mut recommendations: HashMap<String, bool> = HashMap::new();
-    for r in &endpoint_results {
-        for (k, v) in &r.recommendations {
-            if *v {
-                recommendations.insert(k.clone(), true);
-            }
-        }
-    }
-
-    Ok(Json(ApiResponse::success(DetectResponse {
-        recommendations,
-        endpoint_results,
+    Ok(Json(ApiResponse::success(TestEndpointResponse {
+        success,
+        latency_ms,
+        time_to_first_token_ms: ttft,
+        output_content: content,
+        error,
+        prompt_tokens: pt,
+        completion_tokens: ct,
+        thinking_detected,
+        thinking_sample,
     })))
 }
 
-/// 构建测试请求体和上游路径
-fn build_test_payload(
+/// 从响应文本检测 `<think>` 标签：返回 (detected, sample)。
+/// sample 截取首个 `<think>...</think>` 块（最多 200 字符）；未闭合则截到 200 字符。
+fn detect_thinking(response: &str) -> (bool, Option<String>) {
+    let Some(tag_start) = response.find("<think>") else {
+        return (false, None);
+    };
+    let sample = if let Some(rel_end) = response[tag_start..].find("</think>") {
+        let end = tag_start + rel_end + "</think>".len();
+        response[tag_start..end].chars().take(200).collect()
+    } else {
+        response[tag_start..].chars().take(200).collect()
+    };
+    (true, Some(sample))
+}
+
+/// 构建端点探测请求体（流式 + 带 thinking 参数，触发上游返回思维链以供诊断）。
+fn build_probe_payload(
     protocol: &EndpointType,
     model: &str,
 ) -> Option<(serde_json::Value, &'static str)> {
@@ -283,132 +98,37 @@ fn build_test_payload(
         EndpointType::OpenAiChat => Some((
             serde_json::json!({
                 "model": model,
-                "messages": [{"role": "user", "content": TEST_PROMPT}],
-                "max_tokens": 100,
-                "stream": false
+                "messages": [{"role": "user", "content": DETECT_PROMPT}],
+                "max_tokens": 200,
+                "stream": true,
+                // OpenAI 标准 reasoning 控制（o-series；非 reasoning 模型忽略，不报错）
+                "reasoning_effort": "medium"
             }),
             "/chat/completions",
         )),
         EndpointType::OpenAiResponse => Some((
             serde_json::json!({
                 "model": model,
-                "input": TEST_PROMPT,
-                "max_output_tokens": 100
+                "input": DETECT_PROMPT,
+                "max_output_tokens": 200,
+                "stream": true,
+                // Responses API 标准 reasoning 控制
+                "reasoning": {"effort": "medium"}
             }),
             "/responses",
         )),
         EndpointType::Anthropic => Some((
             serde_json::json!({
                 "model": model,
-                "messages": [{"role": "user", "content": TEST_PROMPT}],
-                "max_tokens": 100
-            }),
-            "/messages",
-        )),
-        EndpointType::OpenAiEmbedding => Some((
-            serde_json::json!({
-                "model": model,
-                "input": TEST_PROMPT
-            }),
-            "/embeddings",
-        )),
-        EndpointType::OpenAiImages => Some((
-            serde_json::json!({
-                "model": model,
-                "prompt": TEST_PROMPT,
-                "n": 1,
-                "size": "256x256"
-            }),
-            "/images/generations",
-        )),
-        _ => None,
-    }
-}
-
-/// 构建流式测试请求体
-fn build_streaming_test_payload(
-    protocol: &EndpointType,
-    model: &str,
-) -> Option<(serde_json::Value, &'static str)> {
-    match protocol {
-        EndpointType::OpenAiChat => Some((
-            serde_json::json!({
-                "model": model,
-                "messages": [{"role": "user", "content": TEST_PROMPT}],
-                "max_tokens": 100,
-                "stream": true
-            }),
-            "/chat/completions",
-        )),
-        EndpointType::Anthropic => Some((
-            serde_json::json!({
-                "model": model,
-                "messages": [{"role": "user", "content": TEST_PROMPT}],
-                "max_tokens": 100,
+                "messages": [{"role": "user", "content": DETECT_PROMPT}],
+                // Anthropic 规则：budget_tokens 必须 < max_tokens（原代码 max 200 < budget 1024 违规）
+                "max_tokens": 2048,
+                "thinking": {"type": "enabled", "budget_tokens": 1024},
                 "stream": true
             }),
             "/messages",
         )),
-        EndpointType::OpenAiResponse => Some((
-            serde_json::json!({
-                "model": model,
-                "input": TEST_PROMPT,
-                "max_output_tokens": 100,
-                "stream": true
-            }),
-            "/responses",
-        )),
         _ => None,
-    }
-}
-
-/// 从响应中提取内容文本
-fn extract_test_content(resp_body: &serde_json::Value, endpoint_type: &EndpointType) -> String {
-    match endpoint_type {
-        EndpointType::OpenAiChat => resp_body["choices"][0]["message"]["content"]
-            .as_str()
-            .unwrap_or("(无内容)")
-            .to_string(),
-        EndpointType::OpenAiResponse => resp_body["output"][0]["content"][0]["text"]
-            .as_str()
-            .unwrap_or("(无内容)")
-            .to_string(),
-        EndpointType::Anthropic => resp_body["content"][0]["text"]
-            .as_str()
-            .unwrap_or("(无内容)")
-            .to_string(),
-        EndpointType::OpenAiEmbedding => {
-            let len = resp_body["data"].as_array().map(|a| a.len()).unwrap_or(0);
-            format!("Embedding 返回 {} 条向量数据", len)
-        }
-        EndpointType::OpenAiImages => {
-            let count = resp_body["data"].as_array().map(|a| a.len()).unwrap_or(0);
-            format!("图片生成成功，共 {} 张", count)
-        }
-        _ => "(未知协议)".to_string(),
-    }
-}
-
-/// 从响应中提取 token 用量
-fn extract_usage(
-    resp_body: &serde_json::Value,
-    endpoint_type: &EndpointType,
-) -> (Option<u64>, Option<u64>) {
-    let usage = &resp_body["usage"];
-    match endpoint_type {
-        EndpointType::OpenAiChat => (
-            usage["prompt_tokens"].as_u64(),
-            usage["completion_tokens"].as_u64(),
-        ),
-        EndpointType::OpenAiResponse => (
-            usage["input_tokens"].as_u64(),
-            usage["output_tokens"].as_u64(),
-        ),
-        EndpointType::Anthropic => (
-            usage["input_tokens"].as_u64(),
-            usage["output_tokens"].as_u64(),
-        ),
-        _ => (None, None),
     }
 }
 
@@ -433,11 +153,13 @@ fn inject_custom_headers(
     builder
 }
 
-/// 流式测试：发 SSE 请求，消费完整流，返回首 token 时间和完整内容
-/// 检测使用的 prompt：包含"请详细分析"等更可能触发 thinking 的内容
+/// 探测 prompt：包含"请详细分析"等更可能触发 thinking 的内容
 const DETECT_PROMPT: &str = "请详细分析 1+1=2 的推理过程，并简短回答。";
 
-/// 共享的端点探测：发流式请求 + 消费完整响应，返回原始响应文本
+/// 共享的端点探测：发流式请求 + 增量消费响应，返回完整响应内容 + 计时/token。
+///
+/// **增量读**：逐 chunk 累积，遇 `[DONE]` 立即停止，不等连接关闭
+/// （修并发测试时 SSE keep-alive 超时误判：原 `resp.bytes().await` 等服务器关连接才返回）。
 async fn probe_endpoint_raw(
     client: &Client,
     endpoint: &EndpointConfig,
@@ -512,27 +234,43 @@ async fn probe_endpoint_raw(
         );
     }
 
-    let bytes = match resp.bytes().await {
-        Ok(b) => b,
-        Err(e) => {
-            return (
-                Err(format!("读取响应失败: {}", e)),
-                start.elapsed().as_millis() as u64,
-                None,
-                None,
-                None,
-            );
+    // 增量读：逐 chunk 累积，遇 [DONE] 立即停止（不等连接关闭）
+    use futures::StreamExt;
+    let mut stream = resp.bytes_stream();
+    let mut text_buf = String::new();
+    let mut read_err: Option<String> = None;
+    while let Some(chunk) = stream.next().await {
+        match chunk {
+            Ok(bytes) => {
+                text_buf.push_str(&String::from_utf8_lossy(&bytes));
+                if text_buf.contains("[DONE]") {
+                    break;
+                }
+            }
+            Err(e) => {
+                read_err = Some(format!("读取响应失败: {}", e));
+                break;
+            }
         }
-    };
+    }
+    if let Some(msg) = read_err {
+        return (
+            Err(msg),
+            start.elapsed().as_millis() as u64,
+            None,
+            None,
+            None,
+        );
+    }
 
-    let text = String::from_utf8_lossy(&bytes);
+    // 解析累积的响应文本：提取 content / ttft / usage
     let mut first_token_ms: Option<u64> = None;
     let mut full_content = String::new();
     let mut prompt_tokens: Option<u64> = None;
     let mut completion_tokens: Option<u64> = None;
-
     let mut event_type = "";
-    for line in text.lines() {
+
+    for line in text_buf.lines() {
         if let Some(stripped) = line.strip_prefix("event: ") {
             event_type = stripped.trim();
             continue;
@@ -612,363 +350,9 @@ async fn probe_endpoint_raw(
     }
 }
 
-/// 构建检测用的请求体（启用 thinking 模式以触发签名/标签）
-fn build_detect_payload(
-    protocol: &EndpointType,
-    model: &str,
-) -> Option<(serde_json::Value, &'static str)> {
-    match protocol {
-        EndpointType::OpenAiChat => Some((
-            serde_json::json!({
-                "model": model,
-                "messages": [{"role": "user", "content": DETECT_PROMPT}],
-                "max_tokens": 200,
-                "stream": true
-            }),
-            "/chat/completions",
-        )),
-        EndpointType::OpenAiResponse => Some((
-            serde_json::json!({
-                "model": model,
-                "input": DETECT_PROMPT,
-                "max_output_tokens": 200,
-                "stream": true
-            }),
-            "/responses",
-        )),
-        EndpointType::Anthropic => Some((
-            serde_json::json!({
-                "model": model,
-                "messages": [{"role": "user", "content": DETECT_PROMPT}],
-                "max_tokens": 200,
-                "thinking": {"type": "enabled", "budget_tokens": 1024},
-                "stream": true
-            }),
-            "/messages",
-        )),
-        _ => None,
-    }
-}
-
-/// 分析上游响应，检测非标准行为
-fn analyze_response(endpoint_type: &EndpointType, response: &str) -> EndpointDetection {
-    let mut recommendations: HashMap<String, bool> = HashMap::new();
-    let mut evidence_parts: Vec<String> = Vec::new();
-    let mut sample = String::new();
-
-    if let Some(tag_start) = response.find("<think>") {
-        recommendations.insert("thinking.extract_tags".to_string(), true);
-        evidence_parts.push("响应中发现 <think> 标签".to_string());
-        if let Some(rel_end) = response[tag_start..].find("</think>") {
-            let end = tag_start + rel_end + "</think>".len();
-            sample = response[tag_start..end].chars().take(200).collect();
-        } else {
-            sample = response[tag_start..].chars().take(200).collect();
-        }
-    }
-
-    if matches!(endpoint_type, EndpointType::Anthropic) {
-        let has_content_block_start = response.contains("\"content_block_start\"");
-        let has_thinking = response.contains("\"thinking\"");
-        let has_signature_field = response.contains("\"signature\":");
-        let has_signature_delta = response.contains("\"signature_delta\"");
-
-        if has_content_block_start && has_thinking && has_signature_field && !has_signature_delta {
-            recommendations.insert("thinking.fix_signature".to_string(), true);
-            evidence_parts.push(
-                "Anthropic signature 在 content_block_start 内、未见 signature_delta 事件"
-                    .to_string(),
-            );
-            if let Some(idx) = response.find("\"signature\":") {
-                let start = idx + "\"signature\":".len();
-                let end = response[start..]
-                    .find([' ', ',', '}', '\n'])
-                    .unwrap_or(80)
-                    .min(80);
-                sample = response[idx..start + end].to_string();
-            }
-        }
-    }
-
-    EndpointDetection {
-        endpoint: endpoint_type.as_str().to_string(),
-        recommendations,
-        evidence: evidence_parts.join("；"),
-        sample,
-    }
-}
-
-#[cfg(test)]
-mod analyze_response_tests {
-    use super::*;
-
-    #[test]
-    fn detects_think_tags_in_openai_chat() {
-        let resp = r#"data: {"choices":[{"delta":{"content":"<think>hidden</think> visible"}}]}"#;
-        let r = analyze_response(&EndpointType::OpenAiChat, resp);
-        assert!(
-            r.recommendations
-                .get("thinking.extract_tags")
-                .copied()
-                .unwrap_or(false)
-        );
-        assert!(r.evidence.contains("<think>"));
-        assert!(r.sample.contains("hidden"));
-        assert!(!r.recommendations.contains_key("thinking.fix_signature"));
-    }
-
-    #[test]
-    fn detects_glm_signature_in_anthropic_start() {
-        let resp = r#"event: content_block_start
-data: {"type":"content_block_start","index":0,"content_block":{"type":"thinking","signature":"abc123"}}
-event: content_block_delta
-data: {"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"hi"}}
-event: content_block_stop
-data: {"type":"content_block_stop","index":0}
-"#;
-        let r = analyze_response(&EndpointType::Anthropic, resp);
-        assert!(
-            r.recommendations
-                .get("thinking.fix_signature")
-                .copied()
-                .unwrap_or(false)
-        );
-        assert!(r.evidence.contains("content_block_start"));
-        assert!(r.sample.contains("abc123"));
-    }
-
-    #[test]
-    fn no_recommendation_for_standard_anthropic() {
-        let resp = r#"event: content_block_start
-data: {"type":"content_block_start","index":0,"content_block":{"type":"thinking"}}
-event: content_block_delta
-data: {"type":"content_block_delta","index":0,"delta":{"type":"signature_delta","signature":"abc"}}
-"#;
-        let r = analyze_response(&EndpointType::Anthropic, resp);
-        assert!(!r.recommendations.contains_key("thinking.fix_signature"));
-        assert!(!r.recommendations.contains_key("thinking.extract_tags"));
-    }
-
-    #[test]
-    fn no_recommendation_for_normal_chat() {
-        let resp = r#"data: {"choices":[{"delta":{"content":"hello"}}]}"#;
-        let r = analyze_response(&EndpointType::OpenAiChat, resp);
-        assert!(r.recommendations.is_empty());
-        assert!(r.evidence.is_empty());
-    }
-
-    #[test]
-    fn does_not_set_fix_signature_for_non_anthropic() {
-        // GLM 风格 signature-in-start 只在 anthropic 协议下检测
-        let resp = r#"data: {"content_block_start":true,"thinking":true,"signature":"abc"}"#;
-        let r = analyze_response(&EndpointType::OpenAiChat, resp);
-        assert!(!r.recommendations.contains_key("thinking.fix_signature"));
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
-
-    #[test]
-    fn build_test_payload_for_openai_chat() {
-        let (body, path) = build_test_payload(&EndpointType::OpenAiChat, "gpt-4o").unwrap();
-        assert_eq!(path, "/chat/completions");
-        assert_eq!(body["model"], "gpt-4o");
-        assert_eq!(body["stream"], false);
-        assert_eq!(body["max_tokens"], 100);
-        assert_eq!(body["messages"][0]["role"], "user");
-        assert_eq!(body["messages"][0]["content"], TEST_PROMPT);
-    }
-
-    #[test]
-    fn build_test_payload_for_openai_response() {
-        let (body, path) = build_test_payload(&EndpointType::OpenAiResponse, "o1").unwrap();
-        assert_eq!(path, "/responses");
-        assert_eq!(body["model"], "o1");
-        assert_eq!(body["input"], TEST_PROMPT);
-        assert_eq!(body["max_output_tokens"], 100);
-        assert!(body.get("stream").is_none());
-    }
-
-    #[test]
-    fn build_test_payload_for_anthropic() {
-        let (body, path) = build_test_payload(&EndpointType::Anthropic, "claude-sonnet").unwrap();
-        assert_eq!(path, "/messages");
-        assert_eq!(body["max_tokens"], 100);
-        assert_eq!(body["messages"][0]["content"], TEST_PROMPT);
-    }
-
-    #[test]
-    fn build_test_payload_for_embedding_uses_input_field() {
-        let (body, path) =
-            build_test_payload(&EndpointType::OpenAiEmbedding, "text-embed").unwrap();
-        assert_eq!(path, "/embeddings");
-        assert_eq!(body["input"], TEST_PROMPT);
-    }
-
-    #[test]
-    fn build_test_payload_for_images_uses_prompt_field() {
-        let (body, path) = build_test_payload(&EndpointType::OpenAiImages, "dall-e").unwrap();
-        assert_eq!(path, "/images/generations");
-        assert_eq!(body["prompt"], TEST_PROMPT);
-        assert_eq!(body["n"], 1);
-    }
-
-    #[test]
-    fn build_test_payload_for_gemini_unsupported() {
-        assert!(build_test_payload(&EndpointType::Gemini, "gemini-pro").is_none());
-    }
-
-    #[test]
-    fn build_streaming_test_payload_sets_stream_true() {
-        for proto in [
-            EndpointType::OpenAiChat,
-            EndpointType::Anthropic,
-            EndpointType::OpenAiResponse,
-        ] {
-            let (body, _path) = build_streaming_test_payload(&proto, "m").unwrap();
-            assert_eq!(
-                body["stream"], true,
-                "stream should be true for {:?}",
-                proto
-            );
-        }
-    }
-
-    #[test]
-    fn build_streaming_test_payload_unsupported_protocols() {
-        assert!(build_streaming_test_payload(&EndpointType::OpenAiEmbedding, "m").is_none());
-        assert!(build_streaming_test_payload(&EndpointType::OpenAiImages, "m").is_none());
-        assert!(build_streaming_test_payload(&EndpointType::Gemini, "m").is_none());
-    }
-
-    #[test]
-    fn extract_test_content_reads_openai_chat_choices() {
-        let body = json!({
-            "choices": [{"message": {"content": "hello"}}]
-        });
-        assert_eq!(
-            extract_test_content(&body, &EndpointType::OpenAiChat),
-            "hello"
-        );
-    }
-
-    #[test]
-    fn extract_test_content_reads_openai_response_nested_text() {
-        let body = json!({
-            "output": [{"content": [{"text": "world"}]}]
-        });
-        assert_eq!(
-            extract_test_content(&body, &EndpointType::OpenAiResponse),
-            "world"
-        );
-    }
-
-    #[test]
-    fn extract_test_content_reads_anthropic_content_array() {
-        let body = json!({
-            "content": [{"text": "alpha"}]
-        });
-        assert_eq!(
-            extract_test_content(&body, &EndpointType::Anthropic),
-            "alpha"
-        );
-    }
-
-    #[test]
-    fn extract_test_content_falls_back_to_placeholder_on_missing_field() {
-        let body = json!({});
-        assert_eq!(
-            extract_test_content(&body, &EndpointType::OpenAiChat),
-            "(无内容)"
-        );
-        assert_eq!(
-            extract_test_content(&body, &EndpointType::Anthropic),
-            "(无内容)"
-        );
-    }
-
-    #[test]
-    fn extract_test_content_reports_embedding_count() {
-        let body = json!({"data": [{}, {}, {}]});
-        assert_eq!(
-            extract_test_content(&body, &EndpointType::OpenAiEmbedding),
-            "Embedding 返回 3 条向量数据"
-        );
-    }
-
-    #[test]
-    fn extract_test_content_reports_images_count() {
-        let body = json!({"data": [{}, {}]});
-        assert_eq!(
-            extract_test_content(&body, &EndpointType::OpenAiImages),
-            "图片生成成功，共 2 张"
-        );
-    }
-
-    #[test]
-    fn extract_test_content_unknown_protocol_returns_marker() {
-        let body = json!({});
-        assert_eq!(
-            extract_test_content(&body, &EndpointType::Gemini),
-            "(未知协议)"
-        );
-    }
-
-    #[test]
-    fn extract_usage_openai_chat_reads_prompt_and_completion() {
-        let body = json!({
-            "usage": {"prompt_tokens": 11, "completion_tokens": 22}
-        });
-        assert_eq!(
-            extract_usage(&body, &EndpointType::OpenAiChat),
-            (Some(11), Some(22))
-        );
-    }
-
-    #[test]
-    fn extract_usage_anthropic_reads_input_and_output() {
-        let body = json!({
-            "usage": {"input_tokens": 7, "output_tokens": 13}
-        });
-        assert_eq!(
-            extract_usage(&body, &EndpointType::Anthropic),
-            (Some(7), Some(13))
-        );
-    }
-
-    #[test]
-    fn extract_usage_openai_response_uses_input_output_field_names() {
-        let body = json!({
-            "usage": {"input_tokens": 3, "output_tokens": 5}
-        });
-        assert_eq!(
-            extract_usage(&body, &EndpointType::OpenAiResponse),
-            (Some(3), Some(5))
-        );
-    }
-
-    #[test]
-    fn extract_usage_returns_none_when_usage_missing() {
-        let body = json!({});
-        assert_eq!(
-            extract_usage(&body, &EndpointType::OpenAiChat),
-            (None, None)
-        );
-        assert_eq!(extract_usage(&body, &EndpointType::Anthropic), (None, None));
-    }
-
-    #[test]
-    fn extract_usage_unsupported_protocol_returns_none() {
-        let body = json!({"usage": {"prompt_tokens": 99}});
-        assert_eq!(extract_usage(&body, &EndpointType::Gemini), (None, None));
-        assert_eq!(
-            extract_usage(&body, &EndpointType::OpenAiEmbedding),
-            (None, None)
-        );
-    }
 
     #[test]
     fn parse_protocol_round_trips_known_strings() {
@@ -997,5 +381,64 @@ mod tests {
         assert_eq!(parse_protocol(""), None);
         assert_eq!(parse_protocol("unknown_protocol"), None);
         assert_eq!(parse_protocol("openai"), None);
+    }
+
+    /// build_probe_payload 所有支持的协议 stream:true + 各自标准的 reasoning 控制参数
+    #[test]
+    fn build_probe_payload_sets_stream_and_reasoning() {
+        // OpenAiChat: stream + reasoning_effort（OpenAI 标准）
+        let (chat, _) = build_probe_payload(&EndpointType::OpenAiChat, "m").unwrap();
+        assert_eq!(chat["stream"], true);
+        assert_eq!(chat["reasoning_effort"], "medium");
+
+        // OpenAiResponse: stream + reasoning（Responses API 标准）
+        let (resp, _) = build_probe_payload(&EndpointType::OpenAiResponse, "m").unwrap();
+        assert_eq!(resp["stream"], true);
+        assert_eq!(resp["reasoning"]["effort"], "medium");
+
+        // Anthropic: stream + thinking（Anthropic 标准）
+        let (anth, _) = build_probe_payload(&EndpointType::Anthropic, "m").unwrap();
+        assert_eq!(anth["stream"], true);
+        assert!(anth.get("thinking").is_some());
+    }
+
+    /// build_probe_payload 不支持 embedding/images/gemini
+    #[test]
+    fn build_probe_payload_unsupported_protocols() {
+        assert!(build_probe_payload(&EndpointType::OpenAiEmbedding, "m").is_none());
+        assert!(build_probe_payload(&EndpointType::OpenAiImages, "m").is_none());
+        assert!(build_probe_payload(&EndpointType::Gemini, "m").is_none());
+    }
+
+    /// Anthropic 的 budget_tokens 必须 < max_tokens（原 build_detect_payload 违规已修）
+    #[test]
+    fn build_probe_payload_anthropic_budget_within_max_tokens() {
+        let (body, _) = build_probe_payload(&EndpointType::Anthropic, "claude").unwrap();
+        let max_tokens = body["max_tokens"].as_u64().unwrap();
+        let budget = body["thinking"]["budget_tokens"].as_u64().unwrap();
+        assert!(
+            budget < max_tokens,
+            "budget_tokens ({}) must be < max_tokens ({})",
+            budget,
+            max_tokens
+        );
+    }
+
+    /// detect_thinking：含 <think> 标签 → detected=true + 样本
+    #[test]
+    fn detect_thinking_finds_tag_and_sample() {
+        let resp = r#"data: {"choices":[{"delta":{"content":"<think>推理</think> 答案"}}]}"#;
+        let (detected, sample) = detect_thinking(resp);
+        assert!(detected);
+        assert!(sample.unwrap().contains("推理"));
+    }
+
+    /// detect_thinking：无 <think> 标签 → detected=false + None
+    #[test]
+    fn detect_thinking_negative_for_plain_response() {
+        let resp = r#"data: {"choices":[{"delta":{"content":"hello"}}]}"#;
+        let (detected, sample) = detect_thinking(resp);
+        assert!(!detected);
+        assert!(sample.is_none());
     }
 }

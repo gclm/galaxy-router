@@ -479,7 +479,6 @@ mod tests {
                 base_url: "https://api.anthropic.com".into(),
                 enabled: true,
                 headers: vec![],
-                extras: None,
             },
             group_id: None,
         };

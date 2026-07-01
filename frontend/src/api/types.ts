@@ -49,8 +49,6 @@ export interface EndpointConfig {
   enabled?: boolean
   /** 端点级自定义请求头（含 User-Agent；前端提供 UA 模板） */
   headers?: CustomHeader[]
-  /** 端点级扩展配置（thinking.extract_tags/fix_signature） */
-  extras?: Record<string, unknown>
 }
 
 export interface CustomHeader {
@@ -117,44 +115,24 @@ export interface FetchModelsRequest {
   api_key: string
 }
 
-export interface TestChannelRequest {
+export interface TestEndpointRequest {
+  endpoint_type: string
   model: string
-  test_protocol: string
   api_key: string
-  stream?: boolean
   user_agent?: string
 }
 
-export interface TestChannelResponse {
+export interface TestEndpointResponse {
   success: boolean
-  message: string
   latency_ms: number
   time_to_first_token_ms?: number
-  input_prompt: string
-  output_content: string | null
+  output_content?: string
+  error?: string
   prompt_tokens?: number
   completion_tokens?: number
-}
-
-// Detect 渠道 quirks 相关
-export interface DetectRequest {
-  endpoints?: string[]
-  api_key?: string
-  model?: string
-}
-
-export interface EndpointDetection {
-  endpoint: string
-  /** key 形如 "thinking.extract_tags"，value 是 bool */
-  recommendations: Record<string, boolean>
-  evidence: string
-  sample: string
-}
-
-export interface DetectResponse {
-  /** 渠道级合并推荐（任一 endpoint 建议开启则 true） */
-  recommendations: Record<string, boolean>
-  endpoint_results: EndpointDetection[]
+  /** 思维链诊断：响应是否含 <think> 标签（只检测不应用） */
+  thinking_detected: boolean
+  thinking_sample?: string
 }
 
 // Group types

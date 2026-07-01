@@ -14,7 +14,6 @@ use crate::protocol::sse::{
     apply_sse_usage, collect_sse_content, extract_error_from_sse, extract_usage_from_sse,
     find_sse_boundary, format_stream_error_event, sanitize_upstream_error,
 };
-use crate::protocol::thinking_normalizer::{PassthroughNormalizer, ThinkingTagExtractor};
 use crate::relay::converter::RelayPipeline;
 use crate::relay::prepare::{extract_request_text, failed_attempt_stats, prepare_proxy_request};
 use crate::relay::run::{
@@ -52,24 +51,6 @@ fn decrement_active_once(
     }
 }
 
-/// 从渠道 extras JSON Map 读取 `extras.thinking.<key>` 布尔开关
-fn thinking_flag(extras: &Option<serde_json::Map<String, serde_json::Value>>, key: &str) -> bool {
-    extras
-        .as_ref()
-        .and_then(|e| e.get("thinking"))
-        .and_then(|v| v.get(key))
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false)
-}
-
-/// 流式 spawn task 的 panic 兜底。
-///
-/// 背景：tokio::spawn 内的 panic 会让 task 立刻终止，`record_stream_completion` 永远不会被调用，
-/// 请求日志就此丢失（这正是"CC 已失败但 usage_logs 漏记"的典型根因之一）。
-///
-/// 设计：spawn 任务开始时构造一个 guard；spawn 正常结束时调用 `disarm()`，Drop 什么都不做；
-/// spawn panic 时 Drop 触发，起一个独立的 tokio::spawn 写一条简化的失败日志。
-/// Drop 本身再包一层 `catch_unwind`，避免 panic 时二次 panic 把整个进程带走。
 struct StreamPanicGuard {
     state: ProxyState,
     record: RequestRecord,
@@ -380,7 +361,6 @@ impl ProxyStreamRelayExecutor {
         let request_id_clone = self.request_id.clone();
 
         let sc_channel_id = channel_id_clone.clone();
-        let sc_extras = selection.endpoint.extras.clone();
         let sc_model = model_clone.clone();
         let sc_target_model = target_model_clone.clone();
         let sc_client_endpoint = client_endpoint_clone.clone();
@@ -468,22 +448,6 @@ impl ProxyStreamRelayExecutor {
             let mut ttft_ms: Option<i32> = None;
             let mut first_token_seen = false;
 
-            // 思维链规范化器：仅在渠道 extras.thinking.{extract_tags,fix_signature} 启用时创建
-            let extract_think_tags = thinking_flag(&sc_extras, "extract_tags");
-            let fix_signature = thinking_flag(&sc_extras, "fix_signature");
-
-            let mut passthrough_normalizer: Option<PassthroughNormalizer> =
-                if extract_think_tags || fix_signature {
-                    Some(PassthroughNormalizer::new())
-                } else {
-                    None
-                };
-            let mut conversion_extractor: Option<ThinkingTagExtractor> = if extract_think_tags {
-                Some(ThinkingTagExtractor::new())
-            } else {
-                None
-            };
-
             if needs_conversion {
                 let mut converter = RelayPipeline::create_stream_converter(
                     &sc_client_endpoint,
@@ -545,11 +509,7 @@ impl ProxyStreamRelayExecutor {
                                     &upstream_endpoint_clone,
                                     &event_bytes,
                                 ) {
-                                    Ok(Some(mut llm_stream)) => {
-                                        // 思维链规范化先于 stats：让 stats 看到的是清理后的内容
-                                        if let Some(ref mut extractor) = conversion_extractor {
-                                            extractor.extract(&mut llm_stream);
-                                        }
+                                    Ok(Some(llm_stream)) => {
                                         // 收集内容用于统计
                                         if let Some(choice) = llm_stream.first_choice() {
                                             if let Some(crate::protocol::model::Content::Text(t)) =
@@ -714,17 +674,7 @@ impl ProxyStreamRelayExecutor {
                                     );
                                 }
 
-                                // 直通路径：可选的 thinking 规范化
-                                if let Some(ref mut normalizer) = passthrough_normalizer {
-                                    let events = normalizer
-                                        .process_sse(&event_bytes, &upstream_endpoint_clone);
-                                    for evt in events {
-                                        if !stream_send(&stream_tx, Bytes::from(evt)).await {
-                                            client_disconnected = true;
-                                            break;
-                                        }
-                                    }
-                                } else if !stream_send(&stream_tx, Bytes::from(event_bytes)).await {
+                                if !stream_send(&stream_tx, Bytes::from(event_bytes)).await {
                                     client_disconnected = true;
                                 }
                                 if client_disconnected {

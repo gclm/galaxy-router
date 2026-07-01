@@ -161,7 +161,6 @@ mod tests {
                 endpoint_type: EndpointType::OpenAiChat,
                 enabled: true,
                 headers: vec![],
-                extras: None,
             }],
             models: models.into_iter().map(String::from).collect(),
             timeout_secs: 300,

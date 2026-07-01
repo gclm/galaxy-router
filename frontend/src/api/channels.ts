@@ -2,12 +2,10 @@ import { apiClient } from './client'
 import type {
   Channel,
   CreateChannelRequest,
-  DetectRequest,
-  DetectResponse,
   FetchModelsRequest,
   PaginatedResponse,
-  TestChannelRequest,
-  TestChannelResponse,
+  TestEndpointRequest,
+  TestEndpointResponse,
   UpdateChannelRequest,
 } from './types'
 
@@ -37,9 +35,6 @@ export const channelsApi = {
   fetchModels: (data: FetchModelsRequest) =>
     apiClient.post<string[]>('/models/fetch', data),
 
-  testChannel: (id: string, data: TestChannelRequest) =>
-    apiClient.post<TestChannelResponse>(`/channels/${id}/test`, data),
-
-  detectQuirks: (id: string, data: DetectRequest = {}) =>
-    apiClient.post<DetectResponse>(`/channels/${id}/detect`, data),
+  testEndpoint: (id: string, data: TestEndpointRequest) =>
+    apiClient.post<TestEndpointResponse>(`/channels/${id}/test-endpoint`, data),
 }
