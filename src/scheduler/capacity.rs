@@ -49,6 +49,15 @@ impl ChannelCapacityManager {
             .or_insert_with(|| Arc::new(ChannelCapacityState::default()))
             .clone()
     }
+
+    /// 读取渠道当前在途并发数（用于最小连接数打分）。渠道无记录返回 0。
+    pub fn active_count(&self, channel_id: &str) -> u32 {
+        let states = self.states.lock().expect("capacity state mutex poisoned");
+        states
+            .get(channel_id)
+            .map(|s| s.active.load(Ordering::Acquire))
+            .unwrap_or(0)
+    }
 }
 
 #[derive(Debug)]

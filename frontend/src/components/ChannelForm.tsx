@@ -463,7 +463,7 @@ export function ChannelForm({ channel, onSubmit, onCancel }: ChannelFormProps) {
             <input type="number" value={timeoutSecs} onChange={(e) => setTimeoutSecs(e.target.value)} className="input" />
           </div>
           <div>
-            <label className="block text-sm font-medium mb-1">最大并发</label>
+            <label className="block text-sm font-medium mb-1">最大并发<span className="text-muted-foreground font-normal">（可选，0=不限）</span></label>
             <input type="number" value={maxConcurrency} onChange={(e) => setMaxConcurrency(e.target.value)} className="input" placeholder="0=不限" />
           </div>
         </div>

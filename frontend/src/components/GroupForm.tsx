@@ -25,8 +25,8 @@ export function GroupForm({ group, channels, onSubmit, onCancel }: GroupFormProp
   const [name, setName] = useState(group?.name ?? '')
   const [provider, setProvider] = useState(group?.provider ?? '')
   const [matchRegex, setMatchRegex] = useState(group?.match_regex ?? '')
-  const [retryEnabled, setRetryEnabled] = useState(group?.retry_enabled ?? true)
-  const [maxRetries, setMaxRetries] = useState(group?.max_retries?.toString() ?? '3')
+  // 重试配置已废弃（调度器改为遍历全部候选），UI 不再暴露；retry_enabled 仍提交
+  const retryEnabled = group?.retry_enabled ?? true
   const [firstTokenTimeout, setFirstTokenTimeout] = useState(group?.first_token_timeout_secs?.toString() ?? '30')
   const [enabled, setEnabled] = useState(group?.enabled ?? true)
   const [submitting, setSubmitting] = useState(false)
@@ -119,7 +119,6 @@ export function GroupForm({ group, channels, onSubmit, onCancel }: GroupFormProp
         provider: provider || undefined,
         match_regex: matchRegex || undefined,
         retry_enabled: retryEnabled,
-        max_retries: parseInt(maxRetries) || 3,
         first_token_timeout_secs: parseInt(firstTokenTimeout) || 30,
         enabled,
         items: selectedItems,
@@ -175,23 +174,8 @@ export function GroupForm({ group, channels, onSubmit, onCancel }: GroupFormProp
             <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} className="rounded" />
             启用
           </label>
-          <label className="flex items-center gap-2 text-sm cursor-pointer">
-            <input type="checkbox" checked={retryEnabled} onChange={(e) => setRetryEnabled(e.target.checked)} className="rounded" />
-            重试
-          </label>
-          {retryEnabled && (
-            <label className="flex items-center gap-1.5 text-sm">
-              <span className="text-muted-foreground">最多</span>
-              <input
-                type="number"
-                value={maxRetries}
-                onChange={(e) => setMaxRetries(e.target.value)}
-                className="input w-14 text-center h-7 text-xs"
-                min="1"
-              />
-              <span className="text-muted-foreground">次</span>
-            </label>
-          )}
+          {/* 重试配置已移除：调度器改为遍历全部候选（外层 for candidate），
+              max_retries/retry_enabled 字段保留在 DB 但代码不读，详见 task 2026-07-01-智能调度打分重构 */}
           <label className="flex items-center gap-1.5 text-sm">
             <span className="text-muted-foreground">首字超时</span>
             <input
@@ -319,7 +303,7 @@ export function GroupForm({ group, channels, onSubmit, onCancel }: GroupFormProp
                         onChange={(e) => handlePriorityChange(index, parseInt(e.target.value) || 1)}
                         className="input w-14 text-center text-xs h-7"
                         min="1"
-                        title="优先级"
+                        title="优先级（数值小=优先选用，同档内按速度/并发打分）"
                       />
                       <button
                         type="button"

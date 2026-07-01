@@ -65,15 +65,6 @@ impl ChannelStatus {
         self.failure_count as f64 / total as f64
     }
 
-    /// 计算负载率 (0-100+)
-    pub fn load_rate(&self) -> u32 {
-        if self.max_concurrency == 0 {
-            return 0;
-        }
-        let active = self.active_requests.load(Ordering::Relaxed);
-        (active * 100 / self.max_concurrency as u64) as u32
-    }
-
     /// 活跃请求 +1
     pub fn increment_active(&self) {
         self.active_requests.fetch_add(1, Ordering::Relaxed);
@@ -456,22 +447,6 @@ mod tests {
         let mut s = sample_status();
         s.blacklist(-1); // 立即过期
         assert!(s.is_available());
-    }
-
-    #[test]
-    fn load_rate_is_zero_when_no_max_concurrency() {
-        let s = sample_status();
-        assert_eq!(s.load_rate(), 0);
-    }
-
-    #[test]
-    fn load_rate_computes_percentage() {
-        let s = sample_status();
-        s.active_requests.store(5, Ordering::Relaxed);
-        // Need to set max_concurrency
-        let mut s = s;
-        s.max_concurrency = 10;
-        assert_eq!(s.load_rate(), 50);
     }
 
     #[test]

@@ -216,7 +216,7 @@ export function Groups() {
             </td>
             <td className="px-4 py-3 text-center text-muted-foreground">{group.items.length}</td>
             <td className="px-4 py-3 text-center text-muted-foreground text-xs">
-              {group.retry_enabled ? `${group.max_retries} 次` : '关闭'}
+              自动
             </td>
             <td className="px-4 py-3 text-center">
               <StatusBadge

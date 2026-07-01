@@ -172,7 +172,6 @@ export interface Group {
   provider: string
   match_regex: string | null
   retry_enabled: boolean
-  max_retries: number
   first_token_timeout_secs: number
   enabled: boolean
   items: GroupItem[]
@@ -185,7 +184,6 @@ export interface CreateGroupRequest {
   provider?: string
   match_regex?: string
   retry_enabled?: boolean
-  max_retries?: number
   first_token_timeout_secs?: number
   enabled?: boolean
   items: CreateGroupItemRequest[]
@@ -203,7 +201,6 @@ export interface UpdateGroupRequest {
   provider?: string
   match_regex?: string
   retry_enabled?: boolean
-  max_retries?: number
   first_token_timeout_secs?: number
   enabled?: boolean
   items?: CreateGroupItemRequest[]

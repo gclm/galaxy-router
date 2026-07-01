@@ -19,7 +19,6 @@ pub struct Group {
     pub provider: String,
     pub match_regex: Option<String>,
     pub retry_enabled: bool,
-    pub max_retries: i32,
     pub first_token_timeout_secs: i32,
     pub enabled: bool,
     pub items: Vec<GroupItem>,
@@ -55,7 +54,6 @@ pub struct CreateGroupRequest {
     pub provider: Option<String>,
     pub match_regex: Option<String>,
     pub retry_enabled: Option<bool>,
-    pub max_retries: Option<i32>,
     pub first_token_timeout_secs: Option<i32>,
     pub enabled: Option<bool>,
     pub items: Vec<CreateGroupItemRequest>,
@@ -77,7 +75,6 @@ pub struct UpdateGroupRequest {
     pub provider: Option<String>,
     pub match_regex: Option<String>,
     pub retry_enabled: Option<bool>,
-    pub max_retries: Option<i32>,
     pub first_token_timeout_secs: Option<i32>,
     pub enabled: Option<bool>,
     pub items: Option<Vec<CreateGroupItemRequest>>,
@@ -130,7 +127,7 @@ pub async fn list(
 
     let tz = tz_modifier(state.timezone_offset);
     let mut data_builder = sqlx::QueryBuilder::new(format!(
-        "SELECT id, name, provider, match_regex, retry_enabled, max_retries, first_token_timeout_secs, enabled, datetime(created_at, '{}') as created_at, datetime(updated_at, '{}') as updated_at FROM groups",
+        "SELECT id, name, provider, match_regex, retry_enabled, first_token_timeout_secs, enabled, datetime(created_at, '{}') as created_at, datetime(updated_at, '{}') as updated_at FROM groups",
         tz, tz
     ));
     push_where(&mut data_builder, &query);
@@ -163,7 +160,6 @@ pub async fn list(
             provider,
             match_regex: row.get("match_regex"),
             retry_enabled: row.get("retry_enabled"),
-            max_retries: row.get("max_retries"),
             first_token_timeout_secs: row.get("first_token_timeout_secs"),
             enabled: row.get("enabled"),
             items: group_items,
@@ -229,8 +225,8 @@ pub async fn create(
 
     sqlx::query(
         r#"
-        INSERT INTO groups (id, name, provider, match_regex, retry_enabled, max_retries, first_token_timeout_secs, enabled)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO groups (id, name, provider, match_regex, retry_enabled, first_token_timeout_secs, enabled)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
         "#
     )
     .bind(&group_id)
@@ -238,7 +234,6 @@ pub async fn create(
     .bind(req.provider.as_deref().unwrap_or(""))
     .bind(&req.match_regex)
     .bind(req.retry_enabled.unwrap_or(true))
-    .bind(req.max_retries.unwrap_or(3))
     .bind(req.first_token_timeout_secs.unwrap_or(30))
     .bind(req.enabled.unwrap_or(true))
     .execute(&mut *tx)
@@ -340,10 +335,6 @@ pub async fn update(
     if let Some(retry_enabled) = req.retry_enabled {
         separated.push("retry_enabled = ");
         separated.push_bind_unseparated(retry_enabled);
-    }
-    if let Some(max_retries) = req.max_retries {
-        separated.push("max_retries = ");
-        separated.push_bind_unseparated(max_retries);
     }
     if let Some(timeout) = req.first_token_timeout_secs {
         separated.push("first_token_timeout_secs = ");
@@ -521,8 +512,8 @@ async fn get_group_by_id(
     timezone_offset: i32,
 ) -> Result<Group, (StatusCode, Json<ApiError>)> {
     let tz = tz_modifier(timezone_offset);
-    let result = sqlx::query_as::<_, (String, String, String, Option<String>, bool, i32, i32, bool, String, String)>(
-        AssertSqlSafe(format!("SELECT id, name, provider, match_regex, retry_enabled, max_retries, first_token_timeout_secs, enabled, datetime(created_at, '{}') as created_at, datetime(updated_at, '{}') as updated_at FROM groups WHERE id = ?", tz, tz).as_str())
+    let result = sqlx::query_as::<_, (String, String, String, Option<String>, bool, i32, bool, String, String)>(
+        AssertSqlSafe(format!("SELECT id, name, provider, match_regex, retry_enabled, first_token_timeout_secs, enabled, datetime(created_at, '{}') as created_at, datetime(updated_at, '{}') as updated_at FROM groups WHERE id = ?", tz, tz).as_str())
     )
     .bind(id)
     .fetch_optional(pool)
@@ -535,7 +526,6 @@ async fn get_group_by_id(
         stored_provider,
         match_regex,
         retry_enabled,
-        max_retries,
         first_token_timeout_secs,
         enabled,
         created_at,
@@ -553,7 +543,6 @@ async fn get_group_by_id(
         provider,
         match_regex,
         retry_enabled,
-        max_retries,
         first_token_timeout_secs,
         enabled,
         items,

@@ -483,6 +483,11 @@ async fn test_channel_rejects_crlf_in_api_key() {
         endpoint_type: EndpointType::Anthropic,
         base_url: "https://api.anthropic.com/v1".into(),
         enabled: true,
+        headers: vec![CustomHeader {
+            key: "X-Custom".into(),
+            value: "value".into(),
+        }],
+        extras: None,
     };
     let ch = Channel {
         id: "test".into(),
@@ -497,11 +502,6 @@ async fn test_channel_rejects_crlf_in_api_key() {
         concurrency: 10,
         timeout_secs: 300,
         max_concurrency: 0,
-        custom_headers: vec![CustomHeader {
-            key: "X-Custom".into(),
-            value: "value".into(),
-        }],
-        extras: None,
         enabled: true,
         created_at: "2026-01-01T00:00:00Z".into(),
         updated_at: "2026-01-01T00:00:00Z".into(),

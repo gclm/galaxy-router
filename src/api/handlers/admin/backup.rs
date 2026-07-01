@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::{SqliteConnection, SqlitePool};
 
 type DbResult<T> = Result<T, (StatusCode, Json<ApiError>)>;
-type GroupRow = (String, String, Option<String>, bool, i32, i32, bool);
+type GroupRow = (String, String, Option<String>, bool, i32, bool);
 
 use crate::api::handlers::admin::channels::Channel;
 use crate::api::handlers::admin::channels::ChannelRow;
@@ -42,7 +42,6 @@ pub struct GroupExport {
     pub name: String,
     pub match_regex: Option<String>,
     pub retry_enabled: bool,
-    pub max_retries: i32,
     pub first_token_timeout_secs: i32,
     pub enabled: bool,
     pub items: Vec<GroupItemExport>,
@@ -244,14 +243,14 @@ async fn fetch_channels(pool: &SqlitePool) -> DbResult<Vec<Channel>> {
 
 async fn fetch_groups(pool: &SqlitePool) -> DbResult<Vec<GroupExport>> {
     let rows: Vec<GroupRow> = sqlx::query_as(
-        "SELECT id, name, match_regex, retry_enabled, max_retries, first_token_timeout_secs, enabled FROM groups ORDER BY created_at",
+        "SELECT id, name, match_regex, retry_enabled, first_token_timeout_secs, enabled FROM groups ORDER BY created_at",
     )
     .fetch_all(pool)
     .await
     .map_err(|e| ApiError::internal_error(e.to_string()))?;
 
     let mut groups = Vec::new();
-    for (id, name, match_regex, retry_enabled, max_retries, first_token_timeout_secs, enabled) in
+    for (id, name, match_regex, retry_enabled, first_token_timeout_secs, enabled) in
         rows
     {
         let items: Vec<(String, i32, i32, String)> = sqlx::query_as(
@@ -268,7 +267,6 @@ async fn fetch_groups(pool: &SqlitePool) -> DbResult<Vec<GroupExport>> {
             name,
             match_regex,
             retry_enabled,
-            max_retries,
             first_token_timeout_secs,
             enabled,
             items: items
@@ -384,14 +382,13 @@ async fn import_group(conn: &mut SqliteConnection, g: &GroupExport) -> Result<bo
     let id = crate::api::response::generate_id();
 
     let result = sqlx::query(
-        r#"INSERT OR IGNORE INTO groups (id, name, match_regex, retry_enabled, max_retries, first_token_timeout_secs, enabled)
-           VALUES (?, ?, ?, ?, ?, ?, ?)"#,
+        r#"INSERT OR IGNORE INTO groups (id, name, match_regex, retry_enabled, first_token_timeout_secs, enabled)
+           VALUES (?, ?, ?, ?, ?, ?)"#,
     )
     .bind(&id)
     .bind(&g.name)
     .bind(&g.match_regex)
     .bind(g.retry_enabled)
-    .bind(g.max_retries)
     .bind(g.first_token_timeout_secs)
     .bind(g.enabled)
     .execute(&mut *conn)
