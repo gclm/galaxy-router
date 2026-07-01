@@ -47,6 +47,10 @@ export interface EndpointConfig {
   type: EndpointType
   base_url: string
   enabled?: boolean
+  /** 端点级自定义请求头（含 User-Agent；前端提供 UA 模板） */
+  headers?: CustomHeader[]
+  /** 端点级扩展配置（thinking.extract_tags/fix_signature） */
+  extras?: Record<string, unknown>
 }
 
 export interface CustomHeader {
@@ -73,14 +77,6 @@ export interface Channel {
   concurrency: number
   timeout_secs: number
   max_concurrency: number
-  custom_headers: CustomHeader[]
-  /**
-   * 扩展字段（JSON 自由格式 Map）
-   * 当前用法：
-   *   thinking.extract_tags: bool 抽取 <think/> 标签到 reasoning_content
-   *   thinking.fix_signature: bool 修复 GLM-style signature 位置
-   */
-  extras: Record<string, unknown> | null
   enabled: boolean
   created_at: string
   updated_at: string
@@ -98,8 +94,6 @@ export interface CreateChannelRequest {
   concurrency?: number
   timeout_secs?: number
   max_concurrency?: number
-  custom_headers?: CustomHeader[]
-  extras?: Record<string, unknown>
   enabled?: boolean
 }
 
@@ -115,8 +109,6 @@ export interface UpdateChannelRequest {
   concurrency?: number
   timeout_secs?: number
   max_concurrency?: number
-  custom_headers?: CustomHeader[]
-  extras?: Record<string, unknown>
   enabled?: boolean
 }
 

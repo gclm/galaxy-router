@@ -230,7 +230,7 @@ pub async fn reset(
 
 async fn fetch_channels(pool: &SqlitePool) -> DbResult<Vec<Channel>> {
     let rows: Vec<ChannelRow> = sqlx::query_as(
-        "SELECT id, name, api_keys, endpoints, models, rate_limit_rpm, rate_limit_tpm, failure_threshold, blacklist_minutes, concurrency, timeout_secs, max_concurrency, custom_headers, extras, enabled, created_at, updated_at FROM channels ORDER BY created_at",
+        "SELECT id, name, api_keys, endpoints, models, rate_limit_rpm, rate_limit_tpm, failure_threshold, blacklist_minutes, concurrency, timeout_secs, max_concurrency, enabled, created_at, updated_at FROM channels ORDER BY created_at",
     )
     .fetch_all(pool)
     .await
@@ -328,11 +328,10 @@ async fn import_channel(conn: &mut SqliteConnection, ch: &Channel) -> Result<boo
     let api_keys = serde_json::to_string(&ch.api_keys).map_err(|e| e.to_string())?;
     let endpoints = serde_json::to_string(&ch.endpoints).map_err(|e| e.to_string())?;
     let models = serde_json::to_string(&ch.models).map_err(|e| e.to_string())?;
-    let custom_headers = serde_json::to_string(&ch.custom_headers).map_err(|e| e.to_string())?;
 
     let result = sqlx::query(
-        r#"INSERT OR IGNORE INTO channels (id, name, api_keys, endpoints, models, rate_limit_rpm, rate_limit_tpm, failure_threshold, blacklist_minutes, concurrency, custom_headers, enabled)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"#,
+        r#"INSERT OR IGNORE INTO channels (id, name, api_keys, endpoints, models, rate_limit_rpm, rate_limit_tpm, failure_threshold, blacklist_minutes, concurrency, enabled)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"#,
     )
     .bind(&id)
     .bind(&ch.name)
@@ -344,7 +343,6 @@ async fn import_channel(conn: &mut SqliteConnection, ch: &Channel) -> Result<boo
     .bind(ch.failure_threshold)
     .bind(ch.blacklist_minutes)
     .bind(ch.concurrency)
-    .bind(&custom_headers)
     .bind(ch.enabled)
     .execute(conn)
     .await

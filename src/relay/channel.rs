@@ -1,5 +1,5 @@
 use crate::api::handlers::admin::channels::{
-    CustomHeader, EndpointConfig, EndpointType, UpstreamApiKey,
+    EndpointConfig, EndpointType, UpstreamApiKey,
 };
 
 /// 渠道信息
@@ -10,13 +10,10 @@ pub struct ChannelInfo {
     pub api_keys: Vec<UpstreamApiKey>,
     pub endpoints: Vec<EndpointConfig>,
     pub models: Vec<String>,
-    pub custom_headers: Vec<CustomHeader>,
     /// 单次请求超时（秒），默认 300
     pub timeout_secs: u64,
     /// 最大并发请求数（0=不限制）
     pub max_concurrency: u32,
-    /// 扩展字段（JSON 自由格式）
-    pub extras: Option<serde_json::Map<String, serde_json::Value>>,
     /// 渠道级黑名单触发阈值（连续失败次数）。默认 3
     pub failure_threshold: u64,
     /// 渠道级黑名单时长（分钟）。默认 10
@@ -106,18 +103,20 @@ mod tests {
                     base_url: "https://api.openai.com".into(),
                     endpoint_type: EndpointType::OpenAiChat,
                     enabled: true,
+                    headers: vec![],
+                    extras: None,
                 },
                 EndpointConfig {
                     base_url: "https://api.openai.com".into(),
                     endpoint_type: EndpointType::Anthropic,
                     enabled: false,
+                    headers: vec![],
+                    extras: None,
                 },
             ],
             models: vec!["gpt-4".into()],
-            custom_headers: vec![],
             timeout_secs: 300,
             max_concurrency: 0,
-            extras: None,
             failure_threshold: 3,
             blacklist_minutes: 10,
         }

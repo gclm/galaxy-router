@@ -1,6 +1,7 @@
 use axum::http::HeaderMap;
 
-use crate::api::handlers::admin::channels::EndpointType;
+use crate::api::handlers::admin::channels::{CustomHeader, EndpointType};
+use crate::metrics::attempt::AttemptStats;
 use crate::metrics::usage::estimator::TokenEstimator;
 use crate::relay::converter::{RelayPipeline, RelayPipelineRequest};
 use crate::error::proxy::ProxyError;
@@ -17,6 +18,59 @@ pub(crate) struct PreparedProxyRequest {
     pub(crate) channel_id: String,
     pub(crate) model: String,
     pub(crate) target_model: String,
+}
+
+/// 构造一条"失败"的 AttemptStats（send 网络失败 / 上游非 2xx / SSE 流内错误共用）。
+///
+/// output 为 0（未生成）；input 按请求体估算（客户端确实发送了 input）。流式与非流式
+/// 的失败记录共用此构造，避免 executor.rs 与 stream_executor.rs 各写一份导致的"修一个漏一个"。
+///
+/// 注意：不接收 `&PreparedProxyRequest`，因为 send() 已 move 掉 headers/body，
+/// 之后无法整体借用；这里只接收需要的字段（部分 move 后单字段访问是允许的）。
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn failed_attempt_stats(
+    body: &serde_json::Value,
+    channel_id: &str,
+    target_model: &str,
+    upstream_endpoint: &EndpointType,
+    needs_conversion: bool,
+    latency_ms: i64,
+    status_code: u16,
+    error_message: String,
+    upstream_key_hint: &str,
+) -> AttemptStats {
+    AttemptStats {
+        channel_id: channel_id.to_string(),
+        target_model: target_model.to_string(),
+        upstream_endpoint: upstream_endpoint.clone(),
+        needs_conversion,
+        latency_ms,
+        status_code,
+        // 失败请求客户端确实发送了 input，按请求体估算 input tokens；output 为 0（未生成）
+        input_tokens: estimate_request_input_tokens(body, target_model),
+        output_tokens: 0,
+        cache_read: 0,
+        cache_creation: 0,
+        cost: None,
+        error_message: Some(error_message),
+        upstream_key_hint: upstream_key_hint.to_string(),
+    }
+}
+
+/// 估算请求体的 input tokens（失败请求也记录 input，output 为 0）。
+pub(crate) fn estimate_request_input_tokens(body: &serde_json::Value, model: &str) -> i32 {
+    estimate_tokens_for_model(&extract_request_text(body), model)
+}
+
+/// 把自定义请求头注入到上游请求（同名 insert 覆盖）。
+fn inject_custom_headers(headers: &mut reqwest::header::HeaderMap, custom: &[CustomHeader]) {
+    for header in custom {
+        if let Ok(name) = reqwest::header::HeaderName::from_bytes(header.key.as_bytes())
+            && let Ok(value) = header.value.parse()
+        {
+            headers.insert(name, value);
+        }
+    }
 }
 
 /// 从响应体提取 usage 数据
@@ -65,7 +119,6 @@ pub(crate) fn estimate_tokens(text: &str) -> i32 {
 }
 
 /// 估算 token 数（指定模型）
-#[allow(dead_code)]
 pub(crate) fn estimate_tokens_for_model(text: &str, model: &str) -> i32 {
     if text.is_empty() {
         return 0;
@@ -271,13 +324,8 @@ pub(crate) async fn prepare_proxy_request(
         upstream_endpoint.path()
     );
 
-    for header in &selection.channel.custom_headers {
-        if let Ok(name) = reqwest::header::HeaderName::from_bytes(header.key.as_bytes())
-            && let Ok(value) = header.value.parse()
-        {
-            reqwest_headers.insert(name, value);
-        }
-    }
+    // 端点级自定义请求头（insert 覆盖客户端，用于按协议配不同 User-Agent 等）
+    inject_custom_headers(&mut reqwest_headers, &selection.endpoint.headers);
 
     Ok(PreparedProxyRequest {
         body: request_body,
@@ -420,10 +468,8 @@ mod tests {
                 api_keys: vec![],
                 endpoints: vec![],
                 models: vec!["alias-claude".into()],
-                custom_headers: vec![],
                 timeout_secs: 300,
                 max_concurrency: 0,
-                extras: None,
                 failure_threshold: 3,
                 blacklist_minutes: 10,
             },
@@ -432,6 +478,8 @@ mod tests {
                 endpoint_type: EndpointType::Anthropic,
                 base_url: "https://api.anthropic.com".into(),
                 enabled: true,
+                headers: vec![],
+                extras: None,
             },
             group_id: None,
         };

@@ -138,17 +138,28 @@ fn classify_upstream(status: StatusCode, body: &str) -> ErrorClass {
     }
 
     let lower = sanitize_upstream_error(body).to_ascii_lowercase();
+    // 按语义族覆盖中英文：限流 / 额度 / 鉴权。国内上游错误码常藏 body 里（如智谱 1310
+    // 「使用上限」、1302「速率限制」），只能靠关键词识别为 KeyRetryable 触发换 key。
     const KEY_NEEDLES: &[&str] = &[
+        // 额度族（余额 / 配额 / 使用上限）
         "余额不足",
         "无可用资源包",
-        "速率限制",
-        "频率限制",
+        "使用上限",
+        "额度用尽",
+        "额度耗尽",
+        "超出限额",
         "insufficient_quota",
         "quota exceeded",
+        "exceeded your current quota",
+        "usage limit",
         "resource exhausted",
         "credit balance",
         "billing",
+        // 限流族
+        "速率限制",
+        "频率限制",
         "rate limit",
+        // 鉴权族
         "invalid api key",
         "incorrect api key",
         "unauthorized",
@@ -266,11 +277,32 @@ pub fn is_key_retryable_upstream_error(status: StatusCode, body: &str) -> bool {
     .is_key_retryable()
 }
 
+/// 从上游错误体中还原真实 HTTP status（如 "503 Service Unavailable"）。
+///
+/// 上游有时以 HTTP 200 + SSE 流内错误体承载真实状态（如 "503 Service Unavailable"、
+/// "500 Internal Server Error"）。还原真实 status 后可正确归因——503 应触发换 key，
+/// 而不是被统一标成 502（曾导致"详情 503 / 列表 502"不一致且不换 key）。
+fn parse_http_status_from_body(body: &str) -> Option<StatusCode> {
+    use regex::Regex;
+    use std::sync::OnceLock;
+    static RE: OnceLock<Regex> = OnceLock::new();
+    let re = RE.get_or_init(|| {
+        // 匹配 "<3位 4xx/5xx> <reason>"，前导非数字避免误匹配 request id 等长数字串
+        Regex::new(r"(?:^|[^\d])(4[0-9]{2}|5[0-9]{2})\s+[A-Za-z]").expect("static regex")
+    });
+    let code: u16 = re.captures(body)?.get(1)?.as_str().parse().ok()?;
+    StatusCode::from_u16(code).ok()
+}
+
 /// SSE 流内错误的 HTTP 状态归因
 ///
 /// 上游返回 2xx 但 SSE 流内含错误时（如智谱 1302 限流藏在流里），根据错误体归因
-/// 状态码：限流/鉴权语义 → 429（触发换 key、不触发 channel 黑名单），其他保持 502。
+/// 状态码：能还原真实 status（如 503）则用真实值；否则按语义——key 问题 → 429（触发
+/// 换 key、不触发 channel 黑名单），其他保持 502。
 pub fn sse_stream_error_status(body: &str) -> StatusCode {
+    if let Some(real) = parse_http_status_from_body(body) {
+        return real;
+    }
     if is_key_retryable_upstream_error(StatusCode::BAD_GATEWAY, body) {
         StatusCode::TOO_MANY_REQUESTS
     } else {
@@ -308,6 +340,21 @@ mod tests {
             StatusCode::INTERNAL_SERVER_ERROR,
             r#"{"error":{"message":"upstream overloaded"}}"#
         ));
+    }
+
+    #[test]
+    fn glm_quota_exceeded_is_key_retryable() {
+        // 智谱 1310 周/月额度上限：曾因 KEY_NEEDLES 未覆盖"使用上限"而被归为
+        // UpstreamRetryable，导致不换 key（attempts 永远只 1 条）。
+        assert!(is_key_retryable_upstream_error(
+            StatusCode::BAD_GATEWAY,
+            "[1310][您已达到每周/每月使用上限，您的限额将在 2026-06-30 09:59:59 重置。][reqid]"
+        ));
+        // SSE 流内归因后应为 429（触发换 key）
+        assert_eq!(
+            sse_stream_error_status("[1310][您已达到每周使用上限]"),
+            StatusCode::TOO_MANY_REQUESTS
+        );
     }
 
     #[test]
@@ -372,6 +419,30 @@ mod tests {
         assert_eq!(
             sse_stream_error_status("upstream overloaded"),
             StatusCode::BAD_GATEWAY
+        );
+    }
+
+    #[test]
+    fn sse_stream_error_status_recovers_real_status_from_body() {
+        // 上游以 200 + 流内 "503 Service Unavailable" 返回：应还原为 503（而非统一标 502）
+        assert_eq!(
+            sse_stream_error_status("503 Service Unavailable"),
+            StatusCode::SERVICE_UNAVAILABLE
+        );
+        // 503 还原后应触发换 key
+        assert!(is_key_retryable_upstream_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "503 Service Unavailable"
+        ));
+        // 500 保留为 500
+        assert_eq!(
+            sse_stream_error_status("500 Internal Server Error"),
+            StatusCode::INTERNAL_SERVER_ERROR
+        );
+        // 无 HTTP status 文本时不回归（仍走关键词归因）
+        assert_eq!(
+            sse_stream_error_status("[1302][您的账户已达到速率限制]"),
+            StatusCode::TOO_MANY_REQUESTS
         );
     }
 

@@ -16,7 +16,7 @@ use crate::protocol::sse::{
 };
 use crate::protocol::thinking_normalizer::{PassthroughNormalizer, ThinkingTagExtractor};
 use crate::relay::converter::RelayPipeline;
-use crate::relay::prepare::{extract_request_text, prepare_proxy_request};
+use crate::relay::prepare::{extract_request_text, failed_attempt_stats, prepare_proxy_request};
 use crate::relay::run::{
     RelayAttemptError, RelayCandidate, RelayRequest, RelayStreamAttemptExecutor,
     RelayStreamAttemptResult, RelayStreamSuccess,
@@ -252,36 +252,47 @@ impl ProxyStreamRelayExecutor {
             .headers(prepared.headers)
             .body(prepared.body)
             .send()
-            .await
-            .map_err(|e| {
+            .await;
+        let response = match response {
+            Ok(r) => r,
+            Err(e) => {
+                // 网络层失败也要记录 attempt，否则 usage_logs 会丢这条请求的 channel/latency
+                attempts.push(failed_attempt_stats(
+                    &self.body,
+                    &prepared.channel_id,
+                    &prepared.target_model,
+                    &prepared.upstream_endpoint,
+                    prepared.needs_conversion,
+                    start_time.elapsed().as_millis() as i64,
+                    502,
+                    e.to_string(),
+                    upstream_key_hint,
+                ));
                 decrement_active_once(
                     &state_for_decrement,
                     &channel_id_for_decrement,
                     &active_decremented_clone,
                 );
-                ProxyError::RequestError(e.to_string())
-            })?;
+                return Err(ProxyError::RequestError(e.to_string()));
+            }
+        };
 
         if !response.status().is_success() {
             let latency_ms = start_time.elapsed().as_millis() as i64;
             let status = response.status();
             let response_body = response.text().await.unwrap_or_default();
 
-            attempts.push(AttemptStats {
-                channel_id: prepared.channel_id.clone(),
-                target_model: prepared.target_model.clone(),
-                upstream_endpoint: prepared.upstream_endpoint.clone(),
-                needs_conversion: prepared.needs_conversion,
+            attempts.push(failed_attempt_stats(
+                &self.body,
+                &prepared.channel_id,
+                &prepared.target_model,
+                &prepared.upstream_endpoint,
+                prepared.needs_conversion,
                 latency_ms,
-                status_code: status.as_u16(),
-                input_tokens: 0,
-                output_tokens: 0,
-                cache_read: 0,
-                cache_creation: 0,
-                cost: None,
-                error_message: Some(response_body[..response_body.len().min(500)].to_string()),
-                upstream_key_hint: upstream_key_hint.to_string(),
-            });
+                status.as_u16(),
+                response_body[..response_body.len().min(500)].to_string(),
+                upstream_key_hint,
+            ));
 
             decrement_active_once(
                 &state_for_decrement,
@@ -325,22 +336,19 @@ impl ProxyStreamRelayExecutor {
         {
             let latency_ms = start_time.elapsed().as_millis() as i64;
             let sanitized_error = sanitize_upstream_error(&error);
+            let sse_status = sse_stream_error_status(&error);
 
-            attempts.push(AttemptStats {
-                channel_id: prepared.channel_id.clone(),
-                target_model: prepared.target_model.clone(),
-                upstream_endpoint: prepared.upstream_endpoint.clone(),
-                needs_conversion: prepared.needs_conversion,
+            attempts.push(failed_attempt_stats(
+                &self.body,
+                &prepared.channel_id,
+                &prepared.target_model,
+                &prepared.upstream_endpoint,
+                prepared.needs_conversion,
                 latency_ms,
-                status_code: sse_stream_error_status(&error).as_u16(),
-                input_tokens: 0,
-                output_tokens: 0,
-                cache_read: 0,
-                cache_creation: 0,
-                cost: None,
-                error_message: Some(sanitized_error),
-                upstream_key_hint: upstream_key_hint.to_string(),
-            });
+                sse_status.as_u16(),
+                sanitized_error,
+                upstream_key_hint,
+            ));
 
             decrement_active_once(
                 &state_for_decrement,
@@ -348,7 +356,7 @@ impl ProxyStreamRelayExecutor {
                 &active_decremented_clone,
             );
             return Err(ProxyError::UpstreamError {
-                status: sse_stream_error_status(&error),
+                status: sse_status,
                 body: error,
             });
         }
@@ -372,7 +380,7 @@ impl ProxyStreamRelayExecutor {
         let request_id_clone = self.request_id.clone();
 
         let sc_channel_id = channel_id_clone.clone();
-        let sc_extras = selection.channel.extras.clone();
+        let sc_extras = selection.endpoint.extras.clone();
         let sc_model = model_clone.clone();
         let sc_target_model = target_model_clone.clone();
         let sc_client_endpoint = client_endpoint_clone.clone();

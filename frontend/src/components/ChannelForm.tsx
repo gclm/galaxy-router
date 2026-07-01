@@ -20,39 +20,14 @@ const ENDPOINT_TYPES: EndpointType[] = [
   'openai_images',
 ]
 
-/** 将 dot-notation 扁平 key 展开为嵌套对象
- *  例: { "a.b": 1, "c": 2 } => { a: { b: 1 }, c: 2 } */
-function expandDotKeys(flat: Record<string, unknown>): Record<string, unknown> {
-  const result: Record<string, unknown> = {}
-  for (const [k, v] of Object.entries(flat)) {
-    const parts = k.split('.')
-    let cur: Record<string, unknown> = result
-    for (let i = 0; i < parts.length - 1; i++) {
-      const p = parts[i]
-      if (typeof cur[p] !== 'object' || cur[p] === null) cur[p] = {}
-      cur = cur[p] as Record<string, unknown>
-    }
-    cur[parts[parts.length - 1]] = v
-  }
-  return result
-}
-
-/** 递归合并两个对象（b 覆盖 a） */
-function deepMerge<T extends Record<string, unknown>>(a: T, b: Record<string, unknown>): T {
-  const result: Record<string, unknown> = { ...a }
-  for (const [k, v] of Object.entries(b)) {
-    const av = result[k]
-    if (
-      av && typeof av === 'object' && !Array.isArray(av) &&
-      v && typeof v === 'object' && !Array.isArray(v)
-    ) {
-      result[k] = deepMerge(av as Record<string, unknown>, v as Record<string, unknown>)
-    } else {
-      result[k] = v
-    }
-  }
-  return result as T
-}
+/** 常见 coding agent User-Agent 模板（选模板快捷填入，也可自定义任意 header） */
+const UA_TEMPLATES: { label: string; value: string }[] = [
+  { label: 'Claude Code', value: 'claude-code/2.1.0 cli' },
+  { label: 'Cline', value: 'cline/1.0.0' },
+  { label: 'Cursor', value: 'cursor/0.42.0' },
+  { label: 'Roo Code', value: 'roo-cline/1.0.0' },
+  { label: 'Continue', value: 'continue/0.9.0' },
+]
 
 export function ChannelForm({ channel, onSubmit, onCancel }: ChannelFormProps) {
   const [name, setName] = useState(channel?.name ?? '')
@@ -60,7 +35,7 @@ export function ChannelForm({ channel, onSubmit, onCancel }: ChannelFormProps) {
     channel?.api_keys?.map(k => typeof k === 'string' ? { key: k, note: '', enabled: true } : { key: k.key, note: k.note ?? '', enabled: k.enabled ?? true }) ?? [{ key: '', note: '', enabled: true }]
   )
   const [endpoints, setEndpoints] = useState<EndpointConfig[]>(
-    channel?.endpoints ?? [{ type: 'openai_chat', base_url: '', enabled: true }]
+    channel?.endpoints ?? [{ type: 'openai_chat', base_url: '', enabled: true, headers: [] }]
   )
   const [models, setModels] = useState<string[]>(channel?.models ?? [])
   const [rateLimitRpm, setRateLimitRpm] = useState(channel?.rate_limit_rpm?.toString() ?? '')
@@ -70,13 +45,6 @@ export function ChannelForm({ channel, onSubmit, onCancel }: ChannelFormProps) {
   const [concurrency, setConcurrency] = useState(channel?.concurrency?.toString() ?? '10')
   const [timeoutSecs, setTimeoutSecs] = useState(channel?.timeout_secs?.toString() ?? '300')
   const [maxConcurrency, setMaxConcurrency] = useState(channel?.max_concurrency?.toString() ?? '0')
-  const [customHeaders, setCustomHeaders] = useState<CustomHeader[]>(channel?.custom_headers ?? [])
-  // extras 编辑：字符串形式以便 textarea 编辑，提交时再 parse
-  const [extrasRaw, setExtrasRaw] = useState(() => {
-    if (!channel?.extras) return ''
-    return JSON.stringify(channel.extras, null, 2)
-  })
-  const [extrasError, setExtrasError] = useState('')
   // Detect 状态
   const [detecting, setDetecting] = useState(false)
   const [detectResult, setDetectResult] = useState<import('@/api/types').DetectResponse | null>(null)
@@ -131,7 +99,7 @@ export function ChannelForm({ channel, onSubmit, onCancel }: ChannelFormProps) {
       const data: CreateChannelRequest = {
         name,
         api_keys: apiKeys.filter((k) => k.key.trim()).map(k => ({ key: k.key, note: k.note, enabled: k.enabled })),
-        endpoints: endpoints.filter((ep) => ep.base_url.trim()).map(ep => ({ type: ep.type, base_url: ep.base_url, enabled: ep.enabled })),
+        endpoints: endpoints.filter((ep) => ep.base_url.trim()).map(ep => ({ type: ep.type, base_url: ep.base_url, enabled: ep.enabled, headers: (ep.headers ?? []).filter(h => h.key.trim()) })),
         models,
         enabled,
         failure_threshold: parseInt(failureThreshold) || 3,
@@ -139,28 +107,10 @@ export function ChannelForm({ channel, onSubmit, onCancel }: ChannelFormProps) {
         concurrency: parseInt(concurrency) || 10,
         timeout_secs: parseInt(timeoutSecs) || 300,
         max_concurrency: parseInt(maxConcurrency) || 0,
-        custom_headers: customHeaders.filter((h) => h.key.trim()),
       }
 
       if (rateLimitRpm) data.rate_limit_rpm = parseInt(rateLimitRpm)
       if (rateLimitTpm) data.rate_limit_tpm = parseInt(rateLimitTpm)
-
-      // 解析 extras JSON
-      const trimmedExtras = extrasRaw.trim()
-      if (trimmedExtras) {
-        try {
-          const parsed = JSON.parse(trimmedExtras)
-          if (typeof parsed !== 'object' || Array.isArray(parsed) || parsed === null) {
-            setExtrasError('extras 必须是 JSON 对象')
-            return
-          }
-          data.extras = parsed as Record<string, unknown>
-          setExtrasError('')
-        } catch (e) {
-          setExtrasError(`extras JSON 解析失败: ${e instanceof Error ? e.message : '未知错误'}`)
-          return
-        }
-      }
 
       await onSubmit(data)
     } finally {
@@ -188,14 +138,19 @@ export function ChannelForm({ channel, onSubmit, onCancel }: ChannelFormProps) {
 
   const applyDetectedRecommendations = () => {
     if (!detectResult) return
-    // 合并到现有 extras
-    // 检测 API 返回的 recommendations 是 dot-notation 扁平 key（如 "thinking.extract_tags"），
-    // 需要展开为嵌套对象（{thinking: {extract_tags: true}}），与后端解析逻辑对齐
-    const current: Record<string, unknown> = extrasRaw.trim()
-      ? (() => { try { return JSON.parse(extrasRaw) } catch { return {} } })()
-      : {}
-    const merged = deepMerge(current, expandDotKeys(detectResult.recommendations))
-    setExtrasRaw(JSON.stringify(merged, null, 2))
+    // 检测推荐的 thinking.* 应用到所有启用端点的 extras.thinking
+    const thinking: Record<string, boolean> = {}
+    for (const [k, v] of Object.entries(detectResult.recommendations)) {
+      if (k.startsWith('thinking.')) thinking[k.slice('thinking.'.length)] = v
+    }
+    if (Object.keys(thinking).length > 0) {
+      setEndpoints(prev => prev.map(ep => {
+        if (ep.enabled === false) return ep
+        const extras = (ep.extras ?? {}) as Record<string, unknown>
+        const old = (extras.thinking as Record<string, unknown>) ?? {}
+        return { ...ep, extras: { ...extras, thinking: { ...old, ...thinking } } }
+      }))
+    }
     setDetectResult(null)
   }
 
@@ -207,11 +162,50 @@ export function ChannelForm({ channel, onSubmit, onCancel }: ChannelFormProps) {
     setApiKeys(newKeys)
   }
 
-  const addEndpoint = () => setEndpoints([...endpoints, { type: 'openai_chat', base_url: '', enabled: true }])
+  const addEndpoint = () => setEndpoints([...endpoints, { type: 'openai_chat', base_url: '', enabled: true, headers: [] }])
   const removeEndpoint = (index: number) => setEndpoints(endpoints.filter((_, i) => i !== index))
   const updateEndpoint = (index: number, field: keyof EndpointConfig, value: string | boolean) => {
     const newEndpoints = [...endpoints]
     newEndpoints[index] = { ...newEndpoints[index], [field]: value }
+    setEndpoints(newEndpoints)
+  }
+  // 端点级 headers 操作
+  const setEndpointHeaders = (index: number, headers: CustomHeader[]) => {
+    const newEndpoints = [...endpoints]
+    newEndpoints[index] = { ...newEndpoints[index], headers }
+    setEndpoints(newEndpoints)
+  }
+  const addEndpointHeader = (index: number) =>
+    setEndpointHeaders(index, [...(endpoints[index].headers ?? []), { key: '', value: '' }])
+  const updateEndpointHeader = (index: number, hi: number, field: 'key' | 'value', value: string) => {
+    const headers = [...(endpoints[index].headers ?? [])]
+    headers[hi] = { ...headers[hi], [field]: value }
+    setEndpointHeaders(index, headers)
+  }
+  const removeEndpointHeader = (index: number, hi: number) =>
+    setEndpointHeaders(index, (endpoints[index].headers ?? []).filter((_, j) => j !== hi))
+  /** 选 UA 模板：写入/覆盖该端点的 User-Agent header */
+  const applyUaTemplate = (index: number, ua: string) => {
+    if (!ua) return
+    const headers = [...(endpoints[index].headers ?? [])]
+    const idx = headers.findIndex((h) => h.key.toLowerCase() === 'user-agent')
+    const entry = { key: 'User-Agent', value: ua }
+    if (idx >= 0) headers[idx] = entry
+    else headers.push(entry)
+    setEndpointHeaders(index, headers)
+  }
+  // 端点 thinking 开关（extras.thinking.{extract_tags,fix_signature}）
+  const getEndpointThinking = (index: number, key: string): boolean => {
+    const extras = endpoints[index].extras as Record<string, unknown> | undefined
+    const thinking = extras?.thinking as Record<string, unknown> | undefined
+    return Boolean(thinking?.[key])
+  }
+  const setEndpointThinking = (index: number, key: string, value: boolean) => {
+    const ep = endpoints[index]
+    const extras = (ep.extras ?? {}) as Record<string, unknown>
+    const thinking = { ...((extras.thinking as Record<string, unknown>) ?? {}), [key]: value }
+    const newEndpoints = [...endpoints]
+    newEndpoints[index] = { ...ep, extras: { ...extras, thinking } }
     setEndpoints(newEndpoints)
   }
 
@@ -249,37 +243,99 @@ export function ChannelForm({ channel, onSubmit, onCancel }: ChannelFormProps) {
           </Button>
         </div>
         {endpoints.map((ep, index) => (
-          <div key={index} className="flex gap-2 items-center">
-            <select
-              value={ep.type}
-              onChange={(e) => updateEndpoint(index, 'type', e.target.value)}
-              className="input w-40"
-            >
-              {ENDPOINT_TYPES.map((t) => (
-                <option key={t} value={t}>{ENDPOINT_LABELS[t]}</option>
-              ))}
-            </select>
-            <input
-              type="text"
-              value={ep.base_url}
-              onChange={(e) => updateEndpoint(index, 'base_url', e.target.value)}
-              className="input flex-1"
-              placeholder="https://api.openai.com/v1"
-            />
-            <label className="flex items-center gap-1 text-xs text-muted-foreground whitespace-nowrap cursor-pointer">
+          <div key={index} className="space-y-3 rounded-xl border bg-muted/20 p-4">
+            <div className="flex gap-2 items-center">
+              <select
+                value={ep.type}
+                onChange={(e) => updateEndpoint(index, 'type', e.target.value)}
+                className="input w-44"
+              >
+                {ENDPOINT_TYPES.map((t) => (
+                  <option key={t} value={t}>{ENDPOINT_LABELS[t]}</option>
+                ))}
+              </select>
               <input
-                type="checkbox"
-                checked={ep.enabled !== false}
-                onChange={(e) => updateEndpoint(index, 'enabled', e.target.checked)}
-                className="rounded"
+                type="text"
+                value={ep.base_url}
+                onChange={(e) => updateEndpoint(index, 'base_url', e.target.value)}
+                className="input flex-1"
+                placeholder="https://api.openai.com/v1"
               />
-              启用
-            </label>
-            {endpoints.length > 1 && (
-              <Button type="button" variant="ghost" size="icon" onClick={() => removeEndpoint(index)}>
-                <Trash2 className="h-4 w-4" />
-              </Button>
-            )}
+              <label className="flex items-center gap-1 text-xs text-muted-foreground whitespace-nowrap cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={ep.enabled !== false}
+                  onChange={(e) => updateEndpoint(index, 'enabled', e.target.checked)}
+                  className="rounded"
+                />
+                启用
+              </label>
+              {endpoints.length > 1 && (
+                <Button type="button" variant="ghost" size="icon" onClick={() => removeEndpoint(index)}>
+                  <Trash2 className="h-4 w-4" />
+                </Button>
+              )}
+            </div>
+            <div className="space-y-2 pl-1">
+              <div className="flex items-center gap-2">
+                <span className="w-12 shrink-0 text-xs font-medium text-muted-foreground">请求头</span>
+                <select
+                  value=""
+                  onChange={(e) => applyUaTemplate(index, e.target.value)}
+                  className="input w-48 text-sm"
+                >
+                  <option value="">选择 UA 模板...</option>
+                  {UA_TEMPLATES.map((t) => (
+                    <option key={t.value} value={t.value}>{t.label}</option>
+                  ))}
+                </select>
+                <Button type="button" variant="outline" size="sm" onClick={() => addEndpointHeader(index)}>
+                  <Plus className="h-4 w-4 mr-1" /> 自定义 Header
+                </Button>
+              </div>
+              {(ep.headers ?? []).map((h, hi) => (
+                <div key={hi} className="flex gap-2">
+                  <input
+                    type="text"
+                    value={h.key}
+                    onChange={(e) => updateEndpointHeader(index, hi, 'key', e.target.value)}
+                    className="input w-40 shrink-0 text-sm"
+                    placeholder="Header 名称"
+                  />
+                  <input
+                    type="text"
+                    value={h.value}
+                    onChange={(e) => updateEndpointHeader(index, hi, 'value', e.target.value)}
+                    className="input min-w-0 flex-1 text-sm"
+                    placeholder="Header 值"
+                  />
+                  <Button type="button" variant="ghost" size="icon" onClick={() => removeEndpointHeader(index, hi)}>
+                    <Trash2 className="h-4 w-4" />
+                  </Button>
+                </div>
+              ))}
+            </div>
+            {/* thinking 开关（extras.thinking） */}
+            <div className="flex flex-wrap items-center gap-x-5 gap-y-2 pl-1 pt-3 mt-1 border-t border-border/60 text-xs text-muted-foreground">
+              <label className="flex items-center gap-1 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={getEndpointThinking(index, 'extract_tags')}
+                  onChange={(e) => setEndpointThinking(index, 'extract_tags', e.target.checked)}
+                  className="rounded"
+                />
+                抽取 &lt;think/&gt; 标签
+              </label>
+              <label className="flex items-center gap-1 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={getEndpointThinking(index, 'fix_signature')}
+                  onChange={(e) => setEndpointThinking(index, 'fix_signature', e.target.checked)}
+                  className="rounded"
+                />
+                修复 GLM signature
+              </label>
+            </div>
           </div>
         ))}
       </section>
@@ -413,53 +469,13 @@ export function ChannelForm({ channel, onSubmit, onCancel }: ChannelFormProps) {
         </div>
       </section>
 
-      {/* 自定义请求头 */}
-      <section className="space-y-3">
-        <div className="flex items-center justify-between">
-          <h3 className="text-sm font-medium text-muted-foreground">自定义请求头</h3>
-          <Button type="button" variant="outline" size="sm" onClick={() => setCustomHeaders([...customHeaders, { key: '', value: '' }])}>
-            <Plus className="h-4 w-4 mr-1" /> 添加
-          </Button>
-        </div>
-        {customHeaders.map((h, i) => (
-          <div key={i} className="flex gap-2">
-            <input
-              type="text"
-              value={h.key}
-              onChange={(e) => {
-                const updated = [...customHeaders]
-                updated[i] = { ...updated[i], key: e.target.value }
-                setCustomHeaders(updated)
-              }}
-              className="input w-40"
-              placeholder="Header 名称"
-            />
-            <input
-              type="text"
-              value={h.value}
-              onChange={(e) => {
-                const updated = [...customHeaders]
-                updated[i] = { ...updated[i], value: e.target.value }
-                setCustomHeaders(updated)
-              }}
-              className="input flex-1"
-              placeholder="Header 值"
-            />
-            <Button type="button" variant="ghost" size="icon" onClick={() => setCustomHeaders(customHeaders.filter((_, j) => j !== i))}>
-              <Trash2 className="h-4 w-4" />
-            </Button>
-          </div>
-        ))}
-      </section>
-
-      {/* 扩展设置（extras） */}
+      {/* 思维链检测（thinking 配置已移至各端点卡片） */}
       <section className="space-y-3">
         <div className="flex items-center justify-between">
           <div>
-            <h3 className="text-sm font-medium text-muted-foreground">扩展设置（extras）</h3>
+            <h3 className="text-sm font-medium text-muted-foreground">思维链检测</h3>
             <p className="text-xs text-muted-foreground mt-1">
-              JSON 自由格式。当前支持 thinking.extract_tags（抽取 &lt;think/&gt; 标签）和
-              thinking.fix_signature（修复 GLM-style signature 位置）。
+              检测上游 thinking 行为，推荐结果可一键应用到各启用端点。具体 thinking.extract_tags / fix_signature 开关在各端点卡片内配置。
             </p>
           </div>
           {channel && (
@@ -475,17 +491,6 @@ export function ChannelForm({ channel, onSubmit, onCancel }: ChannelFormProps) {
             </Button>
           )}
         </div>
-        <textarea
-          value={extrasRaw}
-          onChange={(e) => {
-            setExtrasRaw(e.target.value)
-            setExtrasError('')
-          }}
-          className={`input font-mono text-sm ${extrasError ? 'border-red-500' : ''}`}
-          rows={5}
-          placeholder='{"thinking": {"extract_tags": true, "fix_signature": false}}'
-        />
-        {extrasError && <p className="text-xs text-red-500">{extrasError}</p>}
 
         {detectError && (
           <p className="text-xs text-red-500">检测失败：{detectError}</p>

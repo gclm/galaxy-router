@@ -57,7 +57,6 @@ pub async fn test_channel(
             endpoint,
             &api_key.key,
             &body,
-            Some(&channel.custom_headers),
             req.user_agent.as_deref(),
         )
         .await;
@@ -109,7 +108,7 @@ pub async fn test_channel(
             }
         }
 
-        req_builder = inject_custom_headers(req_builder, &channel.custom_headers);
+        req_builder = inject_custom_headers(req_builder, &endpoint.headers);
 
         if let Some(ref ua) = req.user_agent
             && !ua.is_empty()
@@ -223,7 +222,6 @@ pub async fn detect_channel_quirks(
     let endpoint_results: Vec<EndpointDetection> = {
         let probes = endpoints.into_iter().map(|endpoint| {
             let client = &state.http_client;
-            let channel = &channel;
             let api_key = api_key.key.clone();
             let model = model.clone();
             async move {
@@ -247,7 +245,6 @@ pub async fn detect_channel_quirks(
                     endpoint,
                     api_key.as_str(),
                     &body,
-                    Some(channel.custom_headers.as_slice()),
                     None,
                 )
                 .await;
@@ -446,7 +443,6 @@ async fn probe_endpoint_raw(
     endpoint: &EndpointConfig,
     api_key: &str,
     body: &serde_json::Value,
-    custom_headers: Option<&[CustomHeader]>,
     user_agent: Option<&str>,
 ) -> (
     Result<String, String>,
@@ -482,9 +478,7 @@ async fn probe_endpoint_raw(
         }
     }
 
-    if let Some(headers) = custom_headers {
-        req_builder = inject_custom_headers(req_builder, headers);
-    }
+    req_builder = inject_custom_headers(req_builder, &endpoint.headers);
 
     if let Some(ua) = user_agent
         && !ua.is_empty()

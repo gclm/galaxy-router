@@ -280,7 +280,9 @@ pub(crate) async fn save_request_record(
         }
     };
 
-    let _ = state.stats_recorder.record_request(record).await;
+    if let Err(e) = state.stats_recorder.record_request(record).await {
+        tracing::error!("Failed to save usage log: {e}");
+    }
     record_rate_limit_tokens(&state.rate_limiter, api_key_id, attempts).await;
 }
 

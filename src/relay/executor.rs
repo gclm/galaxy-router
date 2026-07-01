@@ -5,7 +5,7 @@ use crate::api::handlers::admin::channels::EndpointType;
 use crate::metrics::attempt::AttemptStats;
 use crate::metrics::usage::{calculate_cost, resolve_non_stream_usage};
 use crate::relay::converter::RelayPipeline;
-use crate::relay::prepare::prepare_proxy_request;
+use crate::relay::prepare::{estimate_request_input_tokens, failed_attempt_stats, prepare_proxy_request};
 use crate::relay::run::{
     RelayAttemptError, RelayAttemptExecutor, RelayAttemptResult, RelayCandidate, RelayRequest,
 };
@@ -425,8 +425,25 @@ impl ProxyRelayExecutor {
             .headers(prepared.headers)
             .body(prepared.body)
             .send()
-            .await
-            .map_err(|e| ProxyError::RequestError(e.to_string()))?;
+            .await;
+        let response = match response {
+            Ok(r) => r,
+            Err(e) => {
+                // 网络层失败也要记录 attempt，否则 usage_logs 会丢这条请求的 channel/latency
+                attempts.push(failed_attempt_stats(
+                    &self.body,
+                    &prepared.channel_id,
+                    &prepared.target_model,
+                    &prepared.upstream_endpoint,
+                    prepared.needs_conversion,
+                    start_time.elapsed().as_millis() as i64,
+                    502,
+                    e.to_string(),
+                    upstream_key_hint,
+                ));
+                return Err(ProxyError::RequestError(e.to_string()));
+            }
+        };
 
         let latency_ms = start_time.elapsed().as_millis() as i64;
         let status = response.status();
@@ -443,7 +460,12 @@ impl ProxyRelayExecutor {
             status_u16,
         );
         let cost = calculate_cost(&self.state.model_registry, &prepared.target_model, usage).await;
-        let input_tokens = usage.input_tokens;
+        // 失败请求若上游未返回 usage，按请求体估算 input（output 保持 0，未生成）
+        let input_tokens = if !status.is_success() && usage.input_tokens == 0 {
+            estimate_request_input_tokens(&self.body, &prepared.target_model)
+        } else {
+            usage.input_tokens
+        };
         let output_tokens = usage.output_tokens;
         let cache_read = usage.cache_read;
         let cache_creation = usage.cache_creation;

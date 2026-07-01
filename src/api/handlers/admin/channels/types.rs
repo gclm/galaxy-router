@@ -15,8 +15,6 @@ pub(crate) struct ChannelRow {
     pub(crate) concurrency: i32,
     pub(crate) timeout_secs: i32,
     pub(crate) max_concurrency: i32,
-    pub(crate) custom_headers: String,
-    pub(crate) extras: String,
     pub(crate) enabled: bool,
     pub(crate) created_at: String,
     pub(crate) updated_at: String,
@@ -89,6 +87,12 @@ pub struct EndpointConfig {
     pub base_url: String,
     #[serde(default = "default_true")]
     pub enabled: bool,
+    /// 端点级自定义请求头（insert 覆盖客户端，用于按协议配不同 User-Agent 等）
+    #[serde(default)]
+    pub headers: Vec<CustomHeader>,
+    /// 端点级扩展配置（thinking.extract_tags/fix_signature 等，按端点配）
+    #[serde(default)]
+    pub extras: Option<serde_json::Map<String, serde_json::Value>>,
 }
 
 /// 上游 API Key
@@ -127,13 +131,6 @@ pub struct Channel {
     pub concurrency: i32,
     pub timeout_secs: i32,
     pub max_concurrency: i32,
-    pub custom_headers: Vec<CustomHeader>,
-    /// 扩展字段（JSON 自由格式）
-    /// 当前用法：
-    /// - thinking.extract_tags: bool 抽取 `<think/>` 标签到 `reasoning_content`
-    /// - thinking.fix_signature: bool 修复 GLM-style signature 位置
-    #[serde(default)]
-    pub extras: Option<serde_json::Map<String, serde_json::Value>>,
     pub enabled: bool,
     pub created_at: String,
     pub updated_at: String,
@@ -153,8 +150,6 @@ pub struct CreateChannelRequest {
     pub concurrency: Option<i32>,
     pub timeout_secs: Option<i32>,
     pub max_concurrency: Option<i32>,
-    pub custom_headers: Option<Vec<CustomHeader>>,
-    pub extras: Option<serde_json::Map<String, serde_json::Value>>,
     pub enabled: Option<bool>,
 }
 
@@ -172,8 +167,6 @@ pub struct UpdateChannelRequest {
     pub concurrency: Option<i32>,
     pub timeout_secs: Option<i32>,
     pub max_concurrency: Option<i32>,
-    pub custom_headers: Option<Vec<CustomHeader>>,
-    pub extras: Option<serde_json::Map<String, serde_json::Value>>,
     pub enabled: Option<bool>,
 }
 

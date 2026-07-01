@@ -1,7 +1,7 @@
 pub use crate::scheduler::selector::{GroupInfo, GroupItemInfo};
 
 use crate::api::handlers::admin::channels::{
-    CustomHeader, EndpointConfig, UpstreamApiKey, parse_api_keys,
+    EndpointConfig, UpstreamApiKey, parse_api_keys,
 };
 use crate::metrics::model::ModelRegistry;
 use crate::metrics::recorder::StatsRecorder;
@@ -186,8 +186,8 @@ impl ProxyState {
         }
 
         // 2. 缓存未命中，查询数据库
-        let result = sqlx::query_as::<_, (String, String, String, String, String, String, i32, i32, String, i32, i32)>(
-            "SELECT id, name, api_keys, endpoints, models, custom_headers, COALESCE(timeout_secs, 300), COALESCE(max_concurrency, 0), extras, COALESCE(failure_threshold, 3), COALESCE(blacklist_minutes, 10) FROM channels WHERE id = ? AND enabled = 1"
+        let result = sqlx::query_as::<_, (String, String, String, String, String, i32, i32, i32, i32)>(
+            "SELECT id, name, api_keys, endpoints, models, COALESCE(timeout_secs, 300), COALESCE(max_concurrency, 0), COALESCE(failure_threshold, 3), COALESCE(blacklist_minutes, 10) FROM channels WHERE id = ? AND enabled = 1"
         )
         .bind(channel_id)
         .fetch_optional(&self.pool)
@@ -200,10 +200,8 @@ impl ProxyState {
             api_keys_str,
             endpoints_str,
             models_str,
-            custom_headers_str,
             timeout_secs,
             max_concurrency,
-            extras_str,
             failure_threshold,
             blacklist_minutes,
         ) = result.ok_or_else(|| ProxyError::ChannelNotFound("渠道不存在或已禁用".to_string()))?;
@@ -212,10 +210,6 @@ impl ProxyState {
         let endpoints: Vec<EndpointConfig> =
             serde_json::from_str(&endpoints_str).unwrap_or_default();
         let models = parse_models(&models_str);
-        let custom_headers: Vec<CustomHeader> =
-            serde_json::from_str(&custom_headers_str).unwrap_or_default();
-        let extras: Option<serde_json::Map<String, serde_json::Value>> =
-            serde_json::from_str(&extras_str).ok();
 
         let channel = ChannelInfo {
             id,
@@ -223,10 +217,8 @@ impl ProxyState {
             api_keys,
             endpoints,
             models,
-            custom_headers,
             timeout_secs: timeout_secs as u64,
             max_concurrency: max_concurrency as u32,
-            extras,
             failure_threshold: failure_threshold as u64,
             blacklist_minutes: blacklist_minutes as i64,
         };
