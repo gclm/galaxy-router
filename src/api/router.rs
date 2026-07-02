@@ -122,13 +122,13 @@ pub async fn create_router(
             "/channels",
             Router::new()
                 .route("/", get(channels::list).post(channels::create))
+                .route("/test-endpoint", post(channels::test_endpoint))
                 .route(
                     "/{id}",
                     get(channels::get)
                         .put(channels::update)
                         .delete(channels::delete),
                 )
-                .route("/{id}/test-endpoint", post(channels::test_endpoint))
                 .with_state(channel_state),
         )
         .nest(

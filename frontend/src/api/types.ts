@@ -117,8 +117,10 @@ export interface FetchModelsRequest {
 
 export interface TestEndpointRequest {
   endpoint_type: string
-  model: string
+  base_url: string
   api_key: string
+  model: string
+  headers?: CustomHeader[]
   user_agent?: string
 }
 
@@ -127,6 +129,8 @@ export interface TestEndpointResponse {
   latency_ms: number
   time_to_first_token_ms?: number
   output_content?: string
+  /** 思维链内容（reasoning_content/thinking block，与正文分开） */
+  reasoning?: string
   error?: string
   prompt_tokens?: number
   completion_tokens?: number

@@ -1,11 +1,6 @@
-use axum::{
-    Json,
-    extract::{Path, State},
-    http::StatusCode,
-};
+use axum::{Json, extract::State, http::StatusCode};
 use reqwest::Client;
 
-use super::crud::get_channel_by_id;
 use super::types::{
     ChannelState, CustomHeader, EndpointConfig, EndpointType, TestEndpointRequest,
     TestEndpointResponse,
@@ -19,7 +14,6 @@ use crate::error::app::{ApiError, ApiResponse};
 /// - 思维链诊断（响应是否含 `<think>` 标签 + 样本）—— 只检测不应用
 pub async fn test_endpoint(
     State(state): State<ChannelState>,
-    Path(id): Path<String>,
     Json(req): Json<TestEndpointRequest>,
 ) -> Result<Json<ApiResponse<TestEndpointResponse>>, (StatusCode, Json<ApiError>)> {
     let endpoint_type = parse_protocol(&req.endpoint_type)
@@ -29,22 +23,18 @@ pub async fn test_endpoint(
         ApiError::bad_request(format!("端点类型 {} 不支持测试", req.endpoint_type))
     })?;
 
-    let channel = get_channel_by_id(&state.pool, &id, state.timezone_offset).await?;
-    let api_key = channel
-        .api_keys
-        .iter()
-        .find(|k| k.key == req.api_key && k.enabled)
-        .ok_or_else(|| ApiError::bad_request("指定的 API Key 不存在或已禁用"))?;
-    let endpoint = channel
-        .endpoints
-        .iter()
-        .find(|e| e.endpoint_type == endpoint_type && e.enabled)
-        .ok_or_else(|| ApiError::bad_request(format!("渠道没有启用的 {} 端点", req.endpoint_type)))?;
+    // 用请求体参数构造临时 endpoint（不依赖已保存渠道，新增/已存渠道都可测）
+    let endpoint = EndpointConfig {
+        endpoint_type: endpoint_type.clone(),
+        base_url: req.base_url.clone(),
+        enabled: true,
+        headers: req.headers.clone(),
+    };
 
-    let (result, latency_ms, ttft, pt, ct) = probe_endpoint_raw(
+    let (result, reasoning, latency_ms, ttft, pt, ct) = probe_endpoint_raw(
         &state.http_client,
-        endpoint,
-        &api_key.key,
+        &endpoint,
+        &req.api_key,
         &body,
         req.user_agent.as_deref(),
     )
@@ -66,6 +56,7 @@ pub async fn test_endpoint(
         latency_ms,
         time_to_first_token_ms: ttft,
         output_content: content,
+        reasoning: if reasoning.is_empty() { None } else { Some(reasoning) },
         error,
         prompt_tokens: pt,
         completion_tokens: ct,
@@ -99,7 +90,7 @@ fn build_probe_payload(
             serde_json::json!({
                 "model": model,
                 "messages": [{"role": "user", "content": DETECT_PROMPT}],
-                "max_tokens": 200,
+                "max_tokens": 2048,
                 "stream": true,
                 // OpenAI 标准 reasoning 控制（o-series；非 reasoning 模型忽略，不报错）
                 "reasoning_effort": "medium"
@@ -110,7 +101,7 @@ fn build_probe_payload(
             serde_json::json!({
                 "model": model,
                 "input": DETECT_PROMPT,
-                "max_output_tokens": 200,
+                "max_output_tokens": 2048,
                 "stream": true,
                 // Responses API 标准 reasoning 控制
                 "reasoning": {"effort": "medium"}
@@ -168,6 +159,7 @@ async fn probe_endpoint_raw(
     user_agent: Option<&str>,
 ) -> (
     Result<String, String>,
+    String,
     u64,
     Option<u64>,
     Option<u64>,
@@ -214,6 +206,7 @@ async fn probe_endpoint_raw(
         Err(e) => {
             return (
                 Err(format!("请求上游失败: {}", e)),
+                String::new(),
                 start.elapsed().as_millis() as u64,
                 None,
                 None,
@@ -227,6 +220,7 @@ async fn probe_endpoint_raw(
         let text = resp.text().await.unwrap_or_default();
         return (
             Err(format!("上游返回 HTTP {}: {}", status, text)),
+            String::new(),
             start.elapsed().as_millis() as u64,
             None,
             None,
@@ -256,6 +250,7 @@ async fn probe_endpoint_raw(
     if let Some(msg) = read_err {
         return (
             Err(msg),
+            String::new(),
             start.elapsed().as_millis() as u64,
             None,
             None,
@@ -266,6 +261,7 @@ async fn probe_endpoint_raw(
     // 解析累积的响应文本：提取 content / ttft / usage
     let mut first_token_ms: Option<u64> = None;
     let mut full_content = String::new();
+    let mut reasoning_buf = String::new();
     let mut prompt_tokens: Option<u64> = None;
     let mut completion_tokens: Option<u64> = None;
     let mut event_type = "";
@@ -309,31 +305,47 @@ async fn probe_endpoint_raw(
                     completion_tokens = Some(v);
                 }
 
-                let delta = match endpoint.endpoint_type {
-                    EndpointType::OpenAiChat => json["choices"][0]["delta"]["content"].as_str(),
-                    EndpointType::OpenAiResponse => {
+                let (content_delta, reasoning_delta): (Option<&str>, Option<&str>) = match endpoint
+                    .endpoint_type
+                {
+                    EndpointType::OpenAiChat => (
+                        json["choices"][0]["delta"]["content"].as_str(),
+                        json["choices"][0]["delta"]["reasoning_content"].as_str(),
+                    ),
+                    EndpointType::OpenAiResponse => (
                         if event_type == "response.output_text.delta" {
                             json["delta"].as_str()
                         } else {
                             None
-                        }
-                    }
-                    EndpointType::Anthropic => json["delta"]["text"].as_str(),
-                    _ => json["delta"]
-                        .as_str()
-                        .or_else(|| json["choices"][0]["delta"]["content"].as_str()),
+                        },
+                        None,
+                    ),
+                    EndpointType::Anthropic => (
+                        json["delta"]["text"].as_str(),
+                        json["delta"]["thinking"].as_str(),
+                    ),
+                    _ => (
+                        json["delta"]
+                            .as_str()
+                            .or_else(|| json["choices"][0]["delta"]["content"].as_str()),
+                        None,
+                    ),
                 };
-                if let Some(d) = delta {
+                if let Some(d) = content_delta {
                     full_content.push_str(d);
+                }
+                if let Some(d) = reasoning_delta {
+                    reasoning_buf.push_str(d);
                 }
             }
         }
     }
 
     let total_ms = start.elapsed().as_millis() as u64;
-    if full_content.is_empty() {
+    if full_content.is_empty() && reasoning_buf.is_empty() {
         (
             Err("流式响应无内容".to_string()),
+            String::new(),
             total_ms,
             first_token_ms,
             prompt_tokens,
@@ -342,6 +354,7 @@ async fn probe_endpoint_raw(
     } else {
         (
             Ok(full_content),
+            reasoning_buf,
             total_ms,
             first_token_ms,
             prompt_tokens,

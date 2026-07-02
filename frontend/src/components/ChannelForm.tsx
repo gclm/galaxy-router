@@ -1,9 +1,9 @@
 import { useState } from 'react'
-import type { Channel, CreateChannelRequest, CustomHeader, EndpointConfig, EndpointType, TestEndpointResponse, UpstreamApiKey } from '@/api/types'
+import type { Channel, CreateChannelRequest, CustomHeader, EndpointConfig, EndpointType, UpstreamApiKey } from '@/api/types'
 import { ENDPOINT_LABELS } from '@/api/types'
 import { channelsApi } from '@/api/channels'
 import { Button } from '@/components/ui/button'
-import { Plus, Trash2, RefreshCw, X, FlaskConical } from 'lucide-react'
+import { Plus, Trash2, RefreshCw, X } from 'lucide-react'
 
 interface ChannelFormProps {
   channel?: Channel
@@ -50,8 +50,6 @@ export function ChannelForm({ channel, onSubmit, onCancel }: ChannelFormProps) {
   const [fetchingModels, setFetchingModels] = useState(false)
   const [fetchError, setFetchError] = useState('')
   const [manualModelInput, setManualModelInput] = useState('')
-  const [endpointTesting, setEndpointTesting] = useState<Record<number, boolean>>({})
-  const [endpointResults, setEndpointResults] = useState<Record<number, TestEndpointResponse>>({})
 
   const handleFetchModels = async () => {
     const validEndpoints = endpoints.filter(ep => ep.base_url.trim() && ep.enabled !== false)
@@ -156,46 +154,6 @@ export function ChannelForm({ channel, onSubmit, onCancel }: ChannelFormProps) {
     else headers.push(entry)
     setEndpointHeaders(index, headers)
   }
-
-  /** 端点测试：调 testEndpoint 探测连通性 + 思维链诊断（结果仅展示，不驱动配置） */
-  const testEndpoint = async (index: number) => {
-    if (!channel?.id) {
-      alert('请先保存渠道后再测试')
-      return
-    }
-    const ep = endpoints[index]
-    const apiKey = apiKeys.find((k) => k.enabled !== false)?.key
-    const model = models[0]
-    if (!apiKey) {
-      alert('没有可用的 API Key')
-      return
-    }
-    if (!model) {
-      alert('请先添加模型')
-      return
-    }
-    setEndpointTesting((prev) => ({ ...prev, [index]: true }))
-    try {
-      const res = await channelsApi.testEndpoint(channel.id, {
-        endpoint_type: ep.type,
-        model,
-        api_key: apiKey,
-      })
-      setEndpointResults((prev) => ({ ...prev, [index]: res }))
-    } catch (e: unknown) {
-      setEndpointResults((prev) => ({
-        ...prev,
-        [index]: {
-          success: false,
-          latency_ms: 0,
-          error: e instanceof Error ? e.message : '测试失败',
-          thinking_detected: false,
-        },
-      }))
-    } finally {
-      setEndpointTesting((prev) => ({ ...prev, [index]: false }))
-    }
-  }
   return (
     <form onSubmit={handleSubmit} className="space-y-5 px-1">
       {/* 基本信息 */}
@@ -257,18 +215,6 @@ export function ChannelForm({ channel, onSubmit, onCancel }: ChannelFormProps) {
                 />
                 启用
               </label>
-              {channel && (
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon"
-                  onClick={() => testEndpoint(index)}
-                  disabled={endpointTesting[index]}
-                  title="测试端点"
-                >
-                  <FlaskConical className={`h-4 w-4 ${endpointTesting[index] ? 'animate-spin' : ''}`} />
-                </Button>
-              )}
               {endpoints.length > 1 && (
                 <Button type="button" variant="ghost" size="icon" onClick={() => removeEndpoint(index)}>
                   <Trash2 className="h-4 w-4" />
@@ -314,34 +260,6 @@ export function ChannelForm({ channel, onSubmit, onCancel }: ChannelFormProps) {
                 </div>
               ))}
             </div>
-            {endpointResults[index] && (
-              <div className="rounded-md border bg-background p-3 space-y-1 text-xs">
-                {endpointResults[index]!.success ? (
-                  <div className="flex flex-wrap items-center gap-3 text-green-600">
-                    <span>✓ 成功</span>
-                    <span className="text-muted-foreground">{endpointResults[index]!.latency_ms}ms</span>
-                    {endpointResults[index]!.time_to_first_token_ms != null && (
-                      <span className="text-muted-foreground">TTFT {endpointResults[index]!.time_to_first_token_ms}ms</span>
-                    )}
-                    {endpointResults[index]!.prompt_tokens != null && endpointResults[index]!.completion_tokens != null && (
-                      <span className="text-muted-foreground">{endpointResults[index]!.prompt_tokens}→{endpointResults[index]!.completion_tokens} tok</span>
-                    )}
-                  </div>
-                ) : (
-                  <div className="text-red-500">✗ {endpointResults[index]!.error || '测试失败'}</div>
-                )}
-                {endpointResults[index]!.thinking_detected ? (
-                  <div className="text-muted-foreground">
-                    <span>检测到思维链（&lt;think&gt; 标签）</span>
-                    {endpointResults[index]!.thinking_sample && (
-                      <pre className="mt-1 bg-muted p-1 rounded overflow-x-auto whitespace-pre-wrap break-all">{endpointResults[index]!.thinking_sample}</pre>
-                    )}
-                  </div>
-                ) : endpointResults[index]!.success ? (
-                  <div className="text-muted-foreground/70">未检测到 &lt;think&gt; 标签</div>
-                ) : null}
-              </div>
-            )}
           </div>
         ))}
       </section>

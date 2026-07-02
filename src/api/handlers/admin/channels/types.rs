@@ -176,12 +176,15 @@ pub struct ChannelState {
     pub timezone_offset: i32,
 }
 
-/// 端点测试请求
+/// 端点测试请求（不依赖已保存渠道：base_url/headers/api_key/model 都从请求体传，新增渠道也能测）
 #[derive(Debug, Deserialize)]
 pub struct TestEndpointRequest {
     pub endpoint_type: String,
-    pub model: String,
+    pub base_url: String,
     pub api_key: String,
+    pub model: String,
+    #[serde(default)]
+    pub headers: Vec<CustomHeader>,
     pub user_agent: Option<String>,
 }
 
@@ -194,6 +197,9 @@ pub struct TestEndpointResponse {
     pub time_to_first_token_ms: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub output_content: Option<String>,
+    /// 思维链内容（reasoning_content / thinking block，与正文分开）
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reasoning: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]

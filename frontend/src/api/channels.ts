@@ -35,6 +35,6 @@ export const channelsApi = {
   fetchModels: (data: FetchModelsRequest) =>
     apiClient.post<string[]>('/models/fetch', data),
 
-  testEndpoint: (id: string, data: TestEndpointRequest) =>
-    apiClient.post<TestEndpointResponse>(`/channels/${id}/test-endpoint`, data),
+  testEndpoint: (data: TestEndpointRequest) =>
+    apiClient.post<TestEndpointResponse>('/channels/test-endpoint', data),
 }
