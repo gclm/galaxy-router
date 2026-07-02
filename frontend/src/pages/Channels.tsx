@@ -298,6 +298,7 @@ export function Channels() {
             channel={editingChannel ?? undefined}
             onSubmit={editingChannel ? handleUpdate : handleCreate}
             onCancel={closeForm}
+            onTest={(ch) => setTestChannel(ch)}
           />
         </DialogContent>
       </Dialog>

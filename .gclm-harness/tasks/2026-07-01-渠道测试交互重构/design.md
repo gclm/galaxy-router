@@ -10,6 +10,7 @@ complexity: complex
 > **最终实现（2026-07-02）**，经历两轮：
 > - **Round 1（5304af6）**：删思维链运行时处理 + 端点卡片测试 + 修并发 bug
 > - **Round 2（e43a2b1，实测后调整）**：接口去 `channel.id` + 测试回列表 TestModelDialog + content/reasoning 分离 + max_tokens 2048
+> - **Round 3（本轮，未 commit）**：max_tokens 提至 4096（high effort 够）；ChannelForm 加测试入口（新建渠道不保存可测）
 >
 > **Round 2 起因**（实测发现）：① 端点卡片测试依赖 `channel.id`，**新增渠道（未保存）测不了**；② reasoning 模型（GLM/DeepSeek）thinking 走 `reasoning_content` 字段，probe 只提取 `content` → 「流式响应无内容」；③ `max_tokens:200` 太小，thinking 被截断、正文空。
 >
@@ -120,8 +121,8 @@ galaxy 原有两套思维链处理（端点级 `extras.thinking.{extract_tags, f
 |---|---|---|---|
 | 1 | `thinking_detected` 只检测塞 content 的 `<think>` 标签（MiniMax 类）；GLM/DeepSeek 走 reasoning 字段，其 thinking 由 `reasoning` 字段非空指示，`thinking_detected` 对它们是 false | 两套 thinking 指示并存（thinking_detected + reasoning 字段），略冗余 | 接受（用户认可） |
 | 2 | ~~OpenAiResponse reasoning 未提取~~ 已补（`response.reasoning_summary_text.delta` → reasoning 字段） | — | ✅ 已补（f9a9d3c） |
-| 3 | max_tokens 2048 对超长 thinking（reasoning_effort:high 或重 prompt）可能仍不够 | output_content 可能空（thinking 用完） | 实测 medium 够；不够再调 |
-| 4 | 新增渠道测试需先保存 | 测试入口在列表，不在 ChannelForm 表单 | 设计如此 |
+| 3 | ~~max_tokens 2048 不够 high effort~~ 已提至 4096（OpenAiChat/OpenAiResponse/Anthropic 统一；Anthropic budget 2048） | — | ✅ 已调（Round 3） |
+| 4 | ~~新增渠道测试需先保存~~ 已支持：ChannelForm 测试按钮用表单数据测（接口去 id，不保存） | — | ✅ 已支持（Round 3） |
 | 5 | `frontend/vite.config.ts` proxy 29088→8080（dev 调试） | 未 commit，工作区 modified | dev 配置，待定 |
 | 6 | `docs/design-client-config.md` + `docs/design-stats-refactor.md` | 违反「任务文档放 .gclm-harness/tasks/」约定 | 遗留，未处理 |
 | 7 | ~~plans/sessions 未 gitignore~~ 已加 `.gitignore` 规则 | — | ✅ 已加（f9a9d3c） |

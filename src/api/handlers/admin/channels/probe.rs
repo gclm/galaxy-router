@@ -90,7 +90,7 @@ fn build_probe_payload(
             serde_json::json!({
                 "model": model,
                 "messages": [{"role": "user", "content": DETECT_PROMPT}],
-                "max_tokens": 2048,
+                "max_tokens": 4096,
                 "stream": true,
                 // OpenAI 标准 reasoning 控制（o-series；非 reasoning 模型忽略，不报错）
                 "reasoning_effort": "medium"
@@ -101,7 +101,7 @@ fn build_probe_payload(
             serde_json::json!({
                 "model": model,
                 "input": DETECT_PROMPT,
-                "max_output_tokens": 2048,
+                "max_output_tokens": 4096,
                 "stream": true,
                 // Responses API 标准 reasoning 控制
                 "reasoning": {"effort": "medium"}
@@ -113,8 +113,8 @@ fn build_probe_payload(
                 "model": model,
                 "messages": [{"role": "user", "content": DETECT_PROMPT}],
                 // Anthropic 规则：budget_tokens 必须 < max_tokens（原代码 max 200 < budget 1024 违规）
-                "max_tokens": 2048,
-                "thinking": {"type": "enabled", "budget_tokens": 1024},
+                "max_tokens": 4096,
+                "thinking": {"type": "enabled", "budget_tokens": 2048},
                 "stream": true
             }),
             "/messages",

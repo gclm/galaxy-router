@@ -3,12 +3,13 @@ import type { Channel, CreateChannelRequest, CustomHeader, EndpointConfig, Endpo
 import { ENDPOINT_LABELS } from '@/api/types'
 import { channelsApi } from '@/api/channels'
 import { Button } from '@/components/ui/button'
-import { Plus, Trash2, RefreshCw, X } from 'lucide-react'
+import { Plus, Trash2, RefreshCw, X, FlaskConical } from 'lucide-react'
 
 interface ChannelFormProps {
   channel?: Channel
   onSubmit: (data: CreateChannelRequest) => Promise<void>
   onCancel: () => void
+  onTest?: (channel: Channel) => void
 }
 
 const ENDPOINT_TYPES: EndpointType[] = [
@@ -29,7 +30,7 @@ const UA_TEMPLATES: { label: string; value: string }[] = [
   { label: 'Continue', value: 'continue/0.9.0' },
 ]
 
-export function ChannelForm({ channel, onSubmit, onCancel }: ChannelFormProps) {
+export function ChannelForm({ channel, onSubmit, onCancel, onTest }: ChannelFormProps) {
   const [name, setName] = useState(channel?.name ?? '')
   const [apiKeys, setApiKeys] = useState<UpstreamApiKey[]>(
     channel?.api_keys?.map(k => typeof k === 'string' ? { key: k, note: '', enabled: true } : { key: k.key, note: k.note ?? '', enabled: k.enabled ?? true }) ?? [{ key: '', note: '', enabled: true }]
@@ -113,6 +114,25 @@ export function ChannelForm({ channel, onSubmit, onCancel }: ChannelFormProps) {
       setSubmitting(false)
     }
   }
+
+  /** 组装当前表单数据为 Channel（测试用，不需先保存） */
+  const buildTestChannel = (): Channel => ({
+    id: channel?.id ?? '',
+    name,
+    api_keys: apiKeys.filter((k) => k.key.trim()),
+    endpoints: endpoints.filter((ep) => ep.base_url.trim()),
+    models,
+    rate_limit_rpm: rateLimitRpm ? Number(rateLimitRpm) : null,
+    rate_limit_tpm: rateLimitTpm ? Number(rateLimitTpm) : null,
+    failure_threshold: Number(failureThreshold) || 3,
+    blacklist_minutes: Number(blacklistMinutes) || 5,
+    concurrency: Number(concurrency) || 10,
+    timeout_secs: Number(timeoutSecs) || 300,
+    max_concurrency: Number(maxConcurrency) || 0,
+    enabled,
+    created_at: channel?.created_at ?? '',
+    updated_at: channel?.updated_at ?? '',
+  })
 
   const addApiKey = () => setApiKeys([...apiKeys, { key: '', note: '', enabled: true }])
   const removeApiKey = (index: number) => setApiKeys(apiKeys.filter((_, i) => i !== index))
@@ -395,6 +415,11 @@ export function ChannelForm({ channel, onSubmit, onCancel }: ChannelFormProps) {
 
       {/* 操作按钮 */}
       <div className="flex justify-end gap-2 pt-2 border-t">
+        {onTest && (
+          <Button type="button" variant="outline" onClick={() => onTest(buildTestChannel())}>
+            <FlaskConical className="mr-2 h-4 w-4" /> 测试
+          </Button>
+        )}
         <Button type="button" variant="outline" onClick={onCancel}>取消</Button>
         <Button type="submit" disabled={submitting} className="btn-primary">
           {submitting ? '保存中...' : channel ? '更新' : '创建'}
