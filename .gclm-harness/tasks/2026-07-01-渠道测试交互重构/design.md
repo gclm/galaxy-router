@@ -123,10 +123,10 @@ galaxy 原有两套思维链处理（端点级 `extras.thinking.{extract_tags, f
 | 2 | ~~OpenAiResponse reasoning 未提取~~ 已补（`response.reasoning_summary_text.delta` → reasoning 字段） | — | ✅ 已补（f9a9d3c） |
 | 3 | ~~max_tokens 2048 不够 high effort~~ 已提至 4096（OpenAiChat/OpenAiResponse/Anthropic 统一；Anthropic budget 2048） | — | ✅ 已调（Round 3） |
 | 4 | ~~新增渠道测试需先保存~~ 已支持：ChannelForm 测试按钮用表单数据测（接口去 id，不保存） | — | ✅ 已支持（Round 3） |
-| 5 | `frontend/vite.config.ts` proxy 29088→8080（dev 调试） | 未 commit，工作区 modified | dev 配置，待定 |
-| 6 | `docs/design-client-config.md` + `docs/design-stats-refactor.md` | 违反「任务文档放 .gclm-harness/tasks/」约定 | 遗留，未处理 |
+| 5 | ~~vite.config.ts 未 commit~~ 已提交（proxy 29088→8080，dev 前端连 dev 后端） | — | ✅ 已提交 |
+| 6 | `docs/design-client-config.md` + `docs/design-stats-refactor.md` 是**新功能设计草案**（client-config / stats-refactor），非本任务遗留；交接文档另写，新会话判断是否实现 | — | 📋 待新会话判断 |
 | 7 | ~~plans/sessions 未 gitignore~~ 已加 `.gitignore` 规则 | — | ✅ 已加（f9a9d3c） |
-| 8 | P4-2「多端点并发测试」原场景已变 | 测试回列表后，并发是 TestModelDialog 批量测多模型（Promise.allSettled），不是多端点；增量读已修 keep-alive 超时，但批量并发未显式压测 | 建议手动压测一次 |
+| 8 | ~~P4-2 批量并发未压测~~ 已手动压测（用户验证通过，无误判） | — | ✅ 已验证 |
 
 ## 7. 可卸载清单
 
