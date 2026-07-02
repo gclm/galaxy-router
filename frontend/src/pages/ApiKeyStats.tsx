@@ -11,7 +11,7 @@ export function ApiKeyStats() {
   const [days, setDays] = useState(7)
 
   const { data, isLoading, refetch } = useStatsApiKeys(days)
-  const stats = data ?? []
+  const stats = useMemo(() => data ?? [], [data])
 
   const chartData = useMemo(() =>
     stats.map((s) => ({ name: s.api_key_name, value: s.request_count, cost: s.total_cost }))

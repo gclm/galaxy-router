@@ -36,9 +36,11 @@ export function useTableLoader<TItem, TExtra extends Record<string, unknown> = R
     defaultExtra = {} as TExtra,
   } = options
 
-  // 用 ref 存储 fetchFn，避免因引用变化触发无限循环
+  // 用 ref 存储 fetchFn，避免因引用变化触发无限循环；在 effect 中同步最新值（render 中写 ref 违反规则）
   const fetchFnRef = useRef(options.fetchFn)
-  fetchFnRef.current = options.fetchFn
+  useEffect(() => {
+    fetchFnRef.current = options.fetchFn
+  })
 
   const [data, setData] = useState<TItem[]>([])
   const [total, setTotal] = useState(0)
@@ -69,6 +71,7 @@ export function useTableLoader<TItem, TExtra extends Record<string, unknown> = R
     const controller = new AbortController()
     abortRef.current = controller
 
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- 数据加载 effect 的 loading 标记（fetch 开始）
     setLoading(true)
     fetchFnRef.current({
       page,
@@ -100,8 +103,10 @@ export function useTableLoader<TItem, TExtra extends Record<string, unknown> = R
     return () => controller.abort()
   }, [page, pageSize, search, status, sortBy, sortOrder, extra, version])
 
-  // 搜索变化时重置页码
+  // 搜索/状态变化时重置页码（依赖变重置 state；公共 hook 不改外部 API）
+  // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => { setPage(1) }, [search])
+  // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => { setPage(1) }, [status])
 
   return {

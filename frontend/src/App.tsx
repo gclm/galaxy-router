@@ -32,6 +32,7 @@ function NavigationProgress() {
 
   useEffect(() => {
     if (location.pathname !== prevPathname) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- 响应路由变化的进度条副作用，动画时机依赖 state 切换，非派生可表达
       setActive(true)
       setPrevPathname(location.pathname)
       const timer = setTimeout(() => setActive(false), 300)

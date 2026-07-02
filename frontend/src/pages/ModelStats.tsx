@@ -13,7 +13,7 @@ export function ModelStats() {
   const [sortOrder, setSortOrder] = useState<'desc' | 'asc'>('desc')
 
   const { data, isLoading, refetch } = useStatsModels({ days })
-  const stats = data ?? []
+  const stats = useMemo(() => data ?? [], [data])
 
   const chartData = useMemo(() =>
     stats.map((s) => ({ name: s.model, value: s.request_count, cost: s.total_cost }))

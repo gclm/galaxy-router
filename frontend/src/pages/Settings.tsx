@@ -535,6 +535,7 @@ function CorsTab({
   const [savedValue, setSavedValue] = useState(corsValue)
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- 外部 corsValue 变化时同步本地乐观副本（保存后立即显示），非派生可表达
     setSavedValue(corsValue)
   }, [corsValue])
 

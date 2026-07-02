@@ -15,7 +15,7 @@ export function ChannelStats() {
   const [sortOrder, setSortOrder] = useState<'desc' | 'asc'>('desc')
 
   const { data, isLoading, refetch } = useStatsChannels({ days })
-  const stats = data ?? []
+  const stats = useMemo(() => data ?? [], [data])
 
   const pieData = useMemo(() =>
     stats.map((s) => ({ name: s.channel_name, value: s.request_count, cost: s.total_cost }))

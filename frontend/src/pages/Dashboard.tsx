@@ -84,7 +84,7 @@ export function Dashboard() {
     [...(dailyQuery.data ?? [])].sort((a, b) => a.date.localeCompare(b.date))
   , [dailyQuery.data])
 
-  const rawDaily = dailyQuery.data ?? []
+  const rawDaily = useMemo(() => dailyQuery.data ?? [], [dailyQuery.data])
 
   const summary = useMemo(() => {
     const requests = rawDaily.reduce((s, d) => s + d.request_count, 0)

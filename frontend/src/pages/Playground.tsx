@@ -144,16 +144,16 @@ function extractErrorMessage(body: Record<string, unknown>, protocol: string): s
 type TabType = 'rendered' | 'request' | 'raw'
 
 export function Playground() {
-  const saved = useRef(loadConfig())
+  const [saved] = useState(loadConfig)
 
-  const [selectedApiKeyId, setSelectedApiKeyId] = useState(saved.current.selectedApiKeyId || '')
+  const [selectedApiKeyIdInput, setSelectedApiKeyIdInput] = useState(saved.selectedApiKeyId || '')
   const [models, setModels] = useState<string[]>([])
-  const [selectedModel, setSelectedModel] = useState(saved.current.selectedModel || '')
-  const [protocol, setProtocol] = useState<EndpointType>(saved.current.protocol || 'openai_chat')
+  const [selectedModel, setSelectedModel] = useState(saved.selectedModel || '')
+  const [protocol, setProtocol] = useState<EndpointType>(saved.protocol || 'openai_chat')
   const [prompt, setPrompt] = useState('')
-  const [stream, setStream] = useState(saved.current.stream ?? true)
-  const [temperature, setTemperature] = useState(saved.current.temperature || '')
-  const [maxTokens, setMaxTokens] = useState(saved.current.maxTokens || '')
+  const [stream, setStream] = useState(saved.stream ?? true)
+  const [temperature, setTemperature] = useState(saved.temperature || '')
+  const [maxTokens, setMaxTokens] = useState(saved.maxTokens || '')
   const [tab, setTab] = useState<TabType>('rendered')
 
   const [loading, setLoading] = useState(false)
@@ -172,6 +172,8 @@ export function Playground() {
   const { data: apiKeysData } = useApiKeys()
   const apiKeys = (apiKeysData?.items ?? []).filter((k) => k.enabled)
 
+  // 未手动选择时回退到第一个启用的 key（替代原 effect 的初始化逻辑，避免 effect 内 setState）
+  const selectedApiKeyId = selectedApiKeyIdInput || apiKeys.find((k) => k.enabled)?.id || ''
   const selectedApiKey = apiKeys.find((k) => k.id === selectedApiKeyId)
   const canStream = STREAMABLE_PROTOCOLS.has(protocol)
   const showParams = PARAMS_SUPPORTED.has(protocol)
@@ -191,14 +193,6 @@ export function Playground() {
     }, 300)
     return () => { if (saveTimerRef.current) clearTimeout(saveTimerRef.current) }
   }, [selectedApiKeyId, protocol, selectedModel, temperature, maxTokens, stream])
-
-  // 首次加载时自动选择第一个可用 Key
-  useEffect(() => {
-    if (apiKeys.length > 0 && !selectedApiKeyId) {
-      const first = apiKeys.find((k) => k.enabled)
-      if (first) setSelectedApiKeyId(first.id)
-    }
-  }, [apiKeys.length, selectedApiKeyId])
 
   // 切换 API Key 时刷新模型列表
   useEffect(() => {
@@ -365,6 +359,7 @@ export function Playground() {
 
     const controller = new AbortController()
     abortRef.current = controller
+    // eslint-disable-next-line react-hooks/purity -- handleSend 是 onClick 处理器，Date.now 用于请求计时，非 render 上下文
     startTimeRef.current = Date.now()
 
     try {
@@ -376,6 +371,7 @@ export function Playground() {
       })
 
       setStatusCode(res.status)
+      // eslint-disable-next-line react-hooks/purity -- 同上，事件处理器内计时
       const elapsed = Date.now() - startTimeRef.current
       setLatency(elapsed)
 
@@ -462,7 +458,7 @@ export function Playground() {
               <label className="text-sm font-medium">API Key</label>
               <select
                 value={selectedApiKeyId}
-                onChange={(e) => setSelectedApiKeyId(e.target.value)}
+                onChange={(e) => setSelectedApiKeyIdInput(e.target.value)}
                 className="input"
               >
                 <option value="">选择 API Key</option>
