@@ -44,12 +44,14 @@ pub async fn test_endpoint(
         Ok(c) => (true, Some(c), None),
         Err(msg) => (false, None, Some(msg)),
     };
-    // 思维链诊断：成功时在响应内容里检测 <think> 标签（协议无关字符串匹配）
-    let (thinking_detected, thinking_sample) = if let Some(ref text) = content {
+    // 思维链诊断：content 含 <think> 标签（MiniMax 类塞 content）OR reasoning 字段非空
+    //（GLM/DeepSeek/Anthropic 走 reasoning_content/thinking 字段）—— 统一覆盖所有 thinking 场景
+    let (mut thinking_detected, thinking_sample) = if let Some(ref text) = content {
         detect_thinking(text)
     } else {
         (false, None)
     };
+    thinking_detected = thinking_detected || !reasoning.is_empty();
 
     Ok(Json(ApiResponse::success(TestEndpointResponse {
         success,

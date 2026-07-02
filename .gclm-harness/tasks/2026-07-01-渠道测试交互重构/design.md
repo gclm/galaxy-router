@@ -119,7 +119,7 @@ galaxy 原有两套思维链处理（端点级 `extras.thinking.{extract_tags, f
 
 | # | 局限/遗留 | 影响 | 处理 |
 |---|---|---|---|
-| 1 | `thinking_detected` 只检测塞 content 的 `<think>` 标签（MiniMax 类）；GLM/DeepSeek 走 reasoning 字段，其 thinking 由 `reasoning` 字段非空指示，`thinking_detected` 对它们是 false | 两套 thinking 指示并存（thinking_detected + reasoning 字段），略冗余 | 接受（用户认可） |
+| 1 | ~~thinking_detected 检测面窄~~ 已统一：`thinking_detected = reasoning 非空 OR content 含 <think>`，覆盖所有 thinking 场景（GLM/DeepSeek/Anthropic 走字段 + MiniMax 塞 content） | — | ✅ 已优化（4d29eb0 后） |
 | 2 | ~~OpenAiResponse reasoning 未提取~~ 已补（`response.reasoning_summary_text.delta` → reasoning 字段） | — | ✅ 已补（f9a9d3c） |
 | 3 | ~~max_tokens 2048 不够 high effort~~ 已提至 4096（OpenAiChat/OpenAiResponse/Anthropic 统一；Anthropic budget 2048） | — | ✅ 已调（Round 3） |
 | 4 | ~~新增渠道测试需先保存~~ 已支持：ChannelForm 测试按钮用表单数据测（接口去 id，不保存） | — | ✅ 已支持（Round 3） |
