@@ -15,8 +15,6 @@ import {
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
-const DOCS_URL = 'https://github.com/gclm/galaxy-router/blob/main/docs/README.md'
-
 interface NavItem {
   title: string
   href: string
@@ -117,20 +115,23 @@ export function Sidebar({ collapsed }: { collapsed: boolean }) {
         ))}
       </nav>
       <div className="border-t border-sidebar-border p-3 space-y-1">
-        <a
-          href={DOCS_URL}
-          target="_blank"
-          rel="noopener noreferrer"
-          title={collapsed ? '客户端配置指南' : undefined}
+        <Link
+          to="/client-config"
+          title={collapsed ? '客户端配置' : undefined}
           className={cn(
             'flex items-center gap-3 rounded-xl text-sm font-medium transition-all duration-200',
             collapsed ? 'justify-center px-2 py-2.5' : 'px-3 py-2.5',
-            'text-sidebar-foreground/70 hover:bg-sidebar-accent/50 hover:text-sidebar-foreground'
+            location.pathname === '/client-config'
+              ? 'bg-sidebar-accent text-sidebar-primary border-l-2 border-primary'
+              : 'text-sidebar-foreground/70 hover:bg-sidebar-accent/50 hover:text-sidebar-foreground'
           )}
         >
-          <BookOpen className="h-4 w-4 shrink-0" />
+          <BookOpen className={cn('h-4 w-4 shrink-0', location.pathname === '/client-config' && 'text-sidebar-primary')} />
           {!collapsed && <span>客户端配置</span>}
-        </a>
+          {location.pathname === '/client-config' && !collapsed && (
+            <span className="ml-auto h-1.5 w-1.5 rounded-full bg-sidebar-primary shadow-sm shadow-sidebar-primary/50" />
+          )}
+        </Link>
         <Link
           to="/settings"
           title={collapsed ? '设置' : undefined}

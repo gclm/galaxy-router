@@ -4,7 +4,7 @@ import { useAuthStore } from '@/stores/auth'
 import { getHealth } from '@/api/auth'
 import { Layout } from '@/components/layout'
 import { ErrorBoundary } from '@/components/ErrorBoundary'
-import { Login, Setup, Dashboard, Channels, Groups, ApiKeys, ApiKeyStats, ModelStats, ChannelStats, Settings, Logs, Models, Playground, NotFound } from '@/pages'
+import { Login, Setup, Dashboard, Channels, Groups, ApiKeys, ApiKeyStats, ModelStats, ChannelStats, Settings, ClientConfig, Logs, Models, Playground, NotFound } from '@/pages'
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { isAuthenticated, isLoading } = useAuthStore()
@@ -114,6 +114,7 @@ function App() {
             <Route path="playground" element={<Playground />} />
             <Route path="models" element={<Models />} />
             <Route path="settings" element={<Settings />} />
+            <Route path="client-config" element={<ClientConfig />} />
           </Route>
           <Route path="*" element={<NotFound />} />
         </Routes>

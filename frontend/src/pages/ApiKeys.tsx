@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import type { ApiKey, CreateApiKeyRequest } from '@/api/types'
 import { apiKeysApi } from '@/api/api-keys'
 import { Button } from '@/components/ui/button'
@@ -34,6 +35,7 @@ import {
 } from '@/components/ui/dialog'
 
 export function ApiKeys() {
+  const navigate = useNavigate()
   // ─── Table state via useTableLoader（服务端分页） ───────
   const table = useTableLoader<ApiKey>({
     fetchFn: async (params) => {
@@ -374,6 +376,7 @@ export function ApiKeys() {
             onCopy={copyToClipboard}
             copiedKey={copiedKey}
             submitting={isSubmitting}
+            onGenerateConfig={(key) => navigate('/client-config', { state: { apiKey: key.api_key } })}
           />
         </DialogContent>
       </Dialog>

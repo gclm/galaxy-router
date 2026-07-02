@@ -21,6 +21,8 @@ interface ApiKeyFormProps {
   copiedKey: string | null
   /** 按钮加载态 */
   submitting: boolean
+  /** 「生成客户端配置」回调（创建成功视图，跳转到配置页并预填 key） */
+  onGenerateConfig?: (key: ApiKey) => void
 }
 
 export function ApiKeyForm({
@@ -33,6 +35,7 @@ export function ApiKeyForm({
   onCopy,
   copiedKey,
   submitting,
+  onGenerateConfig,
 }: ApiKeyFormProps) {
   const [name, setName] = useState(apiKey?.name ?? '')
   const [rateLimitRpm, setRateLimitRpm] = useState(
@@ -104,7 +107,12 @@ export function ApiKeyForm({
             </Button>
           </div>
         </div>
-        <div className="flex justify-end">
+        <div className="flex justify-end gap-2">
+          {onGenerateConfig && (
+            <Button onClick={() => onGenerateConfig(newKeyResult)}>
+              生成客户端配置
+            </Button>
+          )}
           <Button variant="outline" onClick={onCancel}>
             我已保存
           </Button>

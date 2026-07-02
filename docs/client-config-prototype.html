@@ -1,0 +1,280 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>客户端配置生成器 · 草稿原型</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+  body { font-family: -apple-system, "PingFang SC", system-ui, sans-serif; }
+  .mono { font-family: "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace; }
+  /* 模拟 galaxy 浅色后台基调 */
+  .ink-mute { color: #6b7280; }
+  .card { border: 1px solid #e5e7eb; border-radius: 10px; }
+  .tab-active { background:#111827; color:#fff; }
+  .tab-idle { background:#f3f4f6; color:#374151; }
+  details[open] summary .chev { transform: rotate(90deg); }
+  .chev { transition: transform .15s; }
+</style>
+</head>
+<body class="bg-gray-50 text-gray-900 min-h-screen">
+
+<div class="max-w-3xl mx-auto px-6 py-10">
+
+  <header class="mb-8">
+    <h1 class="text-2xl font-bold">客户端配置生成器</h1>
+    <p class="ink-mute text-sm mt-1">
+      草稿原型 · 仅用于评估布局与交互。base_url 默认取
+      <code class="mono bg-gray-200 px-1 rounded">window.location.origin</code>，
+      可手填覆盖。
+    </p>
+  </header>
+
+  <!-- 客户端类型 Tab -->
+  <div class="flex gap-2 mb-6">
+    <button id="tab-cc" class="tab-active px-4 py-2 rounded-lg text-sm font-medium">Claude Code</button>
+    <button id="tab-codex" class="tab-idle px-4 py-2 rounded-lg text-sm font-medium">Codex</button>
+  </div>
+
+  <!-- 表单 -->
+  <div class="card bg-white p-6 mb-6 space-y-5">
+    <!-- API Key -->
+    <div>
+      <label class="block text-sm font-medium mb-1.5">API Key</label>
+      <select id="apiKey" class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm mono">
+        <option value="sk-gr-demo-key-aaaa">sk-gr-demo-key-aaaa（test-key-1）</option>
+        <option value="sk-gr-demo-key-bbbb">sk-gr-demo-key-bbbb（prod-key）</option>
+      </select>
+    </div>
+
+    <!-- base_url -->
+    <div>
+      <label class="block text-sm font-medium mb-1.5">
+        网关地址
+        <span class="ink-mute font-normal text-xs ml-1">默认取当前浏览器地址，可改</span>
+      </label>
+      <input id="baseUrl" class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm mono"
+             value="" placeholder="https://router.example.com" />
+    </div>
+
+    <!-- Claude Code 三槽位 -->
+    <div id="ccSlots" class="space-y-3">
+      <div class="text-sm font-medium pt-2">模型档位映射 <span class="ink-mute font-normal text-xs">（每个档位选一个虚拟模型 / group）</span></div>
+      <div class="grid grid-cols-3 gap-3">
+        <div>
+          <label class="block text-xs ink-mute mb-1">Sonnet 档</label>
+          <select id="slot-sonnet" class="slot w-full border border-gray-300 rounded-lg px-2 py-1.5 text-sm">
+            <option>claude-sonnet-4-6</option><option>glm-4.6</option><option>gpt-5</option><option>kimi-k2-1m</option>
+          </select>
+        </div>
+        <div>
+          <label class="block text-xs ink-mute mb-1">Opus 档</label>
+          <select id="slot-opus" class="slot w-full border border-gray-300 rounded-lg px-2 py-1.5 text-sm">
+            <option>claude-opus-4-8</option><option>claude-sonnet-4-6</option><option>glm-4.6</option>
+          </select>
+        </div>
+        <div>
+          <label class="block text-xs ink-mute mb-1">Haiku 档</label>
+          <select id="slot-haiku" class="slot w-full border border-gray-300 rounded-lg px-2 py-1.5 text-sm">
+            <option>glm-4.6</option><option>claude-sonnet-4-6</option><option>kimi-k2-1m</option>
+          </select>
+        </div>
+      </div>
+    </div>
+
+    <!-- Codex 单模型 -->
+    <div id="codexSlot" class="space-y-3 hidden">
+      <div class="text-sm font-medium pt-2">默认模型 <span class="ink-mute font-normal text-xs">（虚拟模型 / group）</span></div>
+      <select id="codexModel" class="w-full border border-gray-300 rounded-lg px-2 py-1.5 text-sm">
+        <option>claude-sonnet-4-6</option><option>glm-4.6</option><option>gpt-5</option><option>kimi-k2-1m</option>
+      </select>
+    </div>
+
+    <!-- 开关（仅 Claude Code） -->
+    <div id="ccToggles" class="pt-1">
+      <div class="text-sm font-medium mb-2">选项</div>
+      <div class="flex flex-wrap gap-4 text-sm">
+        <label class="flex items-center gap-2"><input type="checkbox" id="tg-hide" class="toggle"> hideAttribution（隐藏署名）</label>
+        <label class="flex items-center gap-2"><input type="checkbox" id="tg-effort" class="toggle"> effortMax（最高思考强度）</label>
+        <label class="flex items-center gap-2"><input type="checkbox" id="tg-update" class="toggle"> disableAutoUpdate（禁用自动更新）</label>
+      </div>
+    </div>
+  </div>
+
+  <!-- 生成结果 -->
+  <div class="card bg-white p-6 mb-6">
+    <div class="flex items-center justify-between mb-3">
+      <div class="text-sm font-medium">生成的配置</div>
+      <div class="flex gap-2">
+        <button id="copyBtn" class="bg-gray-900 text-white text-xs px-3 py-1.5 rounded-md hover:bg-gray-700">复制配置</button>
+        <button id="downloadBtn" class="border border-gray-300 text-xs px-3 py-1.5 rounded-md hover:bg-gray-50">下载文件</button>
+      </div>
+    </div>
+    <pre id="preview" class="mono text-xs bg-gray-50 border border-gray-200 rounded-lg p-4 overflow-auto max-h-72 leading-relaxed"></pre>
+
+    <details class="mt-3">
+      <summary class="text-xs ink-mute cursor-pointer select-none flex items-center gap-1">
+        <span class="chev">▸</span> 原始 JSON（高级，可手动编辑后带走）
+      </summary>
+      <pre id="rawPreview" class="mono text-xs bg-gray-50 border border-gray-200 rounded-lg p-4 mt-2 overflow-auto max-h-48"></pre>
+    </details>
+
+    <div id="copyStatus" class="text-xs mt-2 h-4"></div>
+  </div>
+
+  <!-- 安装引导 -->
+  <div id="guide" class="card bg-white p-6">
+    <details open>
+      <summary class="text-sm font-medium cursor-pointer select-none flex items-center gap-1">
+        <span class="chev">▸</span> 如何安装
+      </summary>
+      <div id="guideBody" class="mt-3 text-sm ink-mute space-y-2"></div>
+    </details>
+  </div>
+
+  <footer class="ink-mute text-xs mt-8 text-center">
+    ⚠️ 配置字段映射（尤其 ❓ 项）实施前需核实 Claude Code / Codex 最新官方文档
+  </footer>
+</div>
+
+<script>
+// base_url 默认：location.origin；file:// 打开时退化成示例值，便于离线演示
+const origin = (window.location.origin && window.location.origin.startsWith('http'))
+  ? window.location.origin : 'https://router.example.com';
+document.getElementById('baseUrl').value = origin;
+
+let clientType = 'cc'; // cc | codex
+
+const $ = id => document.getElementById(id);
+
+function getSlots() {
+  return {
+    sonnet: $('slot-sonnet').value,
+    opus: $('slot-opus').value,
+    haiku: $('slot-haiku').value,
+  };
+}
+
+function generateClaudeConfig() {
+  const env = {
+    ANTHROPIC_BASE_URL: $('baseUrl').value,
+    ANTHROPIC_API_KEY: $('apiKey').value,
+    ANTHROPIC_DEFAULT_SONNET_MODEL: getSlots().sonnet, // ❓ 待核实变量名
+    ANTHROPIC_DEFAULT_OPUS_MODEL: getSlots().opus,     // ❓ 待核实变量名
+    ANTHROPIC_DEFAULT_HAIKU_MODEL: getSlots().haiku,   // ❓ 待核实变量名
+  };
+  if ($('tg-hide').checked) env.CLAUDE_CODE_HIDE_ATTRIBUTION = "1"; // ❓ 待核实
+  if ($('tg-effort').checked) env.CLAUDE_CODE_EFFORT_LEVEL = "max"; // ❓ 待核实
+  if ($('tg-update').checked) env.DISABLE_AUTOUPDATER = "1";        // ❓ 待核实
+  return { env };
+}
+
+function generateCodexConfig() {
+  // ❓ config.toml + auth.json 整体结构待核实
+  return {
+    files: [
+      {
+        path: "~/.codex/config.toml",
+        content:
+`model_provider = "galaxy"
+model = "${$('codexModel').value}"
+
+[model_providers.galaxy]
+name = "Galaxy Router"
+base_url = "${$('baseUrl').value}/v1"
+env_key = "GALAXY_API_KEY"`
+      },
+      {
+        path: "~/.codex/auth.json",
+        content: JSON.stringify({ GALAXY_API_KEY: $('apiKey').value }, null, 2)
+      }
+    ]
+  };
+}
+
+function render() {
+  if (clientType === 'cc') {
+    const cfg = generateClaudeConfig();
+    const text = JSON.stringify(cfg, null, 2);
+    $('preview').textContent = text;
+    $('rawPreview').textContent = text;
+    $('guideBody').innerHTML = `
+      <p>1. 打开（或新建）文件 <code class="mono bg-gray-100 px-1 rounded">~/.claude/settings.json</code></p>
+      <p>2. 若文件已存在：把上面的 <code class="mono bg-gray-100 px-1 rounded">env</code> 字段<strong>合并</strong>进现有 <code class="mono bg-gray-100 px-1 rounded">env</code>，不要整体覆盖你已有的配置</p>
+      <p>3. 若不存在：直接粘贴整段，保存即可</p>
+      <p>4. 重启 Claude Code 生效</p>`;
+  } else {
+    const cfg = generateCodexConfig();
+    const text = cfg.files.map(f => `# ${f.path}\n${f.content}`).join('\n\n');
+    $('preview').textContent = text;
+    $('rawPreview').textContent = JSON.stringify(cfg, null, 2);
+    $('guideBody').innerHTML = `
+      <p>Codex 需要<strong>两个</strong>文件：</p>
+      <p>1. <code class="mono bg-gray-100 px-1 rounded">~/.codex/config.toml</code> — 粘贴上半段（指向网关）</p>
+      <p>2. <code class="mono bg-gray-100 px-1 rounded">~/.codex/auth.json</code> — 粘贴下半段（存 key）</p>
+      <p>3. 重启 Codex 生效</p>`;
+  }
+}
+
+// 客户端切换
+function switchTab(type) {
+  clientType = type;
+  const cc = type === 'cc';
+  $('tab-cc').className = cc ? 'tab-active px-4 py-2 rounded-lg text-sm font-medium' : 'tab-idle px-4 py-2 rounded-lg text-sm font-medium';
+  $('tab-codex').className = !cc ? 'tab-active px-4 py-2 rounded-lg text-sm font-medium' : 'tab-idle px-4 py-2 rounded-lg text-sm font-medium';
+  $('ccSlots').classList.toggle('hidden', !cc);
+  $('ccToggles').classList.toggle('hidden', !cc);
+  $('codexSlot').classList.toggle('hidden', cc);
+  render();
+}
+
+// 复制（带降级，呼应 galaxy 前端 copyText 约定）
+async function copyText(text) {
+  try {
+    if (navigator.clipboard && window.isSecureContext) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch (e) {}
+  try {
+    const ta = document.createElement('textarea');
+    ta.value = text; document.body.appendChild(ta); ta.select();
+    const ok = document.execCommand('copy');
+    document.body.removeChild(ta);
+    return ok;
+  } catch (e) { return false; }
+}
+
+function flash(msg, ok) {
+  const s = $('copyStatus');
+  s.textContent = msg;
+  s.style.color = ok ? '#16a34a' : '#dc2626';
+  setTimeout(() => s.textContent = '', 1800);
+}
+
+// 事件
+$('tab-cc').addEventListener('click', () => switchTab('cc'));
+$('tab-codex').addEventListener('click', () => switchTab('codex'));
+['apiKey','baseUrl','codexModel'].forEach(id => $(id).addEventListener('input', render));
+document.querySelectorAll('.slot, .toggle').forEach(el => el.addEventListener('change', render));
+
+$('copyBtn').addEventListener('click', async () => {
+  const ok = await copyText($('preview').textContent);
+  flash(ok ? '已复制到剪贴板' : '复制失败，请手动选中复制', ok);
+});
+
+$('downloadBtn').addEventListener('click', () => {
+  const filename = clientType === 'cc' ? 'settings.json' : 'codex-config.txt';
+  const blob = new Blob([$('preview').textContent], { type: 'text/plain' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = filename; a.click();
+  URL.revokeObjectURL(url);
+  flash('已开始下载 ' + filename, true);
+});
+
+// 初始渲染
+render();
+</script>
+</body>
+</html>
