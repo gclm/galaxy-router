@@ -318,7 +318,12 @@ async fn probe_endpoint_raw(
                         } else {
                             None
                         },
-                        None,
+                        // reasoning summary（OpenAI Responses API 标准：response.reasoning_summary_text.delta）
+                        if event_type == "response.reasoning_summary_text.delta" {
+                            json["delta"].as_str()
+                        } else {
+                            None
+                        },
                     ),
                     EndpointType::Anthropic => (
                         json["delta"]["text"].as_str(),

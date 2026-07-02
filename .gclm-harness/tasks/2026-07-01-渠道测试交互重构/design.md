@@ -1,151 +1,137 @@
 ---
 doc_type: design
 feature: 2026-07-01-渠道测试交互重构
-status: approved
+status: approved  # 已实现，落地于 e93bf9f → 5304af6 → e43a2b1
 complexity: complex
 ---
 
 # 渠道配置简化：删除思维链处理 + 测试交互重构
 
-> **范围扩大（2026-07-01 更新）**：原计划只重构测试交互 + 砍 fix_signature 保留 extract_tags。
-> 调研 axonhub（Go AI gateway）后发现它**完全不做 `<think>` 标签抽取 / signature 修复**——
-> 它面向标准 provider，reasoning 走核心模型标准字段（ReasoningContent / ReasoningSignature），不碰 content。
-> galaxy 当前对接的上游（智谱 GLM / 商汤 / 京东 / MiniMax）暂无「把 thinking 塞 content」的真实需求，
-> 两个思维链开关线上无人启用。决定 **extract_tags + fix_signature 全删**，等有真实非标准上游再重新设计。
+> **最终实现（2026-07-02）**，经历两轮：
+> - **Round 1（5304af6）**：删思维链运行时处理 + 端点卡片测试 + 修并发 bug
+> - **Round 2（e43a2b1，实测后调整）**：接口去 `channel.id` + 测试回列表 TestModelDialog + content/reasoning 分离 + max_tokens 2048
 >
-> 本 design 合并两块：① 删除思维链**运行时处理**功能 ② 渠道测试重构（连通性 + 思维链诊断）。
+> **Round 2 起因**（实测发现）：① 端点卡片测试依赖 `channel.id`，**新增渠道（未保存）测不了**；② reasoning 模型（GLM/DeepSeek）thinking 走 `reasoning_content` 字段，probe 只提取 `content` → 「流式响应无内容」；③ `max_tokens:200` 太小，thinking 被截断、正文空。
 >
-> **关键区分**：运行时思维链处理（normalizer 应用 + extras 开关 + DB 列）**全删**；但渠道测试**保留
-> 思维链检测**作为纯诊断信息——探测 payload 带 thinking 参数触发上游返回，检测结果（是否含思维链 +
-> 样本）展示在测试结果区。因运行时开关已删，检测结果只供了解上游特性，**不驱动任何配置**（无「应用」按钮）。
+> **关键区分**：运行时思维链处理（normalizer + extras 开关 + DB 列）**全删**；渠道测试保留思维链**诊断**（`reasoning` 字段 + `thinking_detected`），纯展示不驱动配置。
 
 ## 1. 背景与根因
 
-### 1.1 思维链功能删除（本轮新增）
+### 1.1 思维链功能删除
 
-galaxy 现有两套思维链处理（端点级 `extras.thinking.{extract_tags, fix_signature}`）：
+galaxy 原有两套思维链处理（端点级 `extras.thinking.{extract_tags, fix_signature}`）：
 
 | 开关 | 作用 | 针对场景 |
 |---|---|---|
 | extract_tags | 抽 `<think>...</think>` 标签到 reasoning_content | MiniMax-M3 等把 thinking 塞 content 的非标准上游 |
-| fix_signature | 修 GLM-5.1 把 signature 放 content_block_start 的问题 | GLM-5.1 anthropic 端点 signature 位置异常 |
+| fix_signature | 修 GLM-5.1 把 signature 放 content_block_start | GLM-5.1 anthropic signature 位置异常 |
 
-**删除理由**：
-1. axonhub 调研证实：标准 provider 走字段（reasoning_content / thinking block / signature_delta），不需要标签解析。galaxy 的标签抽取面向的「塞 content」场景当前无真实上游需求。
-2. 线上 extras.thinking 为空，两个功能实际无人启用。
-3. 保留成本：thinking_normalizer.rs 470+ 行状态机 + stream_executor 双路径 normalizer 挂载 + 端点卡片两个开关。
+**删除理由**：axonhub 调研证实标准 provider 走字段（reasoning_content/thinking block/signature_delta），不需标签解析；galaxy 当前上游无「塞 content」真实需求；线上 extras.thinking 为空。**全删**（含 extract_tags），等有真实非标准上游再重新设计。
 
-**删除边界**：只删「运行时处理」（normalizer 应用 + extras 开关 + DB 列）。渠道测试的「思维链检测」**保留**——它是诊断工具（告诉用户上游是否会返回思维链），与运行时处理无关，删运行时处理不影响测试诊断。
+**删除边界**：只删「运行时处理」（normalizer 应用 + extras 开关 + DB 列）。测试的「思维链检测」保留（诊断，与运行时处理无关）。
 
-### 1.2 渠道测试交互（原有问题，部分随删除自动消失）
+### 1.2 渠道测试交互问题
 
 | # | 问题 | 根因 | 处理 |
 |---|---|---|---|
-| ① | 并发测试显示失败但实际成功 | `probe_endpoint_raw` 用 `resp.bytes().await` 等 SSE 连接关闭，keep-alive 超时误判 | **修**：改 bytes_stream 增量读 |
-| ② | 思维链检测过度应用 | detect 渠道级合并 + 前端全端点应用 | **消失**：思维链功能删，detect 跟着删 |
-| ③ | 思维链检测漏报 | build_detect_payload 不带 thinking 参数 | **消失**：不再检测 thinking |
-| ④ | 渠道级测试语义混乱 | ChannelDetail「测试」按钮实际只测单端点 | **修**：删渠道级测试，端点卡片内测试 |
+| ① | 并发测试显示失败但实际成功 | `probe_endpoint_raw` 用 `resp.bytes().await` 等 SSE 连接关闭，keep-alive 超时误判 | **修**：bytes_stream 增量读，遇 `[DONE]` 即停 |
+| ② | 思维链检测过度应用 | detect 渠道级合并 + 全端点应用 | **消失**：思维链功能删 |
+| ③ | reasoning 模型「流式响应无内容」 | probe 只提取 `content`，GLM/DeepSeek thinking 走 `reasoning_content` | **修（Round 2）**：分别提取 content + reasoning |
+| ④ | 渠道级测试语义混乱 | ChannelDetail「测试」实际只测单端点 | **修**：测试回列表 TestModelDialog（选协议/模型） |
+| ⑤ | 新增渠道测不了 | 接口依赖 `channel.id` | **修（Round 2）**：接口去 id，请求体传完整参数 |
 
-## 2. 目标与约束
+## 2. 目标
 
-**目标**：
-1. **删除思维链处理功能**：thinking_normalizer.rs 整文件 + stream_executor normalizer 挂载 + DB thinking_mode 列 + endpoint extras 字段 + 前端 thinking 开关 / detect 区
-2. **渠道测试 = 连通性 + 思维链诊断**：合并 test+detect 为端点级 test_endpoint，返回 status/latency/ttft/tokens **+ thinking_detected/sample**（纯诊断，无「应用」）
-3. **修并发测试 bug**：probe_endpoint_raw 改 bytes_stream 增量读（遇 `[DONE]` 即停）
-4. **端点卡片重构**：删 thinking 开关，测试结果放 Headers 下
-5. **删渠道级测试**：ChannelDetail 测试按钮删
+1. **删除思维链运行时处理**：thinking_normalizer.rs + stream_executor normalizer + DB thinking_mode 列 + EndpointConfig.extras + 前端 thinking 开关/检测区
+2. **渠道测试 = 连通性 + 思维链诊断**：test-endpoint 返回 `output_content`（正文）+ `reasoning`（思维链）分两个字段，前端分开显示
+3. **修并发 bug**：probe_endpoint_raw 改 bytes_stream 增量读
+4. **测试入口在渠道列表**：TestModelDialog 对话框，接口不依赖 channel.id（新增/已存渠道都能测）
+5. **max_tokens 2048**：reasoning 模型 thinking 不被截断，正文能生成
 
-**明确不做**：
-- 不保留任何 thinking 处理代码（连 extract_tags 一起删，不是「只剩 extract_tags」）
-- 不为「未来可能需要的非标准上游」预留扩展位（extras 字段一起删，YAGNI；重新设计时从头加）
-- 测试的思维链检测**只展示不应用**（运行时开关删了，检测结果不驱动配置变更）
+**明确不做**：不保留任何 thinking 运行时处理代码；测试诊断只展示不应用；不在端点卡片放测试（thinking 开关删了，端点卡片测试无逻辑依托）。
 
-## 3. 方案
+## 3. 方案（最终实现）
 
-### 3.1 删除思维链功能（后端 + DB）
+### 3.1 删除思维链运行时处理（已完成）
 
-- 删 `src/protocol/thinking_normalizer.rs` 整文件 + `src/protocol/mod.rs` 的 `pub mod thinking_normalizer;`
-- `src/relay/stream_executor.rs`：
-  - 删 import（:17）、`thinking_flag` helper（:56-63）
-  - 删 normalizer 创建块（:471-485：extract_think_tags/fix_signature/passthrough_normalizer/conversion_extractor）
-  - 转换路径删 `conversion_extractor` 调用（:550-552）
-  - 直通路径删 `passthrough_normalizer` 调用（:717-729），还原为直接 `stream_send(event_bytes)`
-- `src/api/handlers/admin/channels/probe.rs`：`analyze_response` 删 `<think>` + signature 检测分支（:659-691），随 detect 整体删
-- **DB 迁移 16** `src/db/migrations/16_drop_channel_thinking_mode.sql`：`ALTER TABLE channels DROP COLUMN thinking_mode;`（dead column，SQL 已不读，迁移 15 漏 DROP）
-- **endpoint `extras` 字段删除**：从 `EndpointConfig` struct（types.rs:93-95）+ 前端 type（types.ts:52）删除；清理 `extras: None` 占位（cache.rs:164 / prepare.rs:482 / channel.rs:107,114）。endpoints 是 channels 表 TEXT JSON 列，删 struct 字段后旧 JSON 的 extras 被 serde 忽略，**无需 DB 迁移**
+- 删 `src/protocol/thinking_normalizer.rs` + `mod.rs` 声明
+- `stream_executor.rs`：删 normalizer import/thinking_flag/创建/使用（转换+直通路径还原直接透传）
+- DB 迁移 16 `DROP COLUMN thinking_mode`
+- 删 `EndpointConfig.extras`（后端 struct + 前端 type）+ 清理 `extras: None` 占位（cache/prepare/channel）
+- 前端删 thinking 开关 + 思维链检测区
 
-### 3.2 渠道测试：连通性 + 思维链诊断（后端）
+### 3.2 渠道测试接口（最终：去 id）
 
-- 新接口 `POST /api/v1/admin/channels/{id}/test-endpoint`：
-  ```
-  入参 TestEndpointRequest: { endpoint_type, model, api_key }
-  出参 TestEndpointResponse: {
-    success, status, latency_ms, ttft_ms,
-    prompt_tokens, completion_tokens, output_content, error?,
-    thinking_detected: bool, thinking_sample: String   // 诊断：上游是否返回思维链 + 样本
-  }
-  ```
-- **探测 payload 带 thinking 参数**（触发上游返回思维链，修原漏报）：Anthropic `thinking:{type:"enabled",budget_tokens:1024}`（已有）；OpenAiChat/OpenAiResponse 加 thinking 开启参数（实现时 grep protocol/outbound 确认参数名）
-- `probe_endpoint_raw` 改 `resp.bytes_stream()` 逐 chunk 增量读：累计 content + usage + thinking 证据，**遇 `[DONE]` 立即停止**（不等连接关闭），超时保留兜底
-- 思维链检测：响应文本含 `<think>` 标签（协议无关字符串匹配）→ `thinking_detected=true` + 截取样本；**只检测不应用**
-- 删 `test_channel`（probe.rs:19）+ `detect_channel_quirks`（probe.rs:184）handler + 路由（检测能力并入 test_endpoint，per-endpoint 不合并）
-- 删旧 types：`TestChannelRequest/Response`、`DetectRequest/Response/EndpointDetection`、recommendations 字段 → 新 `TestEndpointRequest/Response`
+- `POST /api/v1/admin/channels/test-endpoint`（**不带 channel.id**，静态路由优先于 `/{id}`）
+- 入参 `TestEndpointRequest`：`{ endpoint_type, base_url, api_key, model, headers?, user_agent? }`
+- 后端 test_endpoint **不查渠道**，用请求体参数构造临时 `EndpointConfig` 探测 → 新增/已存渠道都能测
+- 出参 `TestEndpointResponse`：`{ success, latency_ms, ttft_ms, output_content（正文）, reasoning（思维链）, error?, prompt_tokens, completion_tokens, thinking_detected, thinking_sample }`
+- `probe_endpoint_raw` **分别累积**：
+  - content（正文）：OpenAiChat=`delta.content`，OpenAiResponse=`delta`（output_text.delta），Anthropic=`delta.text`
+  - reasoning（思维链）：OpenAiChat=`delta.reasoning_content`，Anthropic=`delta.thinking`，OpenAiResponse=未提取（局限）
+  - **成功条件**：content 或 reasoning 任一非空（之前只看 content → reasoning 模型误判失败）
+- 探测 payload（**各协议标准 reasoning 参数**）：OpenAiChat=`reasoning_effort:medium`，OpenAiResponse=`reasoning.effort:medium`，Anthropic=`thinking:{type:enabled,budget_tokens:1024}`；**max_tokens 2048**（OpenAiChat/Anthropic）/ max_output_tokens 2048（OpenAiResponse）
+- `probe_endpoint_raw` 增量读（bytes_stream，遇 `[DONE]` 即停，不等连接关闭）
+- 删 `test_channel` + `detect_channel_quirks` + 旧 types（TestChannel*/Detect*/EndpointDetection/recommendations）
 
-### 3.3 前端
+### 3.3 前端（最终：测试回列表）
 
-- `ChannelForm.tsx`：删 thinking 开关（extract_tags + fix_signature checkbox，:318-335）+ 思维链检测区（:472-478）+ `getEndpointThinking`/`setEndpointThinking`（:197-208）+ `applyDetectedRecommendations` thinking 部分（:141-151）；端点卡片头部加「测试」按钮，结果区放 Headers 下（连通性一行 + 思维链诊断一行：检测到/样本，**无开关/应用**）
-- `ChannelDetail.tsx`：删「测试」按钮（:166）+ onTest props
-- `api/types.ts` + `channels.ts`：删 extras/recommendations；加 TestEndpoint* types + testEndpoint API
+- **测试入口**：渠道列表每行测试按钮 + 详情页测试按钮 → TestModelDialog 对话框（选 API Key + 协议 + 搜索模型 → 单测/批量测）
+- TestModelDialog（从 e93bf9f 恢复 + 改造）：调 `test-endpoint`（前端从渠道配置组装 base_url/headers），删无效的「流式测试」开关（test-endpoint 总流式）
+- 终端分两段显示：`── 思维链 ──`（reasoning，黄）+ `── 输出 ──`（output_content，绿）
+- ChannelForm 端点卡片**无测试按钮**（纯编辑表单）
+- 删 thinking 开关 + 思维链检测区 + applyDetectedRecommendations
 
-## 4. 改动清单（挂载点）
+## 4. 改动清单（最终）
 
 | 文件 | 改动 |
 |---|---|
 | `protocol/thinking_normalizer.rs` | **整文件删** |
-| `protocol/mod.rs` | 删 `pub mod thinking_normalizer;` |
-| `relay/stream_executor.rs` | 删 normalizer import/thinking_flag/创建/使用（转换+直通路径还原直接透传） |
-| `api/handlers/admin/channels/probe.rs` | 新 `test_endpoint`；`probe_endpoint_raw` 增量读；删 `test_channel`/`detect_channel_quirks`/`analyze_response` 的 thinking 检测 |
-| `api/handlers/admin/channels/types.rs` | 新 `TestEndpointRequest/Response`；删 `EndpointConfig.extras` + 旧 Test*/Detect*/recommendations |
-| `relay/{cache,prepare,channel}.rs` | 清理 `extras: None` 占位 |
-| `api/router.rs` | test-endpoint 路由；删 test/detect 路由 |
-| `db/migrations/16_drop_channel_thinking_mode.sql` | DROP thinking_mode 列 |
-| `frontend/.../ChannelForm.tsx` | 删 thinking 开关/检测区；端点卡片测试按钮 + 结果区 |
-| `frontend/.../ChannelDetail.tsx` | 删测试按钮 |
-| `frontend/.../api/types.ts` + `channels.ts` | 删 extras/recommendations；加 testEndpoint |
+| `protocol/mod.rs` | 删 mod 声明 |
+| `relay/stream_executor.rs` | 删 normalizer 全链路（import/thinking_flag/创建/转换+直通使用） |
+| `api/handlers/admin/channels/probe.rs` | test_endpoint（去 id，请求体构造 endpoint）；probe_endpoint_raw 增量读 + 分别累积 content/reasoning；build_probe_payload 标准 reasoning 参数 + max_tokens 2048；detect_thinking 检测 `<think>` |
+| `api/handlers/admin/channels/types.rs` | TestEndpointRequest（+base_url/headers）/Response（+reasoning）；删 extras + 旧 Test*/Detect* |
+| `relay/{cache,prepare,channel}.rs` | 清 extras 占位 |
+| `api/router.rs` | `/test-endpoint`（去 id，静态优先）；删 test/detect 路由 |
+| `db/migrations/16_drop_channel_thinking_mode.sql` | DROP thinking_mode |
+| `frontend/api/types.ts` + `channels.ts` | TestEndpoint*（+base_url/headers/reasoning）；testEndpoint（去 id） |
+| `frontend/components/TestModelDialog.tsx` | 恢复 + 改造（testEndpoint + content/reasoning 分段显示 + 删 useStream） |
+| `frontend/components/ChannelDetail.tsx` | 恢复测试按钮 + onTest |
+| `frontend/pages/Channels.tsx` | 恢复 testChannel state + TestModelDialog + 列表测试按钮 + onTest |
+| `frontend/components/ChannelForm.tsx` | 删端点卡片测试（回退）+ thinking 开关/检测区 |
 
-## 5. 验收契约（输入 → 期望输出）
+## 5. 验收契约
 
-| 输入 | 期望 |
-|---|---|
-| grep `thinking_normalizer\|PassthroughNormalizer\|ThinkingTagExtractor\|thinking_flag` src/ | 0 命中 |
-| grep `extras` src/（除迁移文件） | 0 命中 |
-| 迁移 16 执行后 channels 表 | 无 thinking_mode 列 |
-| `cargo check` + `pnpm build` | 通过 |
-| 点端点「测试」（健康端点） | success=true + 延迟/TTFT/tokens + thinking_detected，显示在该端点 Headers 下 |
-| 点端点「测试」（上游限流） | success=false + 上游错误信息 |
-| 测 openai_chat（GLM 类，主动开 thinking 才返回 `<think>`） | thinking_detected=true + 样本（payload 带 thinking 参数，不漏报） |
-| 同渠道 3 端点并发测试 | 3 个独立结果，全部按上游真实状态判定（无误判） |
-| ChannelForm | 无 thinking 开关 + 无思维链检测区 |
-| ChannelDetail | 无「测试」按钮 |
-
-## 6. 推进策略（分阶段）
-
-| 阶段 | 内容 | 退出信号 |
+| 输入 | 期望 | 状态 |
 |---|---|---|
-| **P1 删思维链** | 删 thinking_normalizer.rs + stream_executor normalizer + analyze_response thinking 检测 + 迁移16 DROP thinking_mode + 删 EndpointConfig.extras（struct + 前端 type）+ 清理 extras 占位 | cargo check 通过 + grep 无 thinking_normalizer/extras 残留 |
-| **P2 后端测试接口** | probe_endpoint_raw 增量读；新 test_endpoint + types + 路由；删 test_channel/detect + 旧 types | 单测：增量读 [DONE] 即停 + test_endpoint 返回连通性 |
-| **P3 前端** | ChannelForm 删 thinking/检测区 + 端点卡片测试按钮/结果区；ChannelDetail 删测试按钮；api/types 更新 | pnpm build 通过 |
-| **P4 验证** | cargo test 全量 + 手动并发测试 | 0 failed + 并发不再误判 |
+| grep `thinking_normalizer\|PassthroughNormalizer\|thinking_flag` src/ | 0 命中 | ✅ |
+| grep `extras` src/（除迁移） | 0 命中 | ✅ |
+| 迁移 16 后 channels 表 | 无 thinking_mode | ✅ |
+| cargo test 全量 | 0 failed（700+） | ✅ |
+| `POST /channels/test-endpoint`（无 auth） | 401（路由存在） | ✅ |
+| 测 openai_chat（GLM/DeepSeek reasoning 模型） | success=true + reasoning 有内容 + output_content 有正文 | ✅（max_tokens 2048 后） |
+| 测 openai_chat（标准非 reasoning） | success=true + output_content 有内容 | ✅ |
+| TestModelDialog 终端 | 思维链/输出分段显示 | ✅ |
+| ChannelForm | 无 thinking 开关 + 无端点卡片测试 | ✅ |
 
-P1（删思维链）独立可验证，先做；P2 测试接口；P3 前端；P4 验证。
+## 6. 已知局限 / 遗留
+
+| # | 局限/遗留 | 影响 | 处理 |
+|---|---|---|---|
+| 1 | `thinking_detected` 只检测塞 content 的 `<think>` 标签（MiniMax 类）；GLM/DeepSeek 走 reasoning 字段，其 thinking 由 `reasoning` 字段非空指示，`thinking_detected` 对它们是 false | 两套 thinking 指示并存（thinking_detected + reasoning 字段），略冗余 | 接受（用户认可） |
+| 2 | ~~OpenAiResponse reasoning 未提取~~ 已补（`response.reasoning_summary_text.delta` → reasoning 字段） | — | ✅ 已补（f9a9d3c） |
+| 3 | max_tokens 2048 对超长 thinking（reasoning_effort:high 或重 prompt）可能仍不够 | output_content 可能空（thinking 用完） | 实测 medium 够；不够再调 |
+| 4 | 新增渠道测试需先保存 | 测试入口在列表，不在 ChannelForm 表单 | 设计如此 |
+| 5 | `frontend/vite.config.ts` proxy 29088→8080（dev 调试） | 未 commit，工作区 modified | dev 配置，待定 |
+| 6 | `docs/design-client-config.md` + `docs/design-stats-refactor.md` | 违反「任务文档放 .gclm-harness/tasks/」约定 | 遗留，未处理 |
+| 7 | ~~plans/sessions 未 gitignore~~ 已加 `.gitignore` 规则 | — | ✅ 已加（f9a9d3c） |
+| 8 | P4-2「多端点并发测试」原场景已变 | 测试回列表后，并发是 TestModelDialog 批量测多模型（Promise.allSettled），不是多端点；增量读已修 keep-alive 超时，但批量并发未显式压测 | 建议手动压测一次 |
 
 ## 7. 可卸载清单
 
-拔掉这个 feature 要动：
-1. 恢复 thinking_normalizer.rs + mod 声明 + stream_executor normalizer 挂载
-2. 恢复 EndpointConfig.extras 字段 + 前端 type
-3. 迁移 17 恢复 thinking_mode 列（或手动 ALTER ADD）
-4. probe.rs：恢复 test_channel/detect_channel_quirks/analyze_response thinking 检测
-5. 前端：恢复 thinking 开关 + 思维链检测区 + 渠道级测试按钮
+拔掉要动（按 commit 反向）：
+1. e43a2b1 反向：test-endpoint 加回 id + 测试改回端点卡片 + content/reasoning 合并 + max_tokens 200
+2. 5304af6 反向：恢复 thinking_normalizer.rs + stream_executor normalizer + extras 字段 + 迁移 17 恢复 thinking_mode + test_channel/detect_channel_quirks
+3. 前端：恢复 thinking 开关 + 思维链检测区
 
-DB 变更仅 1 个 DROP（迁移 16），卸载需对应 ADD（迁移不可回滚，只能追加 17）。
+DB 变更仅迁移 16（DROP thinking_mode），卸载需追加迁移 17（ADD）——迁移不可回滚只能追加。

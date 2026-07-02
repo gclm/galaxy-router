@@ -43,3 +43,7 @@ config-test.toml
 
 # keel: task.py 认 .gclm/,本项目 harness 是 .gclm-harness/,需此软链
 /.gclm
+
+# harness 会话/计划临时文件（不进版本库）
+/.gclm-harness/plans/
+/.gclm-harness/sessions/
