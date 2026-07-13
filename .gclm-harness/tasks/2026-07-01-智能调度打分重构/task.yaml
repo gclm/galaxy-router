@@ -1,9 +1,0 @@
-type: feature
-complexity: complex
-sop: sop/feature.md
-status: completed
-feature: 2026-07-01-智能调度打分重构
-title: 智能调度打分重构 — priority 硬分档 + 打分失效修复 + 最小连接数并发分散
-created: '2026-07-01'
-completed: '2026-07-01'
-notes: '修复 scheduler 打分层 4 个失效点。priority 改硬分档+自动降档；latency 候选间相对归一化+冷启动0.8；新增最小连接数因子取代 load/queue；废弃 queue/max_retries（迁移15 DROP）；max_concurrency 保留默认0。全量测试通过（lib 526 + 集成 254，0 failed）。遗留：load_rate/active_requests/increment_active 成 dead code（load 维度副产品，待单独清理）。'

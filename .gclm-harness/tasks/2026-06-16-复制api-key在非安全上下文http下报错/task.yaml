@@ -1,9 +1,0 @@
-type: issue
-complexity: simple
-sop: sop/issue.md
-status: completed
-feature: 2026-06-16-复制api-key在非安全上下文http下报错
-title: 复制api-key在非安全上下文HTTP下报错
-created: '2026-06-16'
-completed: '2026-06-16'
-notes: ''

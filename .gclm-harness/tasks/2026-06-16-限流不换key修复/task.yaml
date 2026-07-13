@@ -1,9 +1,0 @@
-type: issue
-complexity: simple
-sop: sop/issue.md
-status: completed
-feature: 2026-06-16-限流不换key修复
-title: 修复 glm-5.2 限流(1302/中文)不触发换 key
-created: '2026-06-16'
-completed: '2026-06-16'
-notes: '多 key 重试健壮性改造 · 阶段0(hotfix)。根因:KEY_NEEDLES 缺中文限流词,智谱 1302(2xx+体内错误,SSE 分支标 502)的中文 body 不命中→不换 key。阶段1 per-key 熔断、阶段2 三层重试+状态码归因另开 task。'

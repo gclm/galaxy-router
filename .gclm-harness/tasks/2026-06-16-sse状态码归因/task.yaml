@@ -1,9 +1,0 @@
-type: issue
-complexity: simple
-sop: sop/issue.md
-status: completed
-feature: 2026-06-16-sse状态码归因
-title: SSE 流内错误状态码归因(502→429)— 阶段2
-created: '2026-06-16'
-completed: '2026-06-16'
-notes: '多key重试健壮性改造 阶段2(收尾)。stream_executor SSE 分支硬编码 502 改为按 body 归因(限流→429),避免限流触发 channel 黑名单 + 透传更准。B(同key退避)/C(兼底分支)评估后不做。'

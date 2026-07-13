@@ -1,9 +1,0 @@
-type: refactor
-complexity: moderate
-sop: sop/refactor.md
-status: completed
-feature: 2026-06-10-前端全面优化修复缺陷提升可扩展性与用户体验
-title: 前端全面优化：修复缺陷、提升可扩展性与用户体验
-created: '2026-06-10'
-completed: '2026-06-10'
-notes: ''

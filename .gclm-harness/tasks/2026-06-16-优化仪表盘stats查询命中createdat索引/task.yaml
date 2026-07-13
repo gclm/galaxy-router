@@ -1,9 +1,0 @@
-type: refactor
-complexity: simple
-sop: sop/refactor.md
-status: completed
-feature: 2026-06-16-优化仪表盘stats查询命中createdat索引
-title: 优化仪表盘stats查询命中created_at索引
-created: '2026-06-16'
-completed: '2026-06-16'
-notes: ''

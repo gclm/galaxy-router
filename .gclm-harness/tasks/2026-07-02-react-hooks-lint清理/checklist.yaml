@@ -1,9 +1,0 @@
-design: 2026-07-02-react-hooks-lint清理
-status: completed
-steps:
-  - { id: 1, desc: "Playground.tsx：saved useRef→useState lazy init（refs 12）+ selectedApiKeyId→derived（set-state+deps）+ Date.now purity disable（2）", status: done }
-  - { id: 2, desc: "App.tsx NavigationProgress setActive：路由响应进度条，disable+注释", status: done }
-  - { id: 3, desc: "Settings.tsx CorsTab setSavedValue：外部 corsValue 同步本地乐观副本，disable+注释", status: done }
-  - { id: 4, desc: "ApiKeyStats/ChannelStats/ModelStats/Dashboard：stats/rawDaily 包 useMemo（exhaustive-deps 9）", status: done }
-  - { id: 5, desc: "useTableLoader.ts：fetchFnRef render 写→effect 写（refs）+ setLoading/setPage disable（公共 hook）", status: done }
-  - { id: 6, desc: "lint 0 problems + tsc + build 全绿", status: done }
