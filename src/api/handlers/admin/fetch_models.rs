@@ -3,7 +3,7 @@ use reqwest::Client;
 use serde::Deserialize;
 
 use crate::api::handlers::admin::channels::{EndpointConfig, EndpointType};
-use crate::api::handlers::admin::model_info::ModelsState;
+use crate::app_state::AppState;
 use crate::error::app::{ApiError, ApiResponse};
 
 /// 获取模型列表请求
@@ -51,7 +51,7 @@ struct GeminiModel {
 
 /// 获取模型列表
 pub async fn fetch_models(
-    State(state): State<ModelsState>,
+    State(state): State<AppState>,
     Json(req): Json<FetchModelsRequest>,
 ) -> Result<Json<ApiResponse<Vec<String>>>, (StatusCode, Json<ApiError>)> {
     if req.endpoints.is_empty() {
@@ -63,12 +63,12 @@ pub async fn fetch_models(
     for endpoint in &req.endpoints {
         let result = match endpoint.endpoint_type {
             EndpointType::Anthropic => {
-                fetch_anthropic_models(&state.fetch_client, &endpoint.base_url, &req.api_key).await
+                fetch_anthropic_models(&state.models_http_client, &endpoint.base_url, &req.api_key).await
             }
             EndpointType::Gemini => {
-                fetch_gemini_models(&state.fetch_client, &endpoint.base_url, &req.api_key).await
+                fetch_gemini_models(&state.models_http_client, &endpoint.base_url, &req.api_key).await
             }
-            _ => fetch_openai_models(&state.fetch_client, &endpoint.base_url, &req.api_key).await,
+            _ => fetch_openai_models(&state.models_http_client, &endpoint.base_url, &req.api_key).await,
         };
 
         match result {

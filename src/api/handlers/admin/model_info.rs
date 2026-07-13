@@ -5,19 +5,12 @@ use axum::{
 };
 use serde::Deserialize;
 
+use crate::app_state::AppState;
 use crate::error::app::{ApiError, ApiResponse};
-use crate::metrics::model::ModelRegistry;
-
-/// 模型 API 状态（含模型信息管理 + 远程模型获取）
-#[derive(Clone)]
-pub struct ModelsState {
-    pub model_registry: ModelRegistry,
-    pub fetch_client: reqwest::Client,
-}
 
 /// 获取所有模型信息
 pub async fn list(
-    State(state): State<ModelsState>,
+    State(state): State<AppState>,
 ) -> Result<Json<ApiResponse<Vec<crate::metrics::model::ModelInfo>>>, (StatusCode, Json<ApiError>)>
 {
     let models = state.model_registry.get_all_models().await;
@@ -26,7 +19,7 @@ pub async fn list(
 
 /// 获取指定模型信息
 pub async fn get(
-    State(state): State<ModelsState>,
+    State(state): State<AppState>,
     Path(model): Path<String>,
 ) -> Result<Json<ApiResponse<crate::metrics::model::ModelInfo>>, (StatusCode, Json<ApiError>)> {
     match state.model_registry.get_model_info(&model).await {
@@ -58,7 +51,7 @@ pub struct UpdateModelRequest {
 
 /// 更新模型信息
 pub async fn update(
-    State(state): State<ModelsState>,
+    State(state): State<AppState>,
     Json(req): Json<UpdateModelRequest>,
 ) -> Result<Json<ApiResponse<crate::metrics::model::ModelInfo>>, (StatusCode, Json<ApiError>)> {
     // 先获取现有信息用于合并

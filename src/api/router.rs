@@ -19,7 +19,7 @@ use crate::api::handlers::admin::backup::{self, BackupState};
 use crate::api::handlers::admin::channels;
 use crate::api::handlers::admin::fetch_models;
 use crate::api::handlers::admin::routes;
-use crate::api::handlers::admin::model_info::{self, ModelsState};
+use crate::api::handlers::admin::model_info;
 use crate::api::handlers::admin::settings;
 use crate::api::handlers::admin::stats;
 use crate::api::handlers::admin::system_info;
@@ -47,15 +47,7 @@ pub async fn create_router(
 
     let shared_cache = ProxyCache::new();
 
-    let models_state = ModelsState {
-        model_registry: model_registry.clone(),
-        fetch_client: reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(10))
-            .build()
-            .expect("Failed to create HTTP client"),
-    };
-
-    let update_check_state = update_check::UpdateCheckState::from_pool(&pool).await;
+    let update_check_context = update_check::UpdateCheckContext::from_pool(&pool).await;
 
     let backup_state = BackupState { pool: pool.clone() };
 
@@ -67,14 +59,18 @@ pub async fn create_router(
         ProxyState::new(pool.clone(), model_registry.clone()).await
     };
 
-    // v1.1.2: 统一 AppState（Settings/SystemInfo/Auth/Usage/Budget/Route/ApiKey/Channel 已切，其余 handler 后续 commit 逐个切）
+    // v1.1.2: 统一 AppState（Settings/SystemInfo/Auth/Usage/Budget/Route/ApiKey/Channel/Models/UpdateCheck 已切，仅剩 backup）
     let start_time = Arc::new(Instant::now());
     let api_key_cache = crate::api::middleware::ApiKeyCache::new();
     let channel_http_client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(30))
         .build()
         .expect("Failed to create HTTP client");
-    let app_state = AppState::new(pool.clone(), config.clone(), start_time, jwt_service, shared_cache.clone(), api_key_cache, channel_http_client);
+    let models_http_client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .expect("Failed to create HTTP client");
+    let app_state = AppState::new(pool.clone(), config.clone(), start_time, jwt_service, shared_cache.clone(), api_key_cache, channel_http_client, model_registry.clone(), models_http_client, update_check_context);
 
     // 需要认证的管理路由（每个 nest 独立管理状态）
     let protected_admin = Router::new()
@@ -149,7 +145,7 @@ pub async fn create_router(
                 .route("/", get(model_info::list).put(model_info::update))
                 .route("/fetch", post(fetch_models::fetch_models))
                 .route("/{model}", get(model_info::get))
-                .with_state(models_state),
+                .with_state(app_state.clone()),
         )
         .nest(
             "/system-info",
@@ -161,7 +157,7 @@ pub async fn create_router(
             "/update-check",
             Router::new()
                 .route("/", get(update_check::get))
-                .with_state(update_check_state),
+                .with_state(app_state.clone()),
         )
         .nest(
             "/settings",

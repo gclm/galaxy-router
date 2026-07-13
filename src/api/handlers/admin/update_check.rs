@@ -11,6 +11,7 @@ use axum::{Json, extract::State, http::StatusCode};
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
 
+use crate::app_state::AppState;
 use crate::error::app::{ApiError, ApiResponse};
 
 /// GitHub API 域名（固定；owner/repo 在 settings.github.repo 配置）
@@ -22,7 +23,7 @@ pub const UPDATE_CHECK_TTL_SECS: u64 = 600;
 pub const HTTP_TIMEOUT_SECS: u64 = 10;
 
 #[derive(Clone)]
-pub struct UpdateCheckState {
+pub struct UpdateCheckContext {
     pub http_client: reqwest::Client,
     github_repo: String,
     mirror: Option<String>,
@@ -30,7 +31,7 @@ pub struct UpdateCheckState {
     cache: Arc<std::sync::RwLock<Option<CachedResult>>>,
 }
 
-impl UpdateCheckState {
+impl UpdateCheckContext {
     /// 生产：从 settings 读取代理 + GitHub 仓库 + 镜像，构建客户端（在 router 启动时调用）。
     pub async fn from_pool(pool: &SqlitePool) -> Self {
         let proxy_url = read_proxy_url(pool).await;
@@ -66,6 +67,54 @@ impl UpdateCheckState {
             cache: Arc::new(std::sync::RwLock::new(None)),
         }
     }
+
+    /// 执行检查（缓存 + GitHub fetch + 镜像 fallback）。handler 与测试共用。
+    pub async fn check(&self) -> Result<UpdateCheckResponse, (StatusCode, Json<ApiError>)> {
+        // 1. 缓存未过期 → 直接返回
+        {
+            let cache = self.cache.read().unwrap();
+            if let Some(cached) = cache.as_ref()
+                && cached.fetched_at.elapsed().as_secs() < UPDATE_CHECK_TTL_SECS
+            {
+                return Ok(cached.response.clone());
+            }
+        }
+
+        // 2. 缓存过期，调 GitHub（三级 fallback：api → 镜像 release-info.json）
+        let api_url = format!(
+            "{}/repos/{}/releases/latest",
+            self.api_base, self.github_repo
+        );
+        let response = match fetch_and_compare(&self.http_client, &api_url).await {
+            Ok(r) => r,
+            Err(api_err) => match self.mirror.as_deref().filter(|m| !m.is_empty()) {
+                Some(mirror) => {
+                    // 镜像下载 release-info.json（ghfast/gh-proxy 加速 github.com 下载）
+                    let mirror_url = apply_mirror(
+                        mirror,
+                        &format!(
+                            "https://github.com/{}/releases/latest/download/release-info.json",
+                            self.github_repo
+                        ),
+                    );
+                    tracing::info!("api.github.com 失败，尝试镜像: {}", mirror_url);
+                    fetch_and_compare(&self.http_client, &mirror_url).await?
+                }
+                None => return Err(api_err),
+            },
+        };
+
+        // 3. 写缓存
+        {
+            let mut cache = self.cache.write().unwrap();
+            *cache = Some(CachedResult {
+                fetched_at: Instant::now(),
+                response: response.clone(),
+            });
+        }
+
+        Ok(response)
+    }
 }
 
 struct CachedResult {
@@ -95,51 +144,9 @@ struct GithubRelease {
 
 /// 检查更新
 pub async fn get(
-    State(state): State<UpdateCheckState>,
+    State(state): State<AppState>,
 ) -> Result<Json<ApiResponse<UpdateCheckResponse>>, (StatusCode, Json<ApiError>)> {
-    // 1. 缓存未过期 → 直接返回
-    {
-        let cache = state.cache.read().unwrap();
-        if let Some(cached) = cache.as_ref()
-            && cached.fetched_at.elapsed().as_secs() < UPDATE_CHECK_TTL_SECS
-        {
-            return Ok(Json(ApiResponse::success(cached.response.clone())));
-        }
-    }
-
-    // 2. 缓存过期，调 GitHub（三级 fallback：api → 镜像 release-info.json）
-    let api_url = format!(
-        "{}/repos/{}/releases/latest",
-        state.api_base, state.github_repo
-    );
-    let response = match fetch_and_compare(&state.http_client, &api_url).await {
-        Ok(r) => r,
-        Err(api_err) => match state.mirror.as_deref().filter(|m| !m.is_empty()) {
-            Some(mirror) => {
-                // 镜像下载 release-info.json（ghfast/gh-proxy 加速 github.com 下载）
-                let mirror_url = apply_mirror(
-                    mirror,
-                    &format!(
-                        "https://github.com/{}/releases/latest/download/release-info.json",
-                        state.github_repo
-                    ),
-                );
-                tracing::info!("api.github.com 失败，尝试镜像: {}", mirror_url);
-                fetch_and_compare(&state.http_client, &mirror_url).await?
-            }
-            None => return Err(api_err),
-        },
-    };
-
-    // 3. 写缓存
-    {
-        let mut cache = state.cache.write().unwrap();
-        *cache = Some(CachedResult {
-            fetched_at: Instant::now(),
-            response: response.clone(),
-        });
-    }
-
+    let response = state.update_check.check().await?;
     Ok(Json(ApiResponse::success(response)))
 }
 
@@ -331,9 +338,9 @@ mod tests {
         .to_string()
     }
 
-    async fn call_get_ok(state: UpdateCheckState) -> serde_json::Value {
-        let Json(resp) = get(State(state)).await.expect("handler 应成功");
-        serde_json::to_value(resp).unwrap()
+    async fn call_get_ok(state: UpdateCheckContext) -> serde_json::Value {
+        let resp = state.check().await.expect("check 应成功");
+        serde_json::to_value(ApiResponse::success(resp)).unwrap()
     }
 
     #[tokio::test]
@@ -345,7 +352,7 @@ mod tests {
             .respond_with(ResponseTemplate::new(200).set_body_string(gh_release_json("v99.0.0")))
             .mount(&server)
             .await;
-        let state = UpdateCheckState::with_client(
+        let state = UpdateCheckContext::with_client(
             reqwest::Client::new(),
             &server.uri(),
             "test/repo",
@@ -367,7 +374,7 @@ mod tests {
             .respond_with(ResponseTemplate::new(200).set_body_string(gh_release_json("v0.0.1")))
             .mount(&server)
             .await;
-        let state = UpdateCheckState::with_client(
+        let state = UpdateCheckContext::with_client(
             reqwest::Client::new(),
             &server.uri(),
             "test/repo",
@@ -386,7 +393,7 @@ mod tests {
             .expect(1) // 缓存命中 → 第二次不再请求
             .mount(&server)
             .await;
-        let state = UpdateCheckState::with_client(
+        let state = UpdateCheckContext::with_client(
             reqwest::Client::new(),
             &server.uri(),
             "test/repo",
@@ -405,13 +412,13 @@ mod tests {
             .respond_with(ResponseTemplate::new(500))
             .mount(&server)
             .await;
-        let state = UpdateCheckState::with_client(
+        let state = UpdateCheckContext::with_client(
             reqwest::Client::new(),
             &server.uri(),
             "test/repo",
             None,
         );
-        let result = get(State(state)).await;
+        let result = state.check().await;
         assert!(result.is_err(), "GitHub 5xx 应返回错误而非 panic");
     }
 
@@ -431,7 +438,7 @@ mod tests {
             .respond_with(ResponseTemplate::new(200).set_body_string(gh_release_json("v99.0.0")))
             .mount(&server)
             .await;
-        let state = UpdateCheckState::with_client(
+        let state = UpdateCheckContext::with_client(
             reqwest::Client::new(),
             &server.uri(),
             "test/repo",

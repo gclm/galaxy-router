@@ -8,9 +8,11 @@ use std::time::Instant;
 
 use sqlx::SqlitePool;
 
+use crate::api::handlers::admin::update_check::UpdateCheckContext;
 use crate::api::middleware::ApiKeyCache;
 use crate::auth::JwtService;
 use crate::config::AppConfig;
+use crate::metrics::model::ModelRegistry;
 use crate::relay::cache::ProxyCache;
 use crate::repository::Repositories;
 use crate::service::Services;
@@ -28,9 +30,13 @@ pub struct AppState {
     pub cache: ProxyCache,
     pub api_key_cache: ApiKeyCache,
     pub channel_http_client: reqwest::Client,
+    pub model_registry: ModelRegistry,
+    pub models_http_client: reqwest::Client,
+    pub update_check: UpdateCheckContext,
 }
 
 impl AppState {
+    #[allow(clippy::too_many_arguments)] // v1.1.2 过渡：参数随字段增加，Commit 10 收尾时重构（builder/Config struct）
     pub fn new(
         pool: SqlitePool,
         config: Arc<AppConfig>,
@@ -39,6 +45,9 @@ impl AppState {
         cache: ProxyCache,
         api_key_cache: ApiKeyCache,
         channel_http_client: reqwest::Client,
+        model_registry: ModelRegistry,
+        models_http_client: reqwest::Client,
+        update_check: UpdateCheckContext,
     ) -> Self {
         let timezone_offset = config.server.timezone_offset;
         Self {
@@ -51,6 +60,9 @@ impl AppState {
             cache,
             api_key_cache,
             channel_http_client,
+            model_registry,
+            models_http_client,
+            update_check,
         }
     }
 }
