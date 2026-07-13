@@ -3,12 +3,12 @@ use axum::{
     extract::{Query, State},
     http::StatusCode,
 };
-use serde::{Deserialize, Serialize};
-use sqlx::AssertSqlSafe;
+use serde::Deserialize;
 
 use crate::app_state::AppState;
+use crate::domain::budget::SetBudgetRequest;
 use crate::error::app::{ApiError, ApiResponse};
-use crate::util::timeutil::tz_modifier;
+use crate::repository::budget_repository::BudgetLimit;
 
 /// 查询参数
 #[derive(Debug, Deserialize)]
@@ -200,92 +200,33 @@ pub async fn latency(
 
 // === 预算限制管理 ===
 
-/// 预算限制
-#[derive(Debug, Serialize, Deserialize, sqlx::FromRow)]
-pub struct BudgetLimit {
-    pub id: String,
-    pub api_key_id: String,
-    pub monthly_limit_usd: f64,
-    pub daily_limit_usd: f64,
-    pub enabled: bool,
-    pub created_at: String,
-    pub updated_at: String,
-}
-
-/// 设置预算限制请求
-#[derive(Debug, Deserialize)]
-pub struct SetBudgetRequest {
-    pub api_key_id: String,
-    pub monthly_limit_usd: Option<f64>,
-    pub daily_limit_usd: Option<f64>,
-    pub enabled: Option<bool>,
-}
-
 /// 设置/更新预算限制（upsert）
 pub async fn set_budget(
     State(state): State<AppState>,
     Json(req): Json<SetBudgetRequest>,
 ) -> Result<Json<ApiResponse<BudgetLimit>>, (StatusCode, Json<ApiError>)> {
-    let monthly = req.monthly_limit_usd.unwrap_or(0.0);
-    let daily = req.daily_limit_usd.unwrap_or(0.0);
-    let enabled = req.enabled.unwrap_or(true);
-
-    // 验证 API Key 存在
-    let exists: bool = sqlx::query_scalar::<_, i32>("SELECT COUNT(*) FROM api_keys WHERE id = ?")
-        .bind(&req.api_key_id)
-        .fetch_one(&state.pool)
+    let row = state
+        .repositories
+        .budget
+        .set_budget(req)
         .await
-        .map_err(|e| ApiError::internal_error(e.to_string()))
-        .map(|c| c > 0)?;
-
-    if !exists {
-        return Err(ApiError::not_found("API Key 不存在"));
+        .map_err(|e| ApiError::internal_error(e.to_string()))?;
+    match row {
+        Some(r) => Ok(Json(ApiResponse::success(r))),
+        None => Err(ApiError::not_found("API Key 不存在")),
     }
-
-    let id = crate::api::response::generate_id();
-    sqlx::query(
-        r#"INSERT INTO budget_limits (id, api_key_id, monthly_limit_usd, daily_limit_usd, enabled)
-           VALUES (?, ?, ?, ?, ?)
-           ON CONFLICT(api_key_id) DO UPDATE SET
-               monthly_limit_usd = excluded.monthly_limit_usd,
-               daily_limit_usd = excluded.daily_limit_usd,
-               enabled = excluded.enabled,
-               updated_at = datetime('now')"#,
-    )
-    .bind(&id)
-    .bind(&req.api_key_id)
-    .bind(monthly)
-    .bind(daily)
-    .bind(enabled)
-    .execute(&state.pool)
-    .await
-    .map_err(|e| ApiError::internal_error(e.to_string()))?;
-
-    // 查询返回
-    let tz = tz_modifier(state.config.server.timezone_offset);
-    let row = sqlx::query_as::<_, BudgetLimit>(
-        AssertSqlSafe(format!("SELECT id, api_key_id, monthly_limit_usd, daily_limit_usd, enabled, datetime(created_at, '{}') as created_at, datetime(updated_at, '{}') as updated_at FROM budget_limits WHERE api_key_id = ?", tz, tz).as_str()),
-    )
-    .bind(&req.api_key_id)
-    .fetch_one(&state.pool)
-    .await
-    .map_err(|e| ApiError::internal_error(e.to_string()))?;
-
-    Ok(Json(ApiResponse::success(row)))
 }
 
 /// 获取所有预算限制
 pub async fn list_budgets(
     State(state): State<AppState>,
 ) -> Result<Json<ApiResponse<Vec<BudgetLimit>>>, (StatusCode, Json<ApiError>)> {
-    let tz = tz_modifier(state.config.server.timezone_offset);
-    let rows = sqlx::query_as::<_, BudgetLimit>(
-        AssertSqlSafe(format!("SELECT id, api_key_id, monthly_limit_usd, daily_limit_usd, enabled, datetime(created_at, '{}') as created_at, datetime(updated_at, '{}') as updated_at FROM budget_limits ORDER BY created_at DESC", tz, tz).as_str()),
-    )
-    .fetch_all(&state.pool)
-    .await
-    .map_err(|e| ApiError::internal_error(e.to_string()))?;
-
+    let rows = state
+        .repositories
+        .budget
+        .list_budgets()
+        .await
+        .map_err(|e| ApiError::internal_error(e.to_string()))?;
     Ok(Json(ApiResponse::success(rows)))
 }
 
@@ -294,13 +235,14 @@ pub async fn delete_budget(
     State(state): State<AppState>,
     axum::extract::Path(id): axum::extract::Path<String>,
 ) -> Result<Json<ApiResponse<()>>, (StatusCode, Json<ApiError>)> {
-    let result = sqlx::query("DELETE FROM budget_limits WHERE id = ?")
-        .bind(&id)
-        .execute(&state.pool)
+    let deleted = state
+        .repositories
+        .budget
+        .delete_budget(&id)
         .await
         .map_err(|e| ApiError::internal_error(e.to_string()))?;
 
-    if result.rows_affected() == 0 {
+    if !deleted {
         return Err(ApiError::not_found("预算限制不存在"));
     }
 

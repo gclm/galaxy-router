@@ -6,9 +6,11 @@
 //! - `setting`：SettingResponse（v1.1.2）
 //! - `route`：Route / RouteItem（v1.1.2 后续 commit）
 //! - `channel`：Channel / Endpoint / UpstreamKey
-//! - `api_key`：ApiKey / BudgetLimit
+//! - `api_key`：ApiKey
+//! - `budget`：SetBudgetRequest（v1.1.2；BudgetLimit 带 FromRow 留 repository）
 //! - `usage`：UsageLog / UsageStats
 
 pub mod auth;
+pub mod budget;
 pub mod setting;
 pub mod usage;
