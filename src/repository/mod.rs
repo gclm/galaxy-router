@@ -8,8 +8,10 @@ use std::sync::Arc;
 
 use sqlx::SqlitePool;
 
+pub mod auth_repository;
 pub mod settings_repository;
 pub mod system_info_repository;
+use auth_repository::{AuthRepository, SqliteAuthRepository};
 use settings_repository::{SettingsRepository, SqliteSettingsRepository};
 use system_info_repository::{SqliteSystemInfoRepository, SystemInfoRepository};
 
@@ -18,6 +20,7 @@ use system_info_repository::{SqliteSystemInfoRepository, SystemInfoRepository};
 pub struct Repositories {
     pub settings: Arc<dyn SettingsRepository>,
     pub system_info: Arc<dyn SystemInfoRepository>,
+    pub auth: Arc<dyn AuthRepository>,
 }
 
 impl Repositories {
@@ -25,7 +28,8 @@ impl Repositories {
     pub fn new(pool: SqlitePool) -> Self {
         Self {
             settings: Arc::new(SqliteSettingsRepository::new(pool.clone())),
-            system_info: Arc::new(SqliteSystemInfoRepository::new(pool)),
+            system_info: Arc::new(SqliteSystemInfoRepository::new(pool.clone())),
+            auth: Arc::new(SqliteAuthRepository::new(pool)),
         }
     }
 }

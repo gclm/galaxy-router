@@ -8,6 +8,7 @@ use std::time::Instant;
 
 use sqlx::SqlitePool;
 
+use crate::auth::JwtService;
 use crate::config::AppConfig;
 use crate::repository::Repositories;
 use crate::service::Services;
@@ -21,16 +22,23 @@ pub struct AppState {
     pub repositories: Repositories,
     pub services: Services,
     pub start_time: Arc<Instant>,
+    pub jwt_service: JwtService,
 }
 
 impl AppState {
-    pub fn new(pool: SqlitePool, config: Arc<AppConfig>, start_time: Arc<Instant>) -> Self {
+    pub fn new(
+        pool: SqlitePool,
+        config: Arc<AppConfig>,
+        start_time: Arc<Instant>,
+        jwt_service: JwtService,
+    ) -> Self {
         Self {
             pool: pool.clone(),
             config,
             repositories: Repositories::new(pool),
             services: Services::new(),
             start_time,
+            jwt_service,
         }
     }
 }

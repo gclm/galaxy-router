@@ -1,56 +1,14 @@
 use axum::{Json, extract::State, http::StatusCode};
-use serde::{Deserialize, Serialize};
-use sqlx::SqlitePool;
 
+use crate::app_state::AppState;
+use crate::auth::PasswordService;
 use crate::error::app::{ApiError, ApiResponse};
-use crate::auth::{JwtService, PasswordService};
 
-/// 认证状态
-#[derive(Clone)]
-pub struct AuthState {
-    pub pool: SqlitePool,
-    pub jwt_service: JwtService,
-}
-
-/// 初始化请求
-#[derive(Deserialize)]
-pub struct InitRequest {
-    pub username: String,
-    pub password: String,
-    pub site_title: Option<String>,
-}
-
-/// 登录请求
-#[derive(Deserialize)]
-pub struct LoginRequest {
-    pub username: String,
-    pub password: String,
-}
-
-/// 修改密码请求
-#[derive(Deserialize)]
-pub struct ChangePasswordRequest {
-    pub old_password: String,
-    pub new_password: String,
-}
-
-/// 认证响应
-#[derive(Serialize)]
-pub struct AuthResponse {
-    pub token: String,
-    pub expires_in: u64,
-}
-
-/// 用户信息响应
-#[derive(Serialize)]
-pub struct UserInfoResponse {
-    pub id: String,
-    pub username: String,
-}
+pub use crate::domain::auth::*;
 
 /// 初始化系统（创建管理员 + 站点配置）
 pub async fn init(
-    State(state): State<AuthState>,
+    State(state): State<AppState>,
     Json(req): Json<InitRequest>,
 ) -> Result<(StatusCode, Json<ApiResponse<AuthResponse>>), (StatusCode, Json<ApiError>)> {
     if req.username.len() < 3 {
@@ -65,40 +23,16 @@ pub async fn init(
 
     let user_id = crate::api::response::generate_id();
 
-    let mut tx = state
-        .pool
-        .begin()
+    let inserted = state
+        .repositories
+        .auth
+        .init(&user_id, &req.username, &password_hash, req.site_title.as_deref())
         .await
         .map_err(|e| ApiError::internal_error(e.to_string()))?;
 
-    // INSERT ... WHERE NOT EXISTS 防止并发竞态创建多个管理员
-    let inserted = sqlx::query(
-        "INSERT INTO users (id, username, password_hash) SELECT ?, ?, ? WHERE NOT EXISTS (SELECT 1 FROM users)"
-    )
-    .bind(&user_id)
-    .bind(&req.username)
-    .bind(&password_hash)
-    .execute(&mut *tx)
-    .await
-    .map_err(|e| ApiError::internal_error(e.to_string()))?;
-
-    if inserted.rows_affected() == 0 {
+    if !inserted {
         return Err(ApiError::conflict("系统已初始化，无需重复操作"));
     }
-
-    if let Some(site_title) = &req.site_title {
-        sqlx::query(
-            "INSERT OR REPLACE INTO settings (key, category, value, description) VALUES ('site.title', 'general', ?, '站点标题')",
-        )
-        .bind(site_title)
-        .execute(&mut *tx)
-        .await
-        .map_err(|e| ApiError::internal_error(e.to_string()))?;
-    }
-
-    tx.commit()
-        .await
-        .map_err(|e| ApiError::internal_error(e.to_string()))?;
 
     let token = state
         .jwt_service
@@ -116,16 +50,15 @@ pub async fn init(
 
 /// 登录
 pub async fn login(
-    State(state): State<AuthState>,
+    State(state): State<AppState>,
     Json(req): Json<LoginRequest>,
 ) -> Result<Json<ApiResponse<AuthResponse>>, (StatusCode, Json<ApiError>)> {
-    let user = sqlx::query_as::<_, (String, String, String)>(
-        "SELECT id, username, password_hash FROM users WHERE username = ?",
-    )
-    .bind(&req.username)
-    .fetch_optional(&state.pool)
-    .await
-    .map_err(|e| ApiError::internal_error(e.to_string()))?;
+    let user = state
+        .repositories
+        .auth
+        .find_by_username(&req.username)
+        .await
+        .map_err(|e| ApiError::internal_error(e.to_string()))?;
 
     let (user_id, username, password_hash) =
         user.ok_or_else(|| ApiError::unauthorized("用户名或密码错误"))?;
@@ -160,13 +93,14 @@ pub async fn me(
 
 /// 修改密码
 pub async fn change_password(
-    State(state): State<AuthState>,
+    State(state): State<AppState>,
     auth: crate::api::middleware::AuthClaims,
     Json(req): Json<ChangePasswordRequest>,
 ) -> Result<Json<ApiResponse<()>>, (StatusCode, Json<ApiError>)> {
-    let password_hash: String = sqlx::query_scalar("SELECT password_hash FROM users WHERE id = ?")
-        .bind(&auth.0.sub)
-        .fetch_one(&state.pool)
+    let password_hash = state
+        .repositories
+        .auth
+        .get_password_hash(&auth.0.sub)
         .await
         .map_err(|e| ApiError::internal_error(e.to_string()))?;
 
@@ -184,10 +118,10 @@ pub async fn change_password(
     let new_hash = PasswordService::hash_password(&req.new_password)
         .map_err(|e| ApiError::internal_error(e.to_string()))?;
 
-    sqlx::query("UPDATE users SET password_hash = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?")
-        .bind(&new_hash)
-        .bind(&auth.0.sub)
-        .execute(&state.pool)
+    state
+        .repositories
+        .auth
+        .update_password(&auth.0.sub, &new_hash)
         .await
         .map_err(|e| ApiError::internal_error(e.to_string()))?;
 

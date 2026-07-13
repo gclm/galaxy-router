@@ -14,7 +14,7 @@ use sqlx::SqlitePool;
 use tower_http::trace::TraceLayer;
 
 use crate::api::handlers::admin::api_keys::{self, ApiKeyState};
-use crate::api::handlers::admin::auth::{self, AuthState};
+use crate::api::handlers::admin::auth;
 use crate::api::handlers::admin::backup::{self, BackupState};
 use crate::api::handlers::admin::channels::{self, ChannelState};
 use crate::api::handlers::admin::fetch_models;
@@ -44,11 +44,7 @@ pub async fn create_router(
 ) -> Router {
     let config = Arc::new(config);
     let token_expiry_hours = config.auth.token_expiry_hours;
-    let auth_state = AuthState {
-        pool: pool.clone(),
-        jwt_service: crate::auth::JwtService::new(&jwt_secret, token_expiry_hours),
-    };
-    let auth_state_for_public = auth_state.clone();
+    let jwt_service = crate::auth::JwtService::new(&jwt_secret, token_expiry_hours);
 
     let shared_cache = ProxyCache::new();
 
@@ -101,9 +97,9 @@ pub async fn create_router(
         ProxyState::new(pool.clone(), model_registry.clone()).await
     };
 
-    // v1.1.2: 统一 AppState（Settings/SystemInfo 已切，其余 handler 后续 commit 逐个切）
+    // v1.1.2: 统一 AppState（Settings/SystemInfo/Auth 已切，其余 handler 后续 commit 逐个切）
     let start_time = Arc::new(Instant::now());
-    let app_state = AppState::new(pool.clone(), config.clone(), start_time);
+    let app_state = AppState::new(pool.clone(), config.clone(), start_time, jwt_service);
 
     // 需要认证的管理路由（每个 nest 独立管理状态）
     let protected_admin = Router::new()
@@ -112,7 +108,7 @@ pub async fn create_router(
             Router::new()
                 .route("/me", get(auth::me))
                 .route("/password", put(auth::change_password))
-                .with_state(auth_state),
+                .with_state(app_state.clone()),
         )
         .nest(
             "/channels",
@@ -221,14 +217,14 @@ pub async fn create_router(
             "/api/v1/init",
             Router::new()
                 .route("/", post(auth::init))
-                .with_state(auth_state_for_public.clone()),
+                .with_state(app_state.clone()),
         )
         // 登录接口（无需认证）
         .nest(
             "/api/v1/admin/auth",
             Router::new()
                 .route("/login", post(auth::login))
-                .with_state(auth_state_for_public),
+                .with_state(app_state.clone()),
         )
         // 需要认证的管理 API
         .nest("/api/v1/admin", protected_admin)
