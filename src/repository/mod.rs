@@ -10,11 +10,13 @@ use sqlx::SqlitePool;
 
 pub mod auth_repository;
 pub mod budget_repository;
+pub mod route_repository;
 pub mod settings_repository;
 pub mod system_info_repository;
 pub mod usage_repository;
 use auth_repository::{AuthRepository, SqliteAuthRepository};
 use budget_repository::{BudgetRepository, SqliteBudgetRepository};
+use route_repository::{RouteRepository, SqliteRouteRepository};
 use settings_repository::{SettingsRepository, SqliteSettingsRepository};
 use system_info_repository::{SqliteSystemInfoRepository, SystemInfoRepository};
 use usage_repository::{SqliteUsageRepository, UsageRepository};
@@ -27,6 +29,7 @@ pub struct Repositories {
     pub auth: Arc<dyn AuthRepository>,
     pub usage: Arc<dyn UsageRepository>,
     pub budget: Arc<dyn BudgetRepository>,
+    pub route: Arc<dyn RouteRepository>,
 }
 
 impl Repositories {
@@ -37,7 +40,8 @@ impl Repositories {
             system_info: Arc::new(SqliteSystemInfoRepository::new(pool.clone())),
             auth: Arc::new(SqliteAuthRepository::new(pool.clone())),
             usage: Arc::new(SqliteUsageRepository::new(pool.clone(), timezone_offset)),
-            budget: Arc::new(SqliteBudgetRepository::new(pool, timezone_offset)),
+            budget: Arc::new(SqliteBudgetRepository::new(pool.clone(), timezone_offset)),
+            route: Arc::new(SqliteRouteRepository::new(pool, timezone_offset)),
         }
     }
 }

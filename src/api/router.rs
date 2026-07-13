@@ -18,7 +18,7 @@ use crate::api::handlers::admin::auth;
 use crate::api::handlers::admin::backup::{self, BackupState};
 use crate::api::handlers::admin::channels::{self, ChannelState};
 use crate::api::handlers::admin::fetch_models;
-use crate::api::handlers::admin::routes::{self, RouteState};
+use crate::api::handlers::admin::routes;
 use crate::api::handlers::admin::model_info::{self, ModelsState};
 use crate::api::handlers::admin::settings;
 use crate::api::handlers::admin::stats;
@@ -59,12 +59,6 @@ pub async fn create_router(
         timezone_offset: tz,
     };
 
-    let route_state = RouteState {
-        pool: pool.clone(),
-        cache: shared_cache.clone(),
-        timezone_offset: tz,
-    };
-
     let api_key_cache = crate::api::middleware::ApiKeyCache::new();
     let api_key_state = ApiKeyState {
         pool: pool.clone(),
@@ -92,9 +86,9 @@ pub async fn create_router(
         ProxyState::new(pool.clone(), model_registry.clone()).await
     };
 
-    // v1.1.2: 统一 AppState（Settings/SystemInfo/Auth 已切，其余 handler 后续 commit 逐个切）
+    // v1.1.2: 统一 AppState（Settings/SystemInfo/Auth/Usage/Budget/Route 已切，其余 handler 后续 commit 逐个切）
     let start_time = Arc::new(Instant::now());
-    let app_state = AppState::new(pool.clone(), config.clone(), start_time, jwt_service);
+    let app_state = AppState::new(pool.clone(), config.clone(), start_time, jwt_service, shared_cache.clone());
 
     // 需要认证的管理路由（每个 nest 独立管理状态）
     let protected_admin = Router::new()
@@ -128,7 +122,7 @@ pub async fn create_router(
                 )
                 .route("/{id}/items", post(routes::add_item))
                 .route("/{id}/items/{item_id}", delete(routes::delete_item))
-                .with_state(route_state),
+                .with_state(app_state.clone()),
         )
         .nest(
             "/api-keys",

@@ -10,6 +10,7 @@ use sqlx::SqlitePool;
 
 use crate::auth::JwtService;
 use crate::config::AppConfig;
+use crate::relay::cache::ProxyCache;
 use crate::repository::Repositories;
 use crate::service::Services;
 
@@ -23,6 +24,7 @@ pub struct AppState {
     pub services: Services,
     pub start_time: Arc<Instant>,
     pub jwt_service: JwtService,
+    pub cache: ProxyCache,
 }
 
 impl AppState {
@@ -31,6 +33,7 @@ impl AppState {
         config: Arc<AppConfig>,
         start_time: Arc<Instant>,
         jwt_service: JwtService,
+        cache: ProxyCache,
     ) -> Self {
         let timezone_offset = config.server.timezone_offset;
         Self {
@@ -40,6 +43,7 @@ impl AppState {
             services: Services::new(),
             start_time,
             jwt_service,
+            cache,
         }
     }
 }

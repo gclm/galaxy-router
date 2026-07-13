@@ -4,7 +4,7 @@
 //! 子模块随分层重构逐个填入：
 //! - `auth`：InitRequest / LoginRequest / ChangePasswordRequest / AuthResponse / UserInfoResponse（v1.1.2）
 //! - `setting`：SettingResponse（v1.1.2）
-//! - `route`：Route / RouteItem（v1.1.2 后续 commit）
+//! - `route`：Route / RouteItem + 请求 DTO（v1.1.2）
 //! - `channel`：Channel / Endpoint / UpstreamKey
 //! - `api_key`：ApiKey
 //! - `budget`：SetBudgetRequest（v1.1.2；BudgetLimit 带 FromRow 留 repository）
@@ -12,5 +12,6 @@
 
 pub mod auth;
 pub mod budget;
+pub mod route;
 pub mod setting;
 pub mod usage;
