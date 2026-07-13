@@ -95,7 +95,7 @@ impl ProxyRelayExecutor {
             channel,
             target_model: candidate.target_model.clone(),
             endpoint,
-            group_id: candidate.group_id.clone(),
+            route_id: candidate.route_id.clone(),
         })
     }
 }
@@ -618,17 +618,17 @@ mod tests {
         .await
         .unwrap();
 
-        let group_id = "grp-mock";
-        sqlx::query("INSERT INTO groups (id, name, enabled) VALUES (?, 'gpt-4o', 1)")
-            .bind(group_id)
+        let route_id = "grp-mock";
+        sqlx::query("INSERT INTO routes (id, name, enabled) VALUES (?, 'gpt-4o', 1)")
+            .bind(route_id)
             .execute(&pool)
             .await
             .unwrap();
         sqlx::query(
-            "INSERT INTO group_items (id, group_id, channel_id, model_name) \
+            "INSERT INTO route_items (id, route_id, channel_id, model_name) \
              VALUES ('item-mock', ?, ?, 'gpt-4o')",
         )
-        .bind(group_id)
+        .bind(route_id)
         .bind(channel_id)
         .execute(&pool)
         .await

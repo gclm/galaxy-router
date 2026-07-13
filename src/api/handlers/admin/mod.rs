@@ -3,7 +3,7 @@ pub mod auth;
 pub mod backup;
 pub mod channels;
 pub mod fetch_models;
-pub mod groups;
+pub mod routes;
 pub mod model_info;
 pub mod settings;
 pub mod stats;

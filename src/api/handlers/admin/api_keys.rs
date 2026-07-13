@@ -22,7 +22,7 @@ pub struct ApiKey {
     pub supported_models: Option<String>,
     pub rate_limit_rpm: i32,
     pub rate_limit_tpm: i32,
-    pub allowed_groups: Option<String>,
+    pub allowed_routes: Option<String>,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -34,7 +34,7 @@ pub struct CreateApiKeyRequest {
     pub supported_models: Option<String>,
     pub rate_limit_rpm: Option<i32>,
     pub rate_limit_tpm: Option<i32>,
-    pub allowed_groups: Option<String>,
+    pub allowed_routes: Option<String>,
 }
 
 /// 更新 API Key 请求
@@ -45,7 +45,7 @@ pub struct UpdateApiKeyRequest {
     pub supported_models: Option<String>,
     pub rate_limit_rpm: Option<i32>,
     pub rate_limit_tpm: Option<i32>,
-    pub allowed_groups: Option<String>,
+    pub allowed_routes: Option<String>,
 }
 
 /// API Key 状态
@@ -112,7 +112,7 @@ pub async fn list(
     // Data
     let tz = tz_modifier(state.timezone_offset);
     let mut data_builder = sqlx::QueryBuilder::new(format!(
-        "SELECT id, name, api_key, enabled, COALESCE(supported_models, '') as supported_models, COALESCE(rate_limit_rpm, 0) as rate_limit_rpm, COALESCE(rate_limit_tpm, 0) as rate_limit_tpm, COALESCE(allowed_groups, '') as allowed_groups, datetime(created_at, '{}') as created_at, datetime(updated_at, '{}') as updated_at FROM api_keys",
+        "SELECT id, name, api_key, enabled, COALESCE(supported_models, '') as supported_models, COALESCE(rate_limit_rpm, 0) as rate_limit_rpm, COALESCE(rate_limit_tpm, 0) as rate_limit_tpm, COALESCE(allowed_routes, '') as allowed_routes, datetime(created_at, '{}') as created_at, datetime(updated_at, '{}') as updated_at FROM api_keys",
         tz, tz
     ));
     push_where(&mut data_builder, &query);
@@ -138,7 +138,7 @@ pub async fn list(
             supported_models: empty_to_none(row.get::<String, _>("supported_models")),
             rate_limit_rpm: row.get("rate_limit_rpm"),
             rate_limit_tpm: row.get("rate_limit_tpm"),
-            allowed_groups: empty_to_none(row.get::<String, _>("allowed_groups")),
+            allowed_routes: empty_to_none(row.get::<String, _>("allowed_routes")),
             created_at: row.get("created_at"),
             updated_at: row.get("updated_at"),
         })
@@ -189,12 +189,12 @@ pub async fn create(
     let supported_models = req.supported_models.unwrap_or_default();
     let rate_limit_rpm = req.rate_limit_rpm.unwrap_or(0);
     let rate_limit_tpm = req.rate_limit_tpm.unwrap_or(0);
-    let allowed_groups = req.allowed_groups.unwrap_or_default();
+    let allowed_routes = req.allowed_routes.unwrap_or_default();
 
     // 插入 API Key
     sqlx::query(
         r#"
-        INSERT INTO api_keys (id, name, api_key, enabled, supported_models, rate_limit_rpm, rate_limit_tpm, allowed_groups)
+        INSERT INTO api_keys (id, name, api_key, enabled, supported_models, rate_limit_rpm, rate_limit_tpm, allowed_routes)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         "#,
     )
@@ -205,7 +205,7 @@ pub async fn create(
     .bind(&supported_models)
     .bind(rate_limit_rpm)
     .bind(rate_limit_tpm)
-    .bind(&allowed_groups)
+    .bind(&allowed_routes)
     .execute(&state.pool)
     .await
     .map_err(|e| ApiError::internal_error(e.to_string()))?;
@@ -222,10 +222,10 @@ pub async fn create(
         },
         rate_limit_rpm,
         rate_limit_tpm,
-        allowed_groups: if allowed_groups.is_empty() {
+        allowed_routes: if allowed_routes.is_empty() {
             None
         } else {
-            Some(allowed_groups)
+            Some(allowed_routes)
         },
         created_at: now_local_str(state.timezone_offset),
         updated_at: now_local_str(state.timezone_offset),
@@ -241,7 +241,7 @@ pub async fn get(
 ) -> Result<Json<ApiResponse<ApiKey>>, (StatusCode, Json<ApiError>)> {
     let tz = tz_modifier(state.timezone_offset);
     let result = sqlx::query_as::<_, (String, String, String, bool, String, i32, i32, String, String, String)>(
-        AssertSqlSafe(format!("SELECT id, name, api_key, enabled, supported_models, COALESCE(rate_limit_rpm, 0), COALESCE(rate_limit_tpm, 0), COALESCE(allowed_groups, ''), datetime(created_at, '{tz}') as created_at, datetime(updated_at, '{tz}') as updated_at FROM api_keys WHERE id = ?").as_str()),
+        AssertSqlSafe(format!("SELECT id, name, api_key, enabled, supported_models, COALESCE(rate_limit_rpm, 0), COALESCE(rate_limit_tpm, 0), COALESCE(allowed_routes, ''), datetime(created_at, '{tz}') as created_at, datetime(updated_at, '{tz}') as updated_at FROM api_keys WHERE id = ?").as_str()),
     )
     .bind(&id)
     .fetch_optional(&state.pool)
@@ -256,7 +256,7 @@ pub async fn get(
         supported_models,
         rate_limit_rpm,
         rate_limit_tpm,
-        allowed_groups,
+        allowed_routes,
         created_at,
         updated_at,
     ) = result.ok_or_else(|| ApiError::not_found("API Key 不存在"))?;
@@ -269,7 +269,7 @@ pub async fn get(
         supported_models: empty_to_none(supported_models),
         rate_limit_rpm,
         rate_limit_tpm,
-        allowed_groups: empty_to_none(allowed_groups),
+        allowed_routes: empty_to_none(allowed_routes),
         created_at,
         updated_at,
     })))
@@ -320,9 +320,9 @@ pub async fn update(
         separated.push_bind_unseparated(tpm);
         has_update = true;
     }
-    if let Some(ref allowed_groups) = req.allowed_groups {
-        separated.push("allowed_groups = ");
-        separated.push_bind_unseparated(allowed_groups);
+    if let Some(ref allowed_routes) = req.allowed_routes {
+        separated.push("allowed_routes = ");
+        separated.push_bind_unseparated(allowed_routes);
         has_update = true;
     }
 

@@ -16,7 +16,7 @@ async fn test_backup_export_empty_data() {
     assert_eq!(body["data"]["version"], 1);
     assert!(body["data"]["exported_at"].is_string());
     assert!(body["data"]["data"]["channels"].is_array());
-    assert!(body["data"]["data"]["groups"].is_array());
+    assert!(body["data"]["data"]["routes"].is_array());
     assert!(body["data"]["data"]["api_keys"].is_array());
     assert!(body["data"]["data"]["settings"].is_array());
 }
@@ -46,7 +46,7 @@ async fn test_backup_import_valid() {
         "app_version": "0.0.1",
         "data": {
             "channels": [],
-            "groups": [],
+            "routes": [],
             "api_keys": [{"name": "imported-key", "api_key": "sk-gr-imported-001", "enabled": true}],
             "settings": [{"key": "scheduler.top_k", "value": "5"}]
         }
@@ -68,7 +68,7 @@ async fn test_backup_import_invalid_format_returns_400() {
         "version": 1,
         "exported_at": "2026-01-01T00:00:00Z",
         "app_version": "0.0.1",
-        "data": {"channels":[],"groups":[],"api_keys":[],"settings":[]}
+        "data": {"channels":[],"routes":[],"api_keys":[],"settings":[]}
     }"#;
     let resp = app
         .oneshot(app.admin_json(Method::POST, "/api/v1/admin/backups", import_body))
@@ -84,7 +84,7 @@ async fn test_backup_import_version_mismatch_returns_400() {
         "version": 999,
         "exported_at": "2026-01-01T00:00:00Z",
         "app_version": "0.0.1",
-        "data": {"channels":[],"groups":[],"api_keys":[],"settings":[]}
+        "data": {"channels":[],"routes":[],"api_keys":[],"settings":[]}
     }"#;
     let resp = app
         .oneshot(app.admin_json(Method::POST, "/api/v1/admin/backups", import_body))

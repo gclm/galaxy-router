@@ -139,8 +139,8 @@ export interface TestEndpointResponse {
   thinking_sample?: string
 }
 
-// Group types
-export interface GroupItem {
+// Route types
+export interface RouteItem {
   id: string
   channel_id: string
   model_name: string
@@ -148,7 +148,7 @@ export interface GroupItem {
   weight: number
 }
 
-export interface Group {
+export interface Route {
   id: string
   name: string
   provider: string
@@ -156,39 +156,39 @@ export interface Group {
   retry_enabled: boolean
   first_token_timeout_secs: number
   enabled: boolean
-  items: GroupItem[]
+  items: RouteItem[]
   created_at: string
   updated_at: string
 }
 
-export interface CreateGroupRequest {
+export interface CreateRouteRequest {
   name: string
   provider?: string
   match_regex?: string
   retry_enabled?: boolean
   first_token_timeout_secs?: number
   enabled?: boolean
-  items: CreateGroupItemRequest[]
+  items: CreateRouteItemRequest[]
 }
 
-export interface CreateGroupItemRequest {
+export interface CreateRouteItemRequest {
   channel_id: string
   model_name: string
   priority?: number
   weight?: number
 }
 
-export interface UpdateGroupRequest {
+export interface UpdateRouteRequest {
   name?: string
   provider?: string
   match_regex?: string
   retry_enabled?: boolean
   first_token_timeout_secs?: number
   enabled?: boolean
-  items?: CreateGroupItemRequest[]
+  items?: CreateRouteItemRequest[]
 }
 
-export interface AddGroupItemRequest {
+export interface AddRouteItemRequest {
   channel_id: string
   model_name: string
   priority?: number
@@ -204,7 +204,7 @@ export interface ApiKey {
   supported_models: string | null
   rate_limit_rpm: number
   rate_limit_tpm: number
-  allowed_groups: string | null
+  allowed_routes: string | null
   created_at: string
   updated_at: string
 }
@@ -214,7 +214,7 @@ export interface CreateApiKeyRequest {
   supported_models?: string
   rate_limit_rpm?: number
   rate_limit_tpm?: number
-  allowed_groups?: string
+  allowed_routes?: string
 }
 
 export interface UpdateApiKeyRequest {
@@ -223,7 +223,7 @@ export interface UpdateApiKeyRequest {
   supported_models?: string
   rate_limit_rpm?: number
   rate_limit_tpm?: number
-  allowed_groups?: string
+  allowed_routes?: string
 }
 
 // 分页响应
@@ -298,7 +298,7 @@ export interface SystemInfo {
   version: string
   uptime_secs: number
   channel_count: number
-  group_count: number
+  route_count: number
   api_key_count: number
 }
 
@@ -344,7 +344,7 @@ export interface RequestLog {
   api_key_name: string | null
   channel_id: string | null
   channel_name: string | null
-  group_id: string | null
+  route_id: string | null
   requested_model: string
   actual_model: string | null
   input_tokens: number

@@ -183,7 +183,7 @@ impl ProxyStreamRelayExecutor {
             channel,
             target_model: candidate.target_model.clone(),
             endpoint,
-            group_id: candidate.group_id.clone(),
+            route_id: candidate.route_id.clone(),
         })
     }
 
@@ -394,7 +394,7 @@ impl ProxyStreamRelayExecutor {
 
         // 流处理 + 统计记录全在一个 spawned task 里
         let active_decremented_spawn = active_decremented.clone();
-        let group_id = selection.group_id.clone();
+        let route_id = selection.route_id.clone();
 
         // 为 spawn task 的 panic 兜底预先构造 RequestRecord（关键字段的快照）。
         // 即使 spawn 内部 panic，也能由 StreamPanicGuard 的 Drop 写一条简化失败日志，
@@ -406,7 +406,7 @@ impl ProxyStreamRelayExecutor {
                 request_id: Some(request_id_clone.clone()),
                 api_key_id: sc_api_key_id.clone(),
                 channel_id: Some(sc_channel_id.clone()),
-                group_id: group_id.clone(),
+                route_id: route_id.clone(),
                 requested_model: sc_model.clone(),
                 actual_model: Some(sc_target_model.clone()),
                 input_tokens: 0,
@@ -790,7 +790,7 @@ impl ProxyStreamRelayExecutor {
                 request_id_clone,
                 sc_api_key_id,
                 sc_channel_id,
-                group_id,
+                route_id,
                 sc_model,
                 sc_target_model,
                 input_tokens,

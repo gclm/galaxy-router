@@ -18,7 +18,7 @@ pub struct SystemInfo {
     pub version: &'static str,
     pub uptime_secs: u64,
     pub channel_count: i64,
-    pub group_count: i64,
+    pub route_count: i64,
     pub api_key_count: i64,
 }
 
@@ -30,7 +30,7 @@ pub async fn get(
         .await
         .map_err(|e| ApiError::internal_error(e.to_string()))?;
 
-    let group_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM groups")
+    let route_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM routes")
         .fetch_one(&state.pool)
         .await
         .map_err(|e| ApiError::internal_error(e.to_string()))?;
@@ -46,7 +46,7 @@ pub async fn get(
         version: env!("GALAXY_BUILD_VERSION"),
         uptime_secs,
         channel_count,
-        group_count,
+        route_count,
         api_key_count,
     })))
 }

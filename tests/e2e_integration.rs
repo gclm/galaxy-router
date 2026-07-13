@@ -666,12 +666,12 @@ async fn test_e2e_admin_api_keys_crud() {
 
 #[tokio::test]
 async fn test_e2e_admin_groups_list_empty() {
-    // groups::create 要求 items 非空且引用真实 channel；先只覆盖 list 路径
+    // routes::create 要求 items 非空且引用真实 channel；先只覆盖 list 路径
     let (app, jwt) = build_test_app_with_admin().await;
     let resp = app
         .oneshot(
             Request::builder()
-                .uri("/api/v1/admin/groups")
+                .uri("/api/v1/admin/routes")
                 .header("authorization", format!("Bearer {}", jwt))
                 .body(Body::empty())
                 .unwrap(),

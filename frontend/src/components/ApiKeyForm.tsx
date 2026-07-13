@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import type { ApiKey, BudgetLimit, CreateApiKeyRequest, Group } from '@/api/types'
+import type { ApiKey, BudgetLimit, CreateApiKeyRequest, Route } from '@/api/types'
 import { Button } from '@/components/ui/button'
 import { Check, Copy } from 'lucide-react'
 
@@ -8,8 +8,8 @@ interface ApiKeyFormProps {
   apiKey?: ApiKey
   /** 可选的 budget（编辑模式） */
   budget?: BudgetLimit
-  /** 可用分组列表 */
-  groups: Group[]
+  /** 可用模型路由列表 */
+  routes: Route[]
   /** 提交回调（返回值仅创建模式使用：新创建的 key 对象） */
   onSubmit: (data: CreateApiKeyRequest & { budget_monthly?: number; budget_daily?: number }) => void
   onCancel: () => void
@@ -28,7 +28,7 @@ interface ApiKeyFormProps {
 export function ApiKeyForm({
   apiKey,
   budget,
-  groups,
+  routes,
   onSubmit,
   onCancel,
   newKeyResult,
@@ -44,9 +44,9 @@ export function ApiKeyForm({
   const [rateLimitTpm, setRateLimitTpm] = useState(
     apiKey && apiKey.rate_limit_tpm > 0 ? String(apiKey.rate_limit_tpm) : '',
   )
-  const [selectedGroups, setSelectedGroups] = useState<string[]>(
-    apiKey?.allowed_groups
-      ? apiKey.allowed_groups.split(',').map((s) => s.trim()).filter(Boolean)
+  const [selectedRoutes, setSelectedRoutes] = useState<string[]>(
+    apiKey?.allowed_routes
+      ? apiKey.allowed_routes.split(',').map((s) => s.trim()).filter(Boolean)
       : [],
   )
   const [budgetMonthly, setBudgetMonthly] = useState(
@@ -55,10 +55,10 @@ export function ApiKeyForm({
   const [budgetDaily, setBudgetDaily] = useState(
     budget?.daily_limit_usd ? String(budget.daily_limit_usd) : '',
   )
-  const [groupSearch, setGroupSearch] = useState('')
+  const [routeSearch, setGroupSearch] = useState('')
 
-  const toggleGroup = (group: string) => {
-    setSelectedGroups((prev) =>
+  const toggleRoute = (group: string) => {
+    setSelectedRoutes((prev) =>
       prev.includes(group) ? prev.filter((g) => g !== group) : [...prev, group],
     )
   }
@@ -71,7 +71,7 @@ export function ApiKeyForm({
       name: name.trim(),
       rate_limit_rpm: rateLimitRpm ? parseInt(rateLimitRpm) : undefined,
       rate_limit_tpm: rateLimitTpm ? parseInt(rateLimitTpm) : undefined,
-      allowed_groups: selectedGroups.length > 0 ? selectedGroups.join(',') : undefined,
+      allowed_routes: selectedRoutes.length > 0 ? selectedRoutes.join(',') : undefined,
     }
 
     // 附带预算(创建/编辑都支持;即使 0 也附——编辑时 0 表示清除预算)
@@ -135,25 +135,25 @@ export function ApiKeyForm({
         />
       </div>
 
-      {/* Group Selector */}
+      {/* Route Selector */}
       <div>
         <label className="block text-sm font-medium mb-2">
-          允许访问的分组（留空表示全部）
+          允许访问的模型路由（留空表示全部）
         </label>
-        {groups.length === 0 ? (
-          <p className="text-xs text-muted-foreground">暂无可用分组</p>
+        {routes.length === 0 ? (
+          <p className="text-xs text-muted-foreground">暂无可用模型路由</p>
         ) : (
           <>
             <input
               type="text"
-              value={groupSearch}
+              value={routeSearch}
               onChange={(e) => setGroupSearch(e.target.value)}
               className="input mb-2"
-              placeholder="搜索分组..."
+              placeholder="搜索模型路由..."
             />
             <div className="max-h-48 overflow-y-auto rounded-lg border p-2 space-y-1">
-              {groups
-                .filter((g) => !groupSearch || g.name.toLowerCase().includes(groupSearch.toLowerCase()))
+              {routes
+                .filter((g) => !routeSearch || g.name.toLowerCase().includes(routeSearch.toLowerCase()))
                 .map((group) => (
                   <label
                     key={group.id}
@@ -161,8 +161,8 @@ export function ApiKeyForm({
                   >
                     <input
                       type="checkbox"
-                      checked={selectedGroups.includes(group.name)}
-                      onChange={() => toggleGroup(group.name)}
+                      checked={selectedRoutes.includes(group.name)}
+                      onChange={() => toggleRoute(group.name)}
                       className="rounded"
                     />
                     <span className="text-sm">{group.name}</span>
@@ -171,9 +171,9 @@ export function ApiKeyForm({
             </div>
           </>
         )}
-        {selectedGroups.length > 0 && (
+        {selectedRoutes.length > 0 && (
           <p className="text-xs text-muted-foreground mt-1">
-            已选择 {selectedGroups.length} 个分组
+            已选择 {selectedRoutes.length} 个模型路由
           </p>
         )}
       </div>

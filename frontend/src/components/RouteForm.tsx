@@ -1,12 +1,12 @@
 import { useMemo, useState } from 'react'
-import type { Channel, Group, CreateGroupRequest } from '@/api/types'
+import type { Channel, Route, CreateRouteRequest } from '@/api/types'
 import { Button } from '@/components/ui/button'
 import { Check, Plus, Search, Sparkles, Trash2, X } from 'lucide-react'
 
 interface GroupFormProps {
-  group?: Group
+  group?: Route
   channels: Channel[]
-  onSubmit: (data: CreateGroupRequest) => Promise<void>
+  onSubmit: (data: CreateRouteRequest) => Promise<void>
   onCancel: () => void
 }
 
@@ -21,7 +21,7 @@ function memberKey(channelId: string, modelName: string) {
   return `${channelId}::${modelName}`
 }
 
-export function GroupForm({ group, channels, onSubmit, onCancel }: GroupFormProps) {
+export function RouteForm({ group, channels, onSubmit, onCancel }: GroupFormProps) {
   const [name, setName] = useState(group?.name ?? '')
   const [provider, setProvider] = useState(group?.provider ?? '')
   const [matchRegex, setMatchRegex] = useState(group?.match_regex ?? '')
@@ -44,7 +44,7 @@ export function GroupForm({ group, channels, onSubmit, onCancel }: GroupFormProp
   const channelMap = new Map(channels.map(ch => [ch.id, ch]))
   const selectedKeys = useMemo(() => new Set(selectedItems.map(i => memberKey(i.channel_id, i.model_name))), [selectedItems])
 
-  // 按渠道分组的模型列表（带搜索过滤）
+  // 按渠道模型路由的模型列表（带搜索过滤）
   const channelGroups = useMemo(() => {
     const keyword = modelSearch.trim().toLowerCase()
     return channels
@@ -59,7 +59,7 @@ export function GroupForm({ group, channels, onSubmit, onCancel }: GroupFormProp
       .filter(ch => ch.filteredModels.length > 0 || (keyword && ch.name.toLowerCase().includes(keyword)))
   }, [channels, modelSearch, selectedKeys])
 
-  // 自动添加：按分组名称匹配模型
+  // 自动添加：按模型路由名称匹配模型
   const handleAutoAdd = () => {
     const keyword = matchRegex || name
     if (!keyword) return
@@ -114,7 +114,7 @@ export function GroupForm({ group, channels, onSubmit, onCancel }: GroupFormProp
     if (!name || selectedItems.length === 0) return
     setSubmitting(true)
     try {
-      const data: CreateGroupRequest = {
+      const data: CreateRouteRequest = {
         name,
         provider: provider || undefined,
         match_regex: matchRegex || undefined,
@@ -137,7 +137,7 @@ export function GroupForm({ group, channels, onSubmit, onCancel }: GroupFormProp
       <div className="space-y-3 mb-4">
         <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
           <div>
-            <label className="block text-sm font-medium mb-1">分组名称 *</label>
+            <label className="block text-sm font-medium mb-1">模型路由名称 *</label>
             <input
               type="text"
               value={name}
@@ -156,7 +156,7 @@ export function GroupForm({ group, channels, onSubmit, onCancel }: GroupFormProp
               className="input"
               placeholder="留空自动识别（如 openai）"
             />
-            <p className="text-xs text-muted-foreground mt-1">根据分组名自动匹配模型信息中的厂家</p>
+            <p className="text-xs text-muted-foreground mt-1">根据模型路由名自动匹配模型信息中的厂家</p>
           </div>
           <div>
             <label className="block text-sm font-medium mb-1">匹配规则 (正则)</label>
@@ -165,7 +165,7 @@ export function GroupForm({ group, channels, onSubmit, onCancel }: GroupFormProp
               value={matchRegex}
               onChange={(e) => setMatchRegex(e.target.value)}
               className="input font-mono"
-              placeholder="留空则精确匹配分组名"
+              placeholder="留空则精确匹配模型路由名"
             />
           </div>
         </div>
@@ -213,7 +213,7 @@ export function GroupForm({ group, channels, onSubmit, onCancel }: GroupFormProp
                 className={`flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-medium transition-colors ${
                   autoAddDisabled ? 'text-muted-foreground/50 cursor-not-allowed' : 'hover:bg-muted text-muted-foreground hover:text-foreground'
                 }`}
-                title={!name.trim() ? '请先填写分组名称' : '按分组名称自动匹配添加'}
+                title={!name.trim() ? '请先填写模型路由名称' : '按模型路由名称自动匹配添加'}
               >
                 <Sparkles className="h-3.5 w-3.5" />
                 <span>自动添加</span>

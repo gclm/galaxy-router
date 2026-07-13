@@ -1,6 +1,6 @@
 import { useState, useMemo } from 'react'
 import { useLocation } from 'react-router-dom'
-import { useApiKeys, useGroups } from '@/api/query-hooks'
+import { useApiKeys, useRoutes } from '@/api/query-hooks'
 import { copyText } from '@/lib/utils'
 import { generateClaudeConfig, generateCodexConfig } from '@/lib/clientConfig'
 import { toast } from 'sonner'
@@ -13,15 +13,15 @@ const labelCls = 'block text-sm font-medium mb-1.5'
 
 export function ClientConfig() {
   const { data: keysData } = useApiKeys()
-  const { data: groupsData } = useGroups()
+  const { data: routesData } = useRoutes()
 
   const keys = useMemo(
     () => (keysData?.items ?? []).filter((k) => k.enabled),
     [keysData],
   )
-  const groupNames = useMemo(
-    () => (groupsData?.items ?? []).filter((g) => g.enabled).map((g) => g.name),
-    [groupsData],
+  const routeNames = useMemo(
+    () => (routesData?.items ?? []).filter((g) => g.enabled).map((g) => g.name),
+    [routesData],
   )
 
   // 创建 key 成功后跳转过来时，通过路由 state 预填 key（见 ApiKeyForm 接入）
@@ -42,11 +42,11 @@ export function ClientConfig() {
   const [showRaw, setShowRaw] = useState(false)
 
   const apiKey = apiKeyInput || presetKey || keys[0]?.api_key || ''
-  const defaultGroup = groupNames[0] ?? ''
-  const sonnet = sonnetInput || defaultGroup
-  const opus = opusInput || defaultGroup
-  const haiku = haikuInput || defaultGroup
-  const codexModel = codexModelInput || defaultGroup
+  const defaultRoute = routeNames[0] ?? ''
+  const sonnet = sonnetInput || defaultRoute
+  const opus = opusInput || defaultRoute
+  const haiku = haikuInput || defaultRoute
+  const codexModel = codexModelInput || defaultRoute
 
   const claudeConfig = useMemo(
     () => generateClaudeConfig({ baseUrl, apiKey, sonnet, opus, haiku, hideAttribution, effortMax, disableAutoUpdate }),
@@ -80,7 +80,7 @@ export function ClientConfig() {
   }
 
   const noKey = keys.length === 0
-  const noGroup = groupNames.length === 0
+  const noRoute = routeNames.length === 0
 
   return (
     <div className="space-y-4">
@@ -136,26 +136,26 @@ export function ClientConfig() {
             <div className="text-sm font-medium pt-1">
               模型档位映射 <span className="text-xs text-muted-foreground font-normal">（每个档位选一个虚拟模型 / group）</span>
             </div>
-            {noGroup ? (
-              <p className="text-sm text-muted-foreground">暂无启用的分组（group），请先在「分组」页面创建。</p>
+            {noRoute ? (
+              <p className="text-sm text-muted-foreground">暂无启用的模型路由（group），请先在「模型路由」页面创建。</p>
             ) : (
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                 <div>
                   <label className="block text-xs text-muted-foreground mb-1">Sonnet 档</label>
                   <select className={inputCls} value={sonnet} onChange={(e) => setSonnetInput(e.target.value)}>
-                    {groupNames.map((n) => <option key={n} value={n}>{n}</option>)}
+                    {routeNames.map((n) => <option key={n} value={n}>{n}</option>)}
                   </select>
                 </div>
                 <div>
                   <label className="block text-xs text-muted-foreground mb-1">Opus 档</label>
                   <select className={inputCls} value={opus} onChange={(e) => setOpusInput(e.target.value)}>
-                    {groupNames.map((n) => <option key={n} value={n}>{n}</option>)}
+                    {routeNames.map((n) => <option key={n} value={n}>{n}</option>)}
                   </select>
                 </div>
                 <div>
                   <label className="block text-xs text-muted-foreground mb-1">Haiku 档</label>
                   <select className={inputCls} value={haiku} onChange={(e) => setHaikuInput(e.target.value)}>
-                    {groupNames.map((n) => <option key={n} value={n}>{n}</option>)}
+                    {routeNames.map((n) => <option key={n} value={n}>{n}</option>)}
                   </select>
                 </div>
               </div>
@@ -166,11 +166,11 @@ export function ClientConfig() {
             <div className="text-sm font-medium pt-1">
               默认模型 <span className="text-xs text-muted-foreground font-normal">（虚拟模型 / group）</span>
             </div>
-            {noGroup ? (
-              <p className="text-sm text-muted-foreground">暂无启用的分组（group），请先在「分组」页面创建。</p>
+            {noRoute ? (
+              <p className="text-sm text-muted-foreground">暂无启用的模型路由（group），请先在「模型路由」页面创建。</p>
             ) : (
               <select className={inputCls} value={codexModel} onChange={(e) => setCodexModelInput(e.target.value)}>
-                {groupNames.map((n) => <option key={n} value={n}>{n}</option>)}
+                {routeNames.map((n) => <option key={n} value={n}>{n}</option>)}
               </select>
             )}
           </div>

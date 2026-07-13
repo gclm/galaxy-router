@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::{SqliteConnection, SqlitePool};
 
 type DbResult<T> = Result<T, (StatusCode, Json<ApiError>)>;
-type GroupRow = (String, String, Option<String>, bool, i32, bool);
+type RouteRow = (String, String, Option<String>, bool, i32, bool);
 
 use crate::api::handlers::admin::channels::Channel;
 use crate::api::handlers::admin::channels::ChannelRow;
@@ -32,23 +32,24 @@ pub struct BackupFile {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct BackupData {
     pub channels: Vec<Channel>,
-    pub groups: Vec<GroupExport>,
+    #[serde(alias = "groups")]
+    pub routes: Vec<RouteExport>,
     pub api_keys: Vec<ApiKeyExport>,
     pub settings: Vec<SettingExport>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct GroupExport {
+pub struct RouteExport {
     pub name: String,
     pub match_regex: Option<String>,
     pub retry_enabled: bool,
     pub first_token_timeout_secs: i32,
     pub enabled: bool,
-    pub items: Vec<GroupItemExport>,
+    pub items: Vec<RouteItemExport>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct GroupItemExport {
+pub struct RouteItemExport {
     pub channel_name: String,
     pub model_name: String,
     pub priority: i32,
@@ -71,7 +72,7 @@ pub struct SettingExport {
 #[derive(Debug, Serialize, Default)]
 pub struct ImportResult {
     pub channels_imported: u32,
-    pub groups_imported: u32,
+    pub routes_imported: u32,
     pub api_keys_imported: u32,
     pub settings_imported: u32,
     pub errors: Vec<String>,
@@ -84,7 +85,7 @@ pub async fn export(
     let pool = &state.pool;
 
     let channels = fetch_channels(pool).await?;
-    let groups = fetch_groups(pool).await?;
+    let routes = fetch_groups(pool).await?;
     let api_keys = fetch_api_keys(pool).await?;
     let settings = fetch_settings(pool).await?;
 
@@ -95,7 +96,7 @@ pub async fn export(
         app_version: env!("CARGO_PKG_VERSION").to_string(),
         data: BackupData {
             channels,
-            groups,
+            routes,
             api_keys,
             settings,
         },
@@ -149,9 +150,9 @@ pub async fn import(
         }
     }
 
-    for g in &backup.data.groups {
+    for g in &backup.data.routes {
         match import_group(&mut tx, g).await {
-            Ok(true) => result.groups_imported += 1,
+            Ok(true) => result.routes_imported += 1,
             Ok(false) => {}
             Err(e) => result.errors.push(format!("分组 '{}': {}", g.name, e)),
         }
@@ -168,7 +169,7 @@ pub async fn import(
 #[derive(Debug, Serialize)]
 pub struct ResetResult {
     pub channels_deleted: u64,
-    pub groups_deleted: u64,
+    pub routes_deleted: u64,
     pub api_keys_deleted: u64,
     pub settings_reset: u64,
 }
@@ -183,13 +184,13 @@ pub async fn reset(
         .await
         .map_err(|e| ApiError::internal_error(e.to_string()))?;
 
-    let groups_deleted = sqlx::query("DELETE FROM group_items")
+    let routes_deleted = sqlx::query("DELETE FROM route_items")
         .execute(&mut *tx)
         .await
         .map_err(|e| ApiError::internal_error(e.to_string()))?
         .rows_affected();
-    let groups_deleted = groups_deleted
-        + sqlx::query("DELETE FROM groups")
+    let routes_deleted = routes_deleted
+        + sqlx::query("DELETE FROM routes")
             .execute(&mut *tx)
             .await
             .map_err(|e| ApiError::internal_error(e.to_string()))?
@@ -219,7 +220,7 @@ pub async fn reset(
 
     Ok(Json(ApiResponse::success(ResetResult {
         channels_deleted,
-        groups_deleted,
+        routes_deleted,
         api_keys_deleted,
         settings_reset,
     })))
@@ -241,29 +242,29 @@ async fn fetch_channels(pool: &SqlitePool) -> DbResult<Vec<Channel>> {
         .map_err(ApiError::internal_error)
 }
 
-async fn fetch_groups(pool: &SqlitePool) -> DbResult<Vec<GroupExport>> {
-    let rows: Vec<GroupRow> = sqlx::query_as(
-        "SELECT id, name, match_regex, retry_enabled, first_token_timeout_secs, enabled FROM groups ORDER BY created_at",
+async fn fetch_groups(pool: &SqlitePool) -> DbResult<Vec<RouteExport>> {
+    let rows: Vec<RouteRow> = sqlx::query_as(
+        "SELECT id, name, match_regex, retry_enabled, first_token_timeout_secs, enabled FROM routes ORDER BY created_at",
     )
     .fetch_all(pool)
     .await
     .map_err(|e| ApiError::internal_error(e.to_string()))?;
 
-    let mut groups = Vec::new();
+    let mut routes = Vec::new();
     for (id, name, match_regex, retry_enabled, first_token_timeout_secs, enabled) in
         rows
     {
         let items: Vec<(String, i32, i32, String)> = sqlx::query_as(
             "SELECT gi.model_name, gi.priority, gi.weight, ch.name
-             FROM group_items gi JOIN channels ch ON ch.id = gi.channel_id
-             WHERE gi.group_id = ? ORDER BY gi.priority",
+             FROM route_items gi JOIN channels ch ON ch.id = gi.channel_id
+             WHERE gi.route_id = ? ORDER BY gi.priority",
         )
         .bind(&id)
         .fetch_all(pool)
         .await
         .map_err(|e| ApiError::internal_error(e.to_string()))?;
 
-        groups.push(GroupExport {
+        routes.push(RouteExport {
             name,
             match_regex,
             retry_enabled,
@@ -272,7 +273,7 @@ async fn fetch_groups(pool: &SqlitePool) -> DbResult<Vec<GroupExport>> {
             items: items
                 .into_iter()
                 .map(
-                    |(model_name, priority, weight, channel_name)| GroupItemExport {
+                    |(model_name, priority, weight, channel_name)| RouteItemExport {
                         channel_name,
                         model_name,
                         priority,
@@ -282,7 +283,7 @@ async fn fetch_groups(pool: &SqlitePool) -> DbResult<Vec<GroupExport>> {
                 .collect(),
         });
     }
-    Ok(groups)
+    Ok(routes)
 }
 
 async fn fetch_api_keys(
@@ -378,11 +379,11 @@ async fn import_setting(conn: &mut SqliteConnection, s: &SettingExport) -> Resul
     Ok(result.rows_affected() > 0)
 }
 
-async fn import_group(conn: &mut SqliteConnection, g: &GroupExport) -> Result<bool, String> {
+async fn import_group(conn: &mut SqliteConnection, g: &RouteExport) -> Result<bool, String> {
     let id = crate::api::response::generate_id();
 
     let result = sqlx::query(
-        r#"INSERT OR IGNORE INTO groups (id, name, match_regex, retry_enabled, first_token_timeout_secs, enabled)
+        r#"INSERT OR IGNORE INTO routes (id, name, match_regex, retry_enabled, first_token_timeout_secs, enabled)
            VALUES (?, ?, ?, ?, ?, ?)"#,
     )
     .bind(&id)
@@ -413,7 +414,7 @@ async fn import_group(conn: &mut SqliteConnection, g: &GroupExport) -> Result<bo
 
         let item_id = crate::api::response::generate_id();
         sqlx::query(
-            r#"INSERT OR IGNORE INTO group_items (id, group_id, channel_id, model_name, priority, weight)
+            r#"INSERT OR IGNORE INTO route_items (id, route_id, channel_id, model_name, priority, weight)
                VALUES (?, ?, ?, ?, ?, ?)"#,
         )
         .bind(&item_id)

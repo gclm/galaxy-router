@@ -133,7 +133,7 @@ export function Dashboard() {
             { label: '版本', value: `v${systemInfo.version}`, icon: Cpu, color: 'from-blue-500 to-blue-600' },
             { label: '运行时间', value: formatUptime(systemInfo.uptime_secs), icon: Clock, color: 'from-indigo-500 to-indigo-600' },
             { label: '渠道', value: `${systemInfo.channel_count} 个`, icon: Radio, color: 'from-violet-500 to-violet-600' },
-            { label: '分组', value: `${systemInfo.group_count} 个`, icon: Layers, color: 'from-purple-500 to-purple-600' },
+            { label: '模型路由', value: `${systemInfo.route_count} 个`, icon: Layers, color: 'from-purple-500 to-purple-600' },
             { label: 'API Key', value: `${systemInfo.api_key_count} 个`, icon: Key, color: 'from-fuchsia-500 to-fuchsia-600' },
             { label: '状态', value: '运行中', icon: Activity, color: 'from-emerald-500 to-emerald-600', running: true },
           ].map((item) => (

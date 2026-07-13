@@ -40,7 +40,7 @@ interface PageInfo {
 const pageMap: [string, PageInfo][] = [
   ['/', { title: '仪表盘' }],
   ['/channels', { title: '渠道管理' }],
-  ['/groups', { title: '分组管理' }],
+  ['/routes', { title: '模型路由管理' }],
   ['/api-keys', { title: 'API Keys' }],
   ['/stats/models', { title: '模型统计' }],
   ['/stats/channels', { title: '渠道统计' }],

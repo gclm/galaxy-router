@@ -4,19 +4,19 @@ use crate::relay::channel::ChannelInfo;
 
 /// 分组信息
 #[derive(Debug, Clone)]
-pub struct GroupInfo {
+pub struct RouteInfo {
     pub id: String,
     pub name: String,
-    pub items: Vec<GroupItemInfo>,
+    pub items: Vec<RouteItemInfo>,
 }
 
 /// 分组项信息
 #[derive(Debug, Clone)]
-pub struct GroupItemInfo {
+pub struct RouteItemInfo {
     pub channel_id: String,
     pub model_name: String,
     pub priority: i32,
-    /// DB 字段：group_items.weight，保留供未来加权随机使用
+    /// DB 字段：route_items.weight，保留供未来加权随机使用
     #[allow(dead_code)]
     pub weight: i32,
 }
@@ -27,5 +27,5 @@ pub struct SelectionResult {
     pub channel: ChannelInfo,
     pub target_model: String,
     pub endpoint: EndpointConfig,
-    pub group_id: Option<String>,
+    pub route_id: Option<String>,
 }

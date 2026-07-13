@@ -480,7 +480,7 @@ mod tests {
                 enabled: true,
                 headers: vec![],
             },
-            group_id: None,
+            route_id: None,
         };
 
         let prepared = prepare_proxy_request(

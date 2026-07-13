@@ -34,7 +34,7 @@ async fn test_proxy_failover_primary_fails_backup_takes_over() {
             r#"["gpt-4o"]"#,
         )
         .await;
-    app.insert_group("gpt-4o", &ch_primary, "gpt-4o").await;
+    app.insert_route("gpt-4o", &ch_primary, "gpt-4o").await;
 
     // 备渠道 + 分组
     let ch_backup = app
@@ -45,13 +45,13 @@ async fn test_proxy_failover_primary_fails_backup_takes_over() {
         )
         .await;
     // 添加备渠道到同一分组
-    let group = sqlx::query_scalar::<_, String>("SELECT id FROM groups WHERE name = 'gpt-4o'")
+    let group = sqlx::query_scalar::<_, String>("SELECT id FROM routes WHERE name = 'gpt-4o'")
         .fetch_one(&app.pool)
         .await
         .unwrap();
     let item_id = uuid::Uuid::now_v7().to_string();
     sqlx::query(
-        "INSERT INTO group_items (id, group_id, channel_id, model_name, priority, weight) VALUES (?, ?, ?, ?, 1, 100)",
+        "INSERT INTO route_items (id, route_id, channel_id, model_name, priority, weight) VALUES (?, ?, ?, ?, 1, 100)",
     )
     .bind(&item_id)
     .bind(&group)

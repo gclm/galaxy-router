@@ -1,6 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { channelsApi } from '@/api/channels'
-import { groupsApi } from '@/api/groups'
+import { routesApi } from '@/api/routes'
 import { apiKeysApi } from '@/api/api-keys'
 import { statsApi } from '@/api/stats'
 import { modelInfoApi, type ModelInfo } from '@/api/model-info'
@@ -10,8 +10,8 @@ import { apiClient } from '@/api/client'
 import type {
   CreateChannelRequest,
   UpdateChannelRequest,
-  CreateGroupRequest,
-  UpdateGroupRequest,
+  CreateRouteRequest,
+  UpdateRouteRequest,
   CreateApiKeyRequest,
   UpdateApiKeyRequest,
   SystemInfo,
@@ -49,33 +49,33 @@ export function useDeleteChannel() {
   })
 }
 
-// ─── Groups ──────────────────────────────────────────────
+// ─── Routes ──────────────────────────────────────────────
 
-export function useGroups() {
-  return useQuery({ queryKey: ['groups'], queryFn: () => groupsApi.list() })
+export function useRoutes() {
+  return useQuery({ queryKey: ['routes'], queryFn: () => routesApi.list() })
 }
 
-export function useCreateGroup() {
+export function useCreateRoute() {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: (data: CreateGroupRequest) => groupsApi.create(data),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['groups'] }),
+    mutationFn: (data: CreateRouteRequest) => routesApi.create(data),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['routes'] }),
   })
 }
 
-export function useUpdateGroup() {
+export function useUpdateRoute() {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: ({ id, data }: { id: string; data: UpdateGroupRequest }) => groupsApi.update(id, data),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['groups'] }),
+    mutationFn: ({ id, data }: { id: string; data: UpdateRouteRequest }) => routesApi.update(id, data),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['routes'] }),
   })
 }
 
-export function useDeleteGroup() {
+export function useDeleteRoute() {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: (id: string) => groupsApi.delete(id),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['groups'] }),
+    mutationFn: (id: string) => routesApi.delete(id),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['routes'] }),
   })
 }
 

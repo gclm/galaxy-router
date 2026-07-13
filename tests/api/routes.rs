@@ -13,7 +13,7 @@ async fn setup_channel(app: &TestApp) -> String {
 /// 辅助：通过 API 创建分组
 async fn create_group_via_api(app: &TestApp, body: &str) -> serde_json::Value {
     let resp = app
-        .oneshot(app.admin_json(Method::POST, "/api/v1/admin/groups", body))
+        .oneshot(app.admin_json(Method::POST, "/api/v1/admin/routes", body))
         .await;
     assert_status(resp, StatusCode::CREATED).await
 }
@@ -41,7 +41,7 @@ async fn test_groups_create_empty_name_returns_400() {
     let resp = app
         .oneshot(app.admin_json(
             Method::POST,
-            "/api/v1/admin/groups",
+            "/api/v1/admin/routes",
             &format!(r#"{{"name":"","items":[{{"channel_id":"{ch_id}","model_name":"gpt-4o"}}]}}"#),
         ))
         .await;
@@ -54,7 +54,7 @@ async fn test_groups_create_empty_items_returns_400() {
     let resp = app
         .oneshot(app.admin_json(
             Method::POST,
-            "/api/v1/admin/groups",
+            "/api/v1/admin/routes",
             r#"{"name":"test","items":[]}"#,
         ))
         .await;
@@ -68,7 +68,7 @@ async fn test_groups_create_duplicate_name_returns_409() {
     let body = format!(r#"{{"name":"gpt-4o","items":[{{"channel_id":"{ch_id}","model_name":"gpt-4o"}}]}}"#);
     create_group_via_api(&app, &body).await;
     let resp = app
-        .oneshot(app.admin_json(Method::POST, "/api/v1/admin/groups", &body))
+        .oneshot(app.admin_json(Method::POST, "/api/v1/admin/routes", &body))
         .await;
     assert_status(resp, StatusCode::CONFLICT).await;
 }
@@ -77,7 +77,7 @@ async fn test_groups_create_duplicate_name_returns_409() {
 async fn test_groups_list_empty() {
     let app = TestApp::new().await;
     let resp = app
-        .oneshot(app.admin_req(Method::GET, "/api/v1/admin/groups"))
+        .oneshot(app.admin_req(Method::GET, "/api/v1/admin/routes"))
         .await;
     let body = assert_status(resp, StatusCode::OK).await;
     assert_eq!(body["data"]["items"].as_array().unwrap().len(), 0);
@@ -97,7 +97,7 @@ async fn test_groups_list_with_pagination() {
         .await;
     }
     let resp = app
-        .oneshot(app.admin_req(Method::GET, "/api/v1/admin/groups?page=1&page_size=2"))
+        .oneshot(app.admin_req(Method::GET, "/api/v1/admin/routes?page=1&page_size=2"))
         .await;
     let body = assert_status(resp, StatusCode::OK).await;
     assert_eq!(body["data"]["items"].as_array().unwrap().len(), 2);
@@ -118,7 +118,7 @@ async fn test_groups_get_by_id() {
     let gid = body["data"]["id"].as_str().unwrap();
 
     let resp = app
-        .oneshot(app.admin_req(Method::GET, &format!("/api/v1/admin/groups/{gid}")))
+        .oneshot(app.admin_req(Method::GET, &format!("/api/v1/admin/routes/{gid}")))
         .await;
     let body = assert_status(resp, StatusCode::OK).await;
     assert_eq!(body["data"]["name"], "gpt-4o");
@@ -131,7 +131,7 @@ async fn test_groups_get_not_found_returns_404() {
     let resp = app
         .oneshot(app.admin_req(
             Method::GET,
-            "/api/v1/admin/groups/00000000-0000-0000-0000-000000000000",
+            "/api/v1/admin/routes/00000000-0000-0000-0000-000000000000",
         ))
         .await;
     assert_status(resp, StatusCode::NOT_FOUND).await;
@@ -153,7 +153,7 @@ async fn test_groups_update_name_and_items() {
     let resp = app
         .oneshot(app.admin_json(
             Method::PUT,
-            &format!("/api/v1/admin/groups/{gid}"),
+            &format!("/api/v1/admin/routes/{gid}"),
             &format!(r#"{{"name":"after","items":[{{"channel_id":"{ch_id}","model_name":"gpt-4o-updated"}}]}}"#),
         ))
         .await;
@@ -178,7 +178,7 @@ async fn test_groups_update_empty_items_returns_400() {
     let resp = app
         .oneshot(app.admin_json(
             Method::PUT,
-            &format!("/api/v1/admin/groups/{gid}"),
+            &format!("/api/v1/admin/routes/{gid}"),
             r#"{"items":[]}"#,
         ))
         .await;
@@ -191,7 +191,7 @@ async fn test_groups_update_not_found_returns_404() {
     let resp = app
         .oneshot(app.admin_json(
             Method::PUT,
-            "/api/v1/admin/groups/00000000-0000-0000-0000-000000000000",
+            "/api/v1/admin/routes/00000000-0000-0000-0000-000000000000",
             r#"{"name":"x"}"#,
         ))
         .await;
@@ -212,7 +212,7 @@ async fn test_groups_delete_existing() {
     let gid = body["data"]["id"].as_str().unwrap();
 
     let resp = app
-        .oneshot(app.admin_req(Method::DELETE, &format!("/api/v1/admin/groups/{gid}")))
+        .oneshot(app.admin_req(Method::DELETE, &format!("/api/v1/admin/routes/{gid}")))
         .await;
     assert_status(resp, StatusCode::OK).await;
 }
@@ -223,7 +223,7 @@ async fn test_groups_delete_not_found_returns_404() {
     let resp = app
         .oneshot(app.admin_req(
             Method::DELETE,
-            "/api/v1/admin/groups/00000000-0000-0000-0000-000000000000",
+            "/api/v1/admin/routes/00000000-0000-0000-0000-000000000000",
         ))
         .await;
     assert_status(resp, StatusCode::NOT_FOUND).await;
@@ -245,7 +245,7 @@ async fn test_groups_add_item() {
     let resp = app
         .oneshot(app.admin_json(
             Method::POST,
-            &format!("/api/v1/admin/groups/{gid}/items"),
+            &format!("/api/v1/admin/routes/{gid}/items"),
             &format!(r#"{{"channel_id":"{ch_id}","model_name":"gpt-4o-mini"}}"#),
         ))
         .await;
@@ -259,7 +259,7 @@ async fn test_groups_add_item_not_found_group_returns_404() {
     let resp = app
         .oneshot(app.admin_json(
             Method::POST,
-            "/api/v1/admin/groups/00000000-0000-0000-0000-000000000000/items",
+            "/api/v1/admin/routes/00000000-0000-0000-0000-000000000000/items",
             r#"{"channel_id":"x","model_name":"gpt-4o"}"#,
         ))
         .await;
@@ -283,7 +283,7 @@ async fn test_groups_delete_item() {
     let resp = app
         .oneshot(app.admin_req(
             Method::DELETE,
-            &format!("/api/v1/admin/groups/{gid}/items/{item_id}"),
+            &format!("/api/v1/admin/routes/{gid}/items/{item_id}"),
         ))
         .await;
     assert_status(resp, StatusCode::OK).await;
@@ -295,7 +295,7 @@ async fn test_groups_delete_item_not_found_returns_404() {
     let resp = app
         .oneshot(app.admin_req(
             Method::DELETE,
-            "/api/v1/admin/groups/00000000-0000-0000-0000-000000000000/items/00000000-0000-0000-0000-000000000000",
+            "/api/v1/admin/routes/00000000-0000-0000-0000-000000000000/items/00000000-0000-0000-0000-000000000000",
         ))
         .await;
     assert_status(resp, StatusCode::NOT_FOUND).await;

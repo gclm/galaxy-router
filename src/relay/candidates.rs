@@ -7,13 +7,13 @@ use crate::relay::state::ProxyState;
 use crate::scheduler::scoring::{
     CandidateScoreInput, SchedulerScoreWeights, ScoredCandidate, select_top_k_candidates,
 };
-use crate::scheduler::selector::GroupItemInfo;
+use crate::scheduler::selector::RouteItemInfo;
 use crate::scheduler::state::LoadBalancerState;
 
 /// M3-S1: 将候选渠道转换为 CandidateScoreInput 并用 scheduler 多因子打分排序
 async fn score_candidates(
     lb_state: &LoadBalancerState,
-    candidates: &[&GroupItemInfo],
+    candidates: &[&RouteItemInfo],
 ) -> Vec<ScoredCandidate> {
     let states = lb_state.channel_states.read().await;
 
@@ -85,7 +85,7 @@ async fn score_candidates(
 
 /// priority 硬分档 + health 自动降档排序（纯函数，便于单测）。
 ///
-/// 输入 `(priority, ScoredCandidate)` 列表：priority 来自 group_items，ScoredCandidate
+/// 输入 `(priority, ScoredCandidate)` 列表：priority 来自 route_items，ScoredCandidate
 /// 来自档内打分。输出：按 priority 升序分档拼接（小值=高档先），health<=0 的候选沉到
 /// 所有健康候选之后——health 是 EWMA 持续扣减值（runtime.health * is_available），归零
 /// = 持续不健康，硬性排后，不被 latency/least_conn 补偿反超。
@@ -113,7 +113,7 @@ fn tier_and_demote(scored: Vec<(i32, ScoredCandidate)>) -> Vec<ScoredCandidate> 
 ///
 /// 流程：
 /// 1. 检查 sticky session → 加入候选（sticky=true, score=最高）
-/// 2. 查找分组 → 获取 group_items → score_candidates 打分排序
+/// 2. 查找分组 → 获取 route_items → score_candidates 打分排序
 /// 3. 构建 Vec<RelayCandidates>（sticky 在前，按 score 降序）
 pub(crate) async fn build_relay_candidates(
     state: &ProxyState,
@@ -138,18 +138,18 @@ pub(crate) async fn build_relay_candidates(
             score: 100.0,
             sticky: true,
             target_model: model.to_string(),
-            group_id: None,
+            route_id: None,
         });
     }
 
     // 2. 分组候选（精确端点匹配）
-    let group = match state.find_group_by_name(model).await? {
+    let route = match state.find_route_by_name(model).await? {
         Some(g) => Some(g),
-        None => state.find_group_by_regex(model).await?,
+        None => state.find_route_by_regex(model).await?,
     };
 
-    if let Some(ref group) = group {
-        let items: Vec<&GroupItemInfo> = group
+    if let Some(ref route) = route {
+        let items: Vec<&RouteItemInfo> = route
             .items
             .iter()
             .filter(|item| !seen.contains(&item.channel_id))
@@ -157,13 +157,13 @@ pub(crate) async fn build_relay_candidates(
 
         if !items.is_empty() {
             // priority 硬分档：按 priority 值分档，每档内 score_candidates 打分（档内相对归一化）
-            let mut tiers: BTreeMap<i32, Vec<&GroupItemInfo>> = BTreeMap::new();
+            let mut tiers: BTreeMap<i32, Vec<&RouteItemInfo>> = BTreeMap::new();
             for item in &items {
                 tiers.entry(item.priority).or_default().push(*item);
             }
             let mut scored_with_prio: Vec<(i32, ScoredCandidate)> = Vec::new();
             for (prio, tier_items) in &tiers {
-                let tier_refs: Vec<&GroupItemInfo> = tier_items.to_vec();
+                let tier_refs: Vec<&RouteItemInfo> = tier_items.to_vec();
                 for sc in score_candidates(&state.lb_state, &tier_refs).await {
                     scored_with_prio.push((*prio, sc));
                 }
@@ -191,7 +191,7 @@ pub(crate) async fn build_relay_candidates(
                         score: sc.score,
                         sticky: false,
                         target_model,
-                        group_id: Some(group.id.clone()),
+                        route_id: Some(route.id.clone()),
                     });
                 }
             }
@@ -200,7 +200,7 @@ pub(crate) async fn build_relay_candidates(
 
     // 3. 候选为空时区分 "模型不存在" vs "渠道不可用"
     if candidates.is_empty() {
-        return if group.is_some() {
+        return if route.is_some() {
             Err(ProxyError::NoAvailableChannel(format!(
                 "模型 {} 的所有渠道不可用",
                 model
@@ -284,20 +284,20 @@ mod tests {
         lb.record_failure("ch-slow", false).await;
 
         let items = [
-            GroupItemInfo {
+            RouteItemInfo {
                 channel_id: "ch-fast".into(),
                 model_name: "gpt-4o".into(),
                 priority: 1,
                 weight: 10,
             },
-            GroupItemInfo {
+            RouteItemInfo {
                 channel_id: "ch-slow".into(),
                 model_name: "gpt-4o".into(),
                 priority: 1,
                 weight: 10,
             },
         ];
-        let refs: Vec<&GroupItemInfo> = items.iter().collect();
+        let refs: Vec<&RouteItemInfo> = items.iter().collect();
 
         let scored = score_candidates(&lb, &refs).await;
 
@@ -323,20 +323,20 @@ mod tests {
             .collect();
 
         let items = [
-            GroupItemInfo {
+            RouteItemInfo {
                 channel_id: "ch-idle".into(),
                 model_name: "gpt-4o".into(),
                 priority: 1,
                 weight: 10,
             },
-            GroupItemInfo {
+            RouteItemInfo {
                 channel_id: "ch-busy".into(),
                 model_name: "gpt-4o".into(),
                 priority: 1,
                 weight: 10,
             },
         ];
-        let refs: Vec<&GroupItemInfo> = items.iter().collect();
+        let refs: Vec<&RouteItemInfo> = items.iter().collect();
 
         let scored = score_candidates(&lb, &refs).await;
 

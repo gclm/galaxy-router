@@ -3,7 +3,7 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 
 use crate::relay::channel::ChannelInfo;
-use crate::relay::state::GroupInfo;
+use crate::relay::state::RouteInfo;
 
 /// 缓存大小限制
 const CACHE_MAX_SIZE: usize = 1000;
@@ -12,7 +12,7 @@ const CACHE_MAX_SIZE: usize = 1000;
 #[derive(Clone)]
 pub struct ProxyCache {
     channels: Arc<RwLock<HashMap<String, ChannelInfo>>>,
-    groups: Arc<RwLock<HashMap<String, GroupInfo>>>,
+    routes: Arc<RwLock<HashMap<String, RouteInfo>>>,
     model_index: Arc<RwLock<HashMap<String, Vec<String>>>>,
     compiled_regex: Arc<RwLock<HashMap<String, regex::Regex>>>,
 }
@@ -27,7 +27,7 @@ impl ProxyCache {
     pub fn new() -> Self {
         Self {
             channels: Arc::new(RwLock::new(HashMap::new())),
-            groups: Arc::new(RwLock::new(HashMap::new())),
+            routes: Arc::new(RwLock::new(HashMap::new())),
             model_index: Arc::new(RwLock::new(HashMap::new())),
             compiled_regex: Arc::new(RwLock::new(HashMap::new())),
         }
@@ -102,14 +102,14 @@ impl ProxyCache {
     }
 
     /// 获取缓存的分组
-    pub async fn get_group(&self, name: &str) -> Option<GroupInfo> {
-        let cache = self.groups.read().await;
+    pub async fn get_group(&self, name: &str) -> Option<RouteInfo> {
+        let cache = self.routes.read().await;
         cache.get(name).cloned()
     }
 
     /// 设置分组缓存（超过限制时清除最旧条目）
-    pub async fn set_group(&self, group: GroupInfo) {
-        let mut cache = self.groups.write().await;
+    pub async fn set_group(&self, group: RouteInfo) {
+        let mut cache = self.routes.write().await;
         if cache.len() >= CACHE_MAX_SIZE
             && let Some(oldest_key) = cache.keys().next().cloned()
         {
@@ -119,8 +119,8 @@ impl ProxyCache {
     }
 
     /// 清除所有分组缓存
-    pub async fn invalidate_all_groups(&self) {
-        let mut cache = self.groups.write().await;
+    pub async fn invalidate_all_routes(&self) {
+        let mut cache = self.routes.write().await;
         cache.clear();
     }
 
@@ -170,8 +170,8 @@ mod tests {
         }
     }
 
-    fn sample_group(name: &str) -> GroupInfo {
-        GroupInfo {
+    fn sample_group(name: &str) -> RouteInfo {
+        RouteInfo {
             id: "g-1".into(),
             name: name.into(),
             items: vec![],
@@ -244,7 +244,7 @@ mod tests {
     async fn invalidate_all_groups_clears() {
         let cache = ProxyCache::new();
         cache.set_group(sample_group("g-1")).await;
-        cache.invalidate_all_groups().await;
+        cache.invalidate_all_routes().await;
         assert!(cache.get_group("g-1").await.is_none());
     }
 

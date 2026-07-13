@@ -285,15 +285,15 @@ pub async fn delete(
         .map_err(|e| ApiError::internal_error(e.to_string()))?;
 
     // 1. 查询引用该渠道的分组 ID（用于后续清除缓存）
-    let affected_group_ids: Vec<String> =
-        sqlx::query_scalar("SELECT DISTINCT group_id FROM group_items WHERE channel_id = ?")
+    let affected_route_ids: Vec<String> =
+        sqlx::query_scalar("SELECT DISTINCT route_id FROM route_items WHERE channel_id = ?")
             .bind(&id)
             .fetch_all(&mut *tx)
             .await
             .map_err(|e| ApiError::internal_error(e.to_string()))?;
 
-    // 2. 删除 group_items 中的关联记录
-    sqlx::query("DELETE FROM group_items WHERE channel_id = ?")
+    // 2. 删除 route_items 中的关联记录
+    sqlx::query("DELETE FROM route_items WHERE channel_id = ?")
         .bind(&id)
         .execute(&mut *tx)
         .await
@@ -319,8 +319,8 @@ pub async fn delete(
     state.cache.invalidate_channel(&id).await;
 
     // 6. 清除受影响的分组缓存
-    if !affected_group_ids.is_empty() {
-        state.cache.invalidate_all_groups().await;
+    if !affected_route_ids.is_empty() {
+        state.cache.invalidate_all_routes().await;
     }
 
     Ok(Json(crate::error::app::success_empty()))

@@ -128,9 +128,9 @@ impl TestApp {
             "dall-e-3",
             "gpt-4o-responses",
         ] {
-            app.insert_group(model, &ch_id, model).await;
+            app.insert_route(model, &ch_id, model).await;
         }
-        app.insert_group("claude-sonnet-4", &ch_anthropic, "claude-sonnet-4")
+        app.insert_route("claude-sonnet-4", &ch_anthropic, "claude-sonnet-4")
             .await;
 
         app.api_key_str = Some(key_string);
@@ -303,16 +303,16 @@ impl TestApp {
         id
     }
 
-    /// 通过 SQL 直接插入分组 + 一个 item，返回 group_id
-    pub async fn insert_group(
+    /// 通过 SQL 直接插入分组 + 一个 item，返回 route_id
+    pub async fn insert_route(
         &self,
         model_name: &str,
         channel_id: &str,
         target_model: &str,
     ) -> String {
-        let group_id = uuid::Uuid::now_v7().to_string();
-        sqlx::query("INSERT INTO groups (id, name, enabled) VALUES (?, ?, ?)")
-            .bind(&group_id)
+        let route_id = uuid::Uuid::now_v7().to_string();
+        sqlx::query("INSERT INTO routes (id, name, enabled) VALUES (?, ?, ?)")
+            .bind(&route_id)
             .bind(model_name)
             .bind(true)
             .execute(&self.pool)
@@ -321,17 +321,17 @@ impl TestApp {
 
         let item_id = uuid::Uuid::now_v7().to_string();
         sqlx::query(
-            "INSERT INTO group_items (id, group_id, channel_id, model_name, priority, weight) VALUES (?, ?, ?, ?, 1, 100)",
+            "INSERT INTO route_items (id, route_id, channel_id, model_name, priority, weight) VALUES (?, ?, ?, ?, 1, 100)",
         )
         .bind(&item_id)
-        .bind(&group_id)
+        .bind(&route_id)
         .bind(channel_id)
         .bind(target_model)
         .execute(&self.pool)
         .await
         .unwrap();
 
-        group_id
+        route_id
     }
 
     // ── fixture 数据访问 ──

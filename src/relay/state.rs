@@ -1,4 +1,4 @@
-pub use crate::scheduler::selector::{GroupInfo, GroupItemInfo};
+pub use crate::scheduler::selector::{RouteInfo, RouteItemInfo};
 
 use crate::api::handlers::admin::channels::{
     EndpointConfig, UpstreamApiKey, parse_api_keys,
@@ -102,7 +102,7 @@ impl ProxyState {
     }
 
     /// 根据名称查找分组（带缓存）
-    pub(crate) async fn find_group_by_name(&self, name: &str) -> Result<Option<GroupInfo>, ProxyError> {
+    pub(crate) async fn find_route_by_name(&self, name: &str) -> Result<Option<RouteInfo>, ProxyError> {
         // 1. 检查缓存
         if let Some(group) = self.cache.get_group(name).await {
             return Ok(Some(group));
@@ -110,7 +110,7 @@ impl ProxyState {
 
         // 2. 缓存未命中，查询数据库
         let result = sqlx::query_as::<_, (String, String)>(
-            "SELECT id, name FROM groups WHERE name = ? AND enabled = 1",
+            "SELECT id, name FROM routes WHERE name = ? AND enabled = 1",
         )
         .bind(name)
         .fetch_optional(&self.pool)
@@ -119,8 +119,8 @@ impl ProxyState {
 
         match result {
             Some((id, name)) => {
-                let items = self.get_group_items(&id).await?;
-                let group = GroupInfo {
+                let items = self.get_route_items(&id).await?;
+                let group = RouteInfo {
                     id,
                     name: name.clone(),
                     items,
@@ -134,21 +134,21 @@ impl ProxyState {
     }
 
     /// 根据正则查找分组
-    pub(crate) async fn find_group_by_regex(&self, model: &str) -> Result<Option<GroupInfo>, ProxyError> {
-        let groups = sqlx::query_as::<_, (String, String, Option<String>)>(
-            "SELECT id, name, match_regex FROM groups WHERE enabled = 1 AND match_regex IS NOT NULL"
+    pub(crate) async fn find_route_by_regex(&self, model: &str) -> Result<Option<RouteInfo>, ProxyError> {
+        let routes = sqlx::query_as::<_, (String, String, Option<String>)>(
+            "SELECT id, name, match_regex FROM routes WHERE enabled = 1 AND match_regex IS NOT NULL"
         )
         .fetch_all(&self.pool)
         .await
         .map_err(|e| ProxyError::DatabaseError(e.to_string()))?;
 
-        for (id, name, match_regex) in groups {
+        for (id, name, match_regex) in routes {
             if let Some(pattern) = match_regex
                 && let Some(re) = self.cache.get_compiled_regex(&pattern).await
                 && re.is_match(model)
             {
-                let items = self.get_group_items(&id).await?;
-                return Ok(Some(GroupInfo { id, name, items }));
+                let items = self.get_route_items(&id).await?;
+                return Ok(Some(RouteInfo { id, name, items }));
             }
         }
 
@@ -156,18 +156,18 @@ impl ProxyState {
     }
 
     /// 获取分组项
-    async fn get_group_items(&self, group_id: &str) -> Result<Vec<GroupItemInfo>, ProxyError> {
+    async fn get_route_items(&self, route_id: &str) -> Result<Vec<RouteItemInfo>, ProxyError> {
         let items = sqlx::query_as::<_, (String, String, i32, i32)>(
-            "SELECT channel_id, model_name, priority, weight FROM group_items WHERE group_id = ? ORDER BY priority ASC, weight DESC"
+            "SELECT channel_id, model_name, priority, weight FROM route_items WHERE route_id = ? ORDER BY priority ASC, weight DESC"
         )
-        .bind(group_id)
+        .bind(route_id)
         .fetch_all(&self.pool)
         .await
         .map_err(|e| ProxyError::DatabaseError(e.to_string()))?;
 
         Ok(items
             .into_iter()
-            .map(|(channel_id, model_name, priority, weight)| GroupItemInfo {
+            .map(|(channel_id, model_name, priority, weight)| RouteItemInfo {
                 channel_id,
                 model_name,
                 priority,

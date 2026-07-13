@@ -60,7 +60,7 @@ async fn test_database_init() {
 
     assert!(tables.contains(&"users".to_string()));
     assert!(tables.contains(&"channels".to_string()));
-    assert!(tables.contains(&"groups".to_string()));
+    assert!(tables.contains(&"routes".to_string()));
     assert!(tables.contains(&"api_keys".to_string()));
     assert!(tables.contains(&"usage_logs".to_string()));
     assert!(tables.contains(&"usage_daily".to_string()));
@@ -204,9 +204,9 @@ async fn test_group_with_channel() {
         .unwrap();
 
     // 创建分组
-    let group_id = uuid::Uuid::now_v7().to_string();
-    sqlx::query("INSERT INTO groups (id, name) VALUES (?, ?)")
-        .bind(&group_id)
+    let route_id = uuid::Uuid::now_v7().to_string();
+    sqlx::query("INSERT INTO routes (id, name) VALUES (?, ?)")
+        .bind(&route_id)
         .bind("gpt-4o")
         .execute(&pool)
         .await
@@ -215,10 +215,10 @@ async fn test_group_with_channel() {
     // 添加分组项
     let item_id = uuid::Uuid::now_v7().to_string();
     sqlx::query(
-        "INSERT INTO group_items (id, group_id, channel_id, model_name, priority, weight) VALUES (?, ?, ?, ?, ?, ?)"
+        "INSERT INTO route_items (id, route_id, channel_id, model_name, priority, weight) VALUES (?, ?, ?, ?, ?, ?)"
     )
     .bind(&item_id)
-    .bind(&group_id)
+    .bind(&route_id)
     .bind(&channel_id)
     .bind("gpt-4o-2024-08-06")
     .bind(1)
@@ -228,15 +228,15 @@ async fn test_group_with_channel() {
     .unwrap();
 
     // 验证分组和分组项
-    let group_name: String = sqlx::query_scalar("SELECT name FROM groups WHERE id = ?")
-        .bind(&group_id)
+    let group_name: String = sqlx::query_scalar("SELECT name FROM routes WHERE id = ?")
+        .bind(&route_id)
         .fetch_one(&pool)
         .await
         .unwrap();
     assert_eq!(group_name, "gpt-4o");
 
-    let item_count: i32 = sqlx::query_scalar("SELECT COUNT(*) FROM group_items WHERE group_id = ?")
-        .bind(&group_id)
+    let item_count: i32 = sqlx::query_scalar("SELECT COUNT(*) FROM route_items WHERE route_id = ?")
+        .bind(&route_id)
         .fetch_one(&pool)
         .await
         .unwrap();

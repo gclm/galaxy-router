@@ -18,7 +18,7 @@ use crate::api::handlers::admin::auth::{self, AuthState};
 use crate::api::handlers::admin::backup::{self, BackupState};
 use crate::api::handlers::admin::channels::{self, ChannelState};
 use crate::api::handlers::admin::fetch_models;
-use crate::api::handlers::admin::groups::{self, GroupState};
+use crate::api::handlers::admin::routes::{self, RouteState};
 use crate::api::handlers::admin::model_info::{self, ModelsState};
 use crate::api::handlers::admin::settings::{self, SettingsState};
 use crate::api::handlers::admin::stats::{self, StatsApiState};
@@ -62,7 +62,7 @@ pub async fn create_router(
         timezone_offset: tz,
     };
 
-    let group_state = GroupState {
+    let route_state = RouteState {
         pool: pool.clone(),
         cache: shared_cache.clone(),
         timezone_offset: tz,
@@ -132,16 +132,16 @@ pub async fn create_router(
                 .with_state(channel_state),
         )
         .nest(
-            "/groups",
+            "/routes",
             Router::new()
-                .route("/", get(groups::list).post(groups::create))
+                .route("/", get(routes::list).post(routes::create))
                 .route(
                     "/{id}",
-                    get(groups::get).put(groups::update).delete(groups::delete),
+                    get(routes::get).put(routes::update).delete(routes::delete),
                 )
-                .route("/{id}/items", post(groups::add_item))
-                .route("/{id}/items/{item_id}", delete(groups::delete_item))
-                .with_state(group_state),
+                .route("/{id}/items", post(routes::add_item))
+                .route("/{id}/items/{item_id}", delete(routes::delete_item))
+                .with_state(route_state),
         )
         .nest(
             "/api-keys",

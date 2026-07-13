@@ -13,7 +13,7 @@ use crate::metrics::query::tz_modifier;
 
 /// 分组
 #[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct Group {
+pub struct Route {
     pub id: String,
     pub name: String,
     pub provider: String,
@@ -21,14 +21,14 @@ pub struct Group {
     pub retry_enabled: bool,
     pub first_token_timeout_secs: i32,
     pub enabled: bool,
-    pub items: Vec<GroupItem>,
+    pub items: Vec<RouteItem>,
     pub created_at: String,
     pub updated_at: String,
 }
 
 /// 分组项
 #[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct GroupItem {
+pub struct RouteItem {
     pub id: String,
     pub channel_id: String,
     pub model_name: String,
@@ -38,7 +38,7 @@ pub struct GroupItem {
 
 /// 列表查询参数
 #[derive(Debug, Deserialize)]
-pub struct ListGroupsQuery {
+pub struct ListRoutesQuery {
     pub search: Option<String>,
     pub status: Option<String>,
     pub sort_by: Option<String>,
@@ -49,19 +49,19 @@ pub struct ListGroupsQuery {
 
 /// 创建分组请求
 #[derive(Debug, Deserialize)]
-pub struct CreateGroupRequest {
+pub struct CreateRouteRequest {
     pub name: String,
     pub provider: Option<String>,
     pub match_regex: Option<String>,
     pub retry_enabled: Option<bool>,
     pub first_token_timeout_secs: Option<i32>,
     pub enabled: Option<bool>,
-    pub items: Vec<CreateGroupItemRequest>,
+    pub items: Vec<CreateRouteItemRequest>,
 }
 
 /// 创建分组项请求
 #[derive(Debug, Deserialize)]
-pub struct CreateGroupItemRequest {
+pub struct CreateRouteItemRequest {
     pub channel_id: String,
     pub model_name: String,
     pub priority: Option<i32>,
@@ -70,19 +70,19 @@ pub struct CreateGroupItemRequest {
 
 /// 更新分组请求
 #[derive(Debug, Deserialize)]
-pub struct UpdateGroupRequest {
+pub struct UpdateRouteRequest {
     pub name: Option<String>,
     pub provider: Option<String>,
     pub match_regex: Option<String>,
     pub retry_enabled: Option<bool>,
     pub first_token_timeout_secs: Option<i32>,
     pub enabled: Option<bool>,
-    pub items: Option<Vec<CreateGroupItemRequest>>,
+    pub items: Option<Vec<CreateRouteItemRequest>>,
 }
 
 /// 添加分组项请求
 #[derive(Debug, Deserialize)]
-pub struct AddGroupItemRequest {
+pub struct AddRouteItemRequest {
     pub channel_id: String,
     pub model_name: String,
     pub priority: Option<i32>,
@@ -91,7 +91,7 @@ pub struct AddGroupItemRequest {
 
 /// 分组状态
 #[derive(Clone)]
-pub struct GroupState {
+pub struct RouteState {
     pub pool: SqlitePool,
     pub cache: crate::relay::cache::ProxyCache,
     pub timezone_offset: i32,
@@ -99,9 +99,9 @@ pub struct GroupState {
 
 /// 获取分组列表（支持搜索、筛选、排序、分页）
 pub async fn list(
-    State(state): State<GroupState>,
-    Query(query): Query<ListGroupsQuery>,
-) -> Result<Json<ApiResponse<PaginatedResponse<Group>>>, (StatusCode, Json<ApiError>)> {
+    State(state): State<RouteState>,
+    Query(query): Query<ListRoutesQuery>,
+) -> Result<Json<ApiResponse<PaginatedResponse<Route>>>, (StatusCode, Json<ApiError>)> {
     let page = query.page.unwrap_or(1).max(1);
     let page_size = query.page_size.unwrap_or(20).clamp(1, 100);
     let offset = (page - 1) * page_size;
@@ -115,7 +115,7 @@ pub async fn list(
         _ => "DESC",
     };
 
-    let mut count_builder = sqlx::QueryBuilder::new("SELECT COUNT(*) FROM groups");
+    let mut count_builder = sqlx::QueryBuilder::new("SELECT COUNT(*) FROM routes");
     let _has_where = push_where(&mut count_builder, &query);
 
     let count_row = count_builder
@@ -127,7 +127,7 @@ pub async fn list(
 
     let tz = tz_modifier(state.timezone_offset);
     let mut data_builder = sqlx::QueryBuilder::new(format!(
-        "SELECT id, name, provider, match_regex, retry_enabled, first_token_timeout_secs, enabled, datetime(created_at, '{}') as created_at, datetime(updated_at, '{}') as updated_at FROM groups",
+        "SELECT id, name, provider, match_regex, retry_enabled, first_token_timeout_secs, enabled, datetime(created_at, '{}') as created_at, datetime(updated_at, '{}') as updated_at FROM routes",
         tz, tz
     ));
     push_where(&mut data_builder, &query);
@@ -150,11 +150,11 @@ pub async fn list(
     let mut items_list = Vec::new();
     for row in &rows {
         let id: String = row.get("id");
-        let group_items = get_group_items(&state.pool, &id).await?;
+        let route_items = get_route_items(&state.pool, &id).await?;
         let stored_provider: String = row.get("provider");
         let name: String = row.get("name");
         let provider = resolve_provider(&stored_provider, &name, &provider_map);
-        items_list.push(Group {
+        items_list.push(Route {
             id,
             name,
             provider,
@@ -162,7 +162,7 @@ pub async fn list(
             retry_enabled: row.get("retry_enabled"),
             first_token_timeout_secs: row.get("first_token_timeout_secs"),
             enabled: row.get("enabled"),
-            items: group_items,
+            items: route_items,
             created_at: row.get("created_at"),
             updated_at: row.get("updated_at"),
         });
@@ -174,7 +174,7 @@ pub async fn list(
     })))
 }
 
-fn push_where(builder: &mut sqlx::QueryBuilder<sqlx::Sqlite>, query: &ListGroupsQuery) -> bool {
+fn push_where(builder: &mut sqlx::QueryBuilder<sqlx::Sqlite>, query: &ListRoutesQuery) -> bool {
     let mut has_where = false;
 
     if let Some(ref search) = query.search
@@ -205,9 +205,9 @@ fn push_where(builder: &mut sqlx::QueryBuilder<sqlx::Sqlite>, query: &ListGroups
 
 /// 创建分组
 pub async fn create(
-    State(state): State<GroupState>,
-    Json(req): Json<CreateGroupRequest>,
-) -> Result<(StatusCode, Json<ApiResponse<Group>>), (StatusCode, Json<ApiError>)> {
+    State(state): State<RouteState>,
+    Json(req): Json<CreateRouteRequest>,
+) -> Result<(StatusCode, Json<ApiResponse<Route>>), (StatusCode, Json<ApiError>)> {
     if req.name.is_empty() {
         return Err(ApiError::bad_request("分组名称不能为空"));
     }
@@ -215,7 +215,7 @@ pub async fn create(
         return Err(ApiError::bad_request("至少需要一个分组项"));
     }
 
-    let group_id = generate_id();
+    let route_id = generate_id();
 
     let mut tx = state
         .pool
@@ -225,11 +225,11 @@ pub async fn create(
 
     sqlx::query(
         r#"
-        INSERT INTO groups (id, name, provider, match_regex, retry_enabled, first_token_timeout_secs, enabled)
+        INSERT INTO routes (id, name, provider, match_regex, retry_enabled, first_token_timeout_secs, enabled)
         VALUES (?, ?, ?, ?, ?, ?, ?)
         "#
     )
-    .bind(&group_id)
+    .bind(&route_id)
     .bind(&req.name)
     .bind(req.provider.as_deref().unwrap_or(""))
     .bind(&req.match_regex)
@@ -250,12 +250,12 @@ pub async fn create(
         let item_id = generate_id();
         sqlx::query(
             r#"
-            INSERT INTO group_items (id, group_id, channel_id, model_name, priority, weight)
+            INSERT INTO route_items (id, route_id, channel_id, model_name, priority, weight)
             VALUES (?, ?, ?, ?, ?, ?)
             "#,
         )
         .bind(&item_id)
-        .bind(&group_id)
+        .bind(&route_id)
         .bind(&item.channel_id)
         .bind(&item.model_name)
         .bind(item.priority.unwrap_or(1))
@@ -275,27 +275,27 @@ pub async fn create(
         .await
         .map_err(|e| ApiError::internal_error(e.to_string()))?;
 
-    state.cache.invalidate_all_groups().await;
-    let group = get_group_by_id(&state.pool, &group_id, state.timezone_offset).await?;
+    state.cache.invalidate_all_routes().await;
+    let group = get_route_by_id(&state.pool, &route_id, state.timezone_offset).await?;
     Ok((StatusCode::CREATED, Json(ApiResponse::success(group))))
 }
 
 /// 获取单个分组
 pub async fn get(
-    State(state): State<GroupState>,
+    State(state): State<RouteState>,
     Path(id): Path<String>,
-) -> Result<Json<ApiResponse<Group>>, (StatusCode, Json<ApiError>)> {
-    let group = get_group_by_id(&state.pool, &id, state.timezone_offset).await?;
+) -> Result<Json<ApiResponse<Route>>, (StatusCode, Json<ApiError>)> {
+    let group = get_route_by_id(&state.pool, &id, state.timezone_offset).await?;
     Ok(Json(ApiResponse::success(group)))
 }
 
 /// 更新分组
 pub async fn update(
-    State(state): State<GroupState>,
+    State(state): State<RouteState>,
     Path(id): Path<String>,
-    Json(req): Json<UpdateGroupRequest>,
-) -> Result<Json<ApiResponse<Group>>, (StatusCode, Json<ApiError>)> {
-    let existing = sqlx::query_scalar::<_, String>("SELECT id FROM groups WHERE id = ?")
+    Json(req): Json<UpdateRouteRequest>,
+) -> Result<Json<ApiResponse<Route>>, (StatusCode, Json<ApiError>)> {
+    let existing = sqlx::query_scalar::<_, String>("SELECT id FROM routes WHERE id = ?")
         .bind(&id)
         .fetch_optional(&state.pool)
         .await
@@ -317,7 +317,7 @@ pub async fn update(
         .await
         .map_err(|e| ApiError::internal_error(e.to_string()))?;
 
-    let mut builder = sqlx::QueryBuilder::new("UPDATE groups SET ");
+    let mut builder = sqlx::QueryBuilder::new("UPDATE routes SET ");
     let mut separated = builder.separated(", ");
 
     if let Some(ref name) = req.name {
@@ -357,7 +357,7 @@ pub async fn update(
         .map_err(|e| ApiError::internal_error(e.to_string()))?;
 
     if let Some(items) = &req.items {
-        sqlx::query("DELETE FROM group_items WHERE group_id = ?")
+        sqlx::query("DELETE FROM route_items WHERE route_id = ?")
             .bind(&id)
             .execute(&mut *tx)
             .await
@@ -367,7 +367,7 @@ pub async fn update(
             let item_id = generate_id();
             sqlx::query(
                 r#"
-                INSERT INTO group_items (id, group_id, channel_id, model_name, priority, weight)
+                INSERT INTO route_items (id, route_id, channel_id, model_name, priority, weight)
                 VALUES (?, ?, ?, ?, ?, ?)
                 "#,
             )
@@ -395,14 +395,14 @@ pub async fn update(
         .await
         .map_err(|e| ApiError::internal_error(e.to_string()))?;
 
-    let group = get_group_by_id(&state.pool, &id, state.timezone_offset).await?;
-    state.cache.invalidate_all_groups().await;
+    let group = get_route_by_id(&state.pool, &id, state.timezone_offset).await?;
+    state.cache.invalidate_all_routes().await;
     Ok(Json(ApiResponse::success(group)))
 }
 
 /// 删除分组
 pub async fn delete(
-    State(state): State<GroupState>,
+    State(state): State<RouteState>,
     Path(id): Path<String>,
 ) -> Result<Json<ApiResponse<()>>, (StatusCode, Json<ApiError>)> {
     let mut tx = state
@@ -411,13 +411,13 @@ pub async fn delete(
         .await
         .map_err(|e| ApiError::internal_error(e.to_string()))?;
 
-    sqlx::query("DELETE FROM group_items WHERE group_id = ?")
+    sqlx::query("DELETE FROM route_items WHERE route_id = ?")
         .bind(&id)
         .execute(&mut *tx)
         .await
         .map_err(|e| ApiError::internal_error(e.to_string()))?;
 
-    let result = sqlx::query("DELETE FROM groups WHERE id = ?")
+    let result = sqlx::query("DELETE FROM routes WHERE id = ?")
         .bind(&id)
         .execute(&mut *tx)
         .await
@@ -431,17 +431,17 @@ pub async fn delete(
         .await
         .map_err(|e| ApiError::internal_error(e.to_string()))?;
 
-    state.cache.invalidate_all_groups().await;
+    state.cache.invalidate_all_routes().await;
     Ok(Json(crate::error::app::success_empty()))
 }
 
 /// 添加分组项
 pub async fn add_item(
-    State(state): State<GroupState>,
+    State(state): State<RouteState>,
     Path(id): Path<String>,
-    Json(req): Json<AddGroupItemRequest>,
-) -> Result<(StatusCode, Json<ApiResponse<GroupItem>>), (StatusCode, Json<ApiError>)> {
-    let existing = sqlx::query_scalar::<_, String>("SELECT id FROM groups WHERE id = ?")
+    Json(req): Json<AddRouteItemRequest>,
+) -> Result<(StatusCode, Json<ApiResponse<RouteItem>>), (StatusCode, Json<ApiError>)> {
+    let existing = sqlx::query_scalar::<_, String>("SELECT id FROM routes WHERE id = ?")
         .bind(&id)
         .fetch_optional(&state.pool)
         .await
@@ -455,7 +455,7 @@ pub async fn add_item(
 
     sqlx::query(
         r#"
-        INSERT INTO group_items (id, group_id, channel_id, model_name, priority, weight)
+        INSERT INTO route_items (id, route_id, channel_id, model_name, priority, weight)
         VALUES (?, ?, ?, ?, ?, ?)
         "#,
     )
@@ -475,7 +475,7 @@ pub async fn add_item(
         }
     })?;
 
-    let item = GroupItem {
+    let item = RouteItem {
         id: item_id,
         channel_id: req.channel_id,
         model_name: req.model_name,
@@ -488,12 +488,12 @@ pub async fn add_item(
 
 /// 删除分组项
 pub async fn delete_item(
-    State(state): State<GroupState>,
-    Path((group_id, item_id)): Path<(String, String)>,
+    State(state): State<RouteState>,
+    Path((route_id, item_id)): Path<(String, String)>,
 ) -> Result<Json<ApiResponse<()>>, (StatusCode, Json<ApiError>)> {
-    let result = sqlx::query("DELETE FROM group_items WHERE id = ? AND group_id = ?")
+    let result = sqlx::query("DELETE FROM route_items WHERE id = ? AND route_id = ?")
         .bind(&item_id)
-        .bind(&group_id)
+        .bind(&route_id)
         .execute(&state.pool)
         .await
         .map_err(|e| ApiError::internal_error(e.to_string()))?;
@@ -502,18 +502,18 @@ pub async fn delete_item(
         return Err(ApiError::not_found("分组项不存在"));
     }
 
-    state.cache.invalidate_all_groups().await;
+    state.cache.invalidate_all_routes().await;
     Ok(Json(crate::error::app::success_empty()))
 }
 
-async fn get_group_by_id(
+async fn get_route_by_id(
     pool: &SqlitePool,
     id: &str,
     timezone_offset: i32,
-) -> Result<Group, (StatusCode, Json<ApiError>)> {
+) -> Result<Route, (StatusCode, Json<ApiError>)> {
     let tz = tz_modifier(timezone_offset);
     let result = sqlx::query_as::<_, (String, String, String, Option<String>, bool, i32, bool, String, String)>(
-        AssertSqlSafe(format!("SELECT id, name, provider, match_regex, retry_enabled, first_token_timeout_secs, enabled, datetime(created_at, '{}') as created_at, datetime(updated_at, '{}') as updated_at FROM groups WHERE id = ?", tz, tz).as_str())
+        AssertSqlSafe(format!("SELECT id, name, provider, match_regex, retry_enabled, first_token_timeout_secs, enabled, datetime(created_at, '{}') as created_at, datetime(updated_at, '{}') as updated_at FROM routes WHERE id = ?", tz, tz).as_str())
     )
     .bind(id)
     .fetch_optional(pool)
@@ -532,12 +532,12 @@ async fn get_group_by_id(
         updated_at,
     ) = result.ok_or_else(|| ApiError::not_found("分组不存在"))?;
 
-    let items = get_group_items(pool, &id).await?;
+    let items = get_route_items(pool, &id).await?;
 
     let provider_map = load_model_provider_map(pool).await?;
     let provider = resolve_provider(&stored_provider, &name, &provider_map);
 
-    Ok(Group {
+    Ok(Route {
         id,
         name,
         provider,
@@ -551,21 +551,21 @@ async fn get_group_by_id(
     })
 }
 
-async fn get_group_items(
+async fn get_route_items(
     pool: &SqlitePool,
-    group_id: &str,
-) -> Result<Vec<GroupItem>, (StatusCode, Json<ApiError>)> {
+    route_id: &str,
+) -> Result<Vec<RouteItem>, (StatusCode, Json<ApiError>)> {
     let items = sqlx::query_as::<_, (String, String, String, i32, i32)>(
-        "SELECT id, channel_id, model_name, priority, weight FROM group_items WHERE group_id = ? ORDER BY priority DESC, weight DESC"
+        "SELECT id, channel_id, model_name, priority, weight FROM route_items WHERE route_id = ? ORDER BY priority DESC, weight DESC"
     )
-    .bind(group_id)
+    .bind(route_id)
     .fetch_all(pool)
     .await
     .map_err(|e| ApiError::internal_error(e.to_string()))?;
 
     Ok(items
         .into_iter()
-        .map(|(id, channel_id, model_name, priority, weight)| GroupItem {
+        .map(|(id, channel_id, model_name, priority, weight)| RouteItem {
             id,
             channel_id,
             model_name,

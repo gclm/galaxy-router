@@ -726,7 +726,7 @@ function BackupTab() {
           导出数据
         </h2>
         <p className="text-sm text-muted-foreground">
-          导出当前系统的渠道、分组、API Key 和设置配置为 JSON 文件。
+          导出当前系统的渠道、模型路由、API Key 和设置配置为 JSON 文件。
         </p>
         <p className="text-xs text-amber-600">
           备份文件包含上游 API Key 明文，请妥善保管。
@@ -742,7 +742,7 @@ function BackupTab() {
           导入数据
         </h2>
         <p className="text-sm text-muted-foreground">
-          从备份文件恢复配置。同名渠道、分组和 API Key 将被跳过，设置项将更新。
+          从备份文件恢复配置。同名渠道、模型路由和 API Key 将被跳过，设置项将更新。
         </p>
         <div>
           <label className={`inline-flex cursor-pointer items-center gap-2 rounded-lg px-4 py-2 text-sm font-medium transition-colors ${
@@ -768,7 +768,7 @@ function BackupTab() {
             <p className="font-medium">导入结果</p>
             <div className="grid grid-cols-2 gap-2 text-muted-foreground">
               <span>渠道: {importResult.channels_imported}</span>
-              <span>分组: {importResult.groups_imported}</span>
+              <span>模型路由: {importResult.routes_imported}</span>
               <span>API Key: {importResult.api_keys_imported}</span>
               <span>设置: {importResult.settings_imported}</span>
             </div>
@@ -789,7 +789,7 @@ function BackupTab() {
           恢复出厂设置
         </h2>
         <p className="text-sm text-muted-foreground">
-          清空所有渠道、分组、API Key 和设置数据，恢复为出厂状态。管理员账户和定价数据不受影响。
+          清空所有渠道、模型路由、API Key 和设置数据，恢复为出厂状态。管理员账户和定价数据不受影响。
         </p>
         <p className="text-xs text-amber-600">
           此操作不可撤销，建议先导出备份。
@@ -811,7 +811,7 @@ function BackupTab() {
             <p className="font-medium text-destructive">已重置</p>
             <div className="grid grid-cols-2 gap-2 text-muted-foreground">
               <span>删除渠道: {resetResult.channels_deleted}</span>
-              <span>删除分组: {resetResult.groups_deleted}</span>
+              <span>删除模型路由: {resetResult.routes_deleted}</span>
               <span>删除 API Key: {resetResult.api_keys_deleted}</span>
               <span>重置设置: {resetResult.settings_reset}</span>
             </div>

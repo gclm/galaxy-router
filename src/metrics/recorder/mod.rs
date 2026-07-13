@@ -28,7 +28,7 @@ pub struct RequestRecord {
     pub request_id: Option<String>,
     pub api_key_id: Option<String>,
     pub channel_id: Option<String>,
-    pub group_id: Option<String>,
+    pub route_id: Option<String>,
     pub requested_model: String,
     pub actual_model: Option<String>,
     pub input_tokens: i32,
@@ -67,7 +67,7 @@ impl StatsRecorder {
         sqlx::query(
             r#"
             INSERT INTO usage_logs (
-                id, request_id, api_key_id, channel_id, group_id,
+                id, request_id, api_key_id, channel_id, route_id,
                 requested_model, actual_model,
                 input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens,
                 cost, latency_ms, ttft_ms, status_code, error_message,
@@ -80,7 +80,7 @@ impl StatsRecorder {
         .bind(&record.request_id)
         .bind(&record.api_key_id)
         .bind(&record.channel_id)
-        .bind(&record.group_id)
+        .bind(&record.route_id)
         .bind(&record.requested_model)
         .bind(&record.actual_model)
         .bind(record.input_tokens)
@@ -116,7 +116,7 @@ impl RequestRecord {
         last: &AttemptStats,
         request_id: Option<String>,
         api_key_id: Option<&str>,
-        group_id: Option<&str>,
+        route_id: Option<&str>,
         model: &str,
         request_content: Option<String>,
         response_content: Option<String>,
@@ -129,7 +129,7 @@ impl RequestRecord {
             request_id,
             api_key_id: api_key_id.map(str::to_string),
             channel_id: Some(last.channel_id.clone()),
-            group_id: group_id.map(str::to_string),
+            route_id: route_id.map(str::to_string),
             requested_model: model.to_string(),
             actual_model: Some(last.target_model.clone()),
             input_tokens: last.input_tokens,
@@ -161,7 +161,7 @@ impl RequestRecord {
     pub(crate) fn minimal_for_select_failure(
         request_id: Option<String>,
         api_key_id: Option<&str>,
-        group_id: Option<&str>,
+        route_id: Option<&str>,
         model: &str,
         request_content: Option<String>,
         response_content: Option<String>,
@@ -175,7 +175,7 @@ impl RequestRecord {
             request_id,
             api_key_id: api_key_id.map(str::to_string),
             channel_id: None,
-            group_id: group_id.map(str::to_string),
+            route_id: route_id.map(str::to_string),
             requested_model: model.to_string(),
             actual_model: None,
             input_tokens: 0,
@@ -223,7 +223,7 @@ pub(crate) async fn save_request_record(
     state: &ProxyState,
     request_id: Option<String>,
     api_key_id: Option<&str>,
-    group_id: Option<&str>,
+    route_id: Option<&str>,
     model: &str,
     request_content: Option<String>,
     response_content: Option<String>,
@@ -240,7 +240,7 @@ pub(crate) async fn save_request_record(
             last,
             request_id,
             api_key_id,
-            group_id,
+            route_id,
             model,
             request_content,
             response_content,
@@ -267,7 +267,7 @@ pub(crate) async fn save_request_record(
             RequestRecord::minimal_for_select_failure(
                 request_id,
                 api_key_id,
-                group_id,
+                route_id,
                 model,
                 request_content,
                 response_content,
@@ -309,7 +309,7 @@ pub(crate) async fn record_stream_completion(
     request_id: String,
     api_key_id: Option<String>,
     channel_id: String,
-    group_id: Option<String>,
+    route_id: Option<String>,
     requested_model: String,
     actual_model: String,
     input_tokens: i32,
@@ -347,7 +347,7 @@ pub(crate) async fn record_stream_completion(
         request_id: Some(request_id),
         api_key_id,
         channel_id: Some(channel_id),
-        group_id,
+        route_id,
         requested_model,
         actual_model: Some(actual_model),
         input_tokens,
@@ -409,7 +409,7 @@ mod tests {
             request_id: None,
             api_key_id: Some("k1".into()),
             channel_id: Some("c1".into()),
-            group_id: None,
+            route_id: None,
             requested_model: "gpt-4o".into(),
             actual_model: None,
             input_tokens: 10,
@@ -527,7 +527,7 @@ mod tests {
         );
         assert_eq!(record.api_key_id.as_deref(), Some("key-1"));
         assert_eq!(record.channel_id.as_deref(), Some("ch-1"));
-        assert_eq!(record.group_id.as_deref(), Some("grp-1"));
+        assert_eq!(record.route_id.as_deref(), Some("grp-1"));
         assert_eq!(record.requested_model, "gpt-4o");
         assert_eq!(record.actual_model.as_deref(), Some("gpt-4o"));
         assert_eq!(record.input_tokens, 10);

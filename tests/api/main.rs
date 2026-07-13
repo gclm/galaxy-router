@@ -5,7 +5,7 @@ mod api_keys;
 mod auth;
 mod backup;
 mod channels;
-mod groups;
+mod routes;
 mod models_info;
 mod settings;
 mod stats;

@@ -12,7 +12,7 @@ import {
   useCreateApiKey,
   useUpdateApiKey,
   useDeleteApiKey,
-  useGroups,
+  useRoutes,
   useBudgets,
   useSetBudget,
   useDeleteBudget,
@@ -60,9 +60,9 @@ export function ApiKeys() {
   const [copiedKey, setCopiedKey] = useState<string | null>(null)
   const [newKeyResult, setNewKeyResult] = useState<ApiKey | null>(null)
 
-  // ─── Groups ─────────────────────────────────────────────
-  const { data: groupsData } = useGroups()
-  const availableGroups = groupsData?.items ?? []
+  // ─── Routes ─────────────────────────────────────────────
+  const { data: routesData } = useRoutes()
+  const availableRoutes = routesData?.items ?? []
 
   // ─── Budgets ────────────────────────────────────────────
   const { data: budgets } = useBudgets()
@@ -78,9 +78,9 @@ export function ApiKeys() {
   const deleteMutation = useDeleteApiKey()
 
   // ─── Helpers ────────────────────────────────────────────
-  const formatGroups = (groups: string | null) => {
-    if (!groups) return '全部'
-    const list = groups.split(',').map((s) => s.trim()).filter(Boolean)
+  const formatRoutes = (routes: string | null) => {
+    if (!routes) return '全部'
+    const list = routes.split(',').map((s) => s.trim()).filter(Boolean)
     if (list.length === 0) return '全部'
     if (list.length <= 3) return list.join(', ')
     return `${list.slice(0, 3).join(', ')} 等 ${list.length} 个`
@@ -214,7 +214,7 @@ export function ApiKeys() {
   const columns = [
     { header: <SortHeader label="名称" field="name" sortBy={table.sortBy} sortOrder={table.sortOrder} onSort={table.handleSort} /> },
     { header: 'Key' },
-    { header: '分组权限' },
+    { header: '模型路由权限' },
     { header: '速率限制' },
     { header: '预算' },
     { header: '状态', align: 'center' as const },
@@ -295,7 +295,7 @@ export function ApiKeys() {
               </div>
             </td>
             <td className="px-4 py-3 text-xs text-muted-foreground">
-              {formatGroups(apiKey.allowed_groups)}
+              {formatRoutes(apiKey.allowed_routes)}
             </td>
             <td className="px-4 py-3 text-xs text-muted-foreground">
               {apiKey.rate_limit_rpm > 0 || apiKey.rate_limit_tpm > 0
@@ -369,7 +369,7 @@ export function ApiKeys() {
           <ApiKeyForm
             apiKey={editingKey ?? undefined}
             budget={editingKey ? getBudgetForKey(editingKey.id) : undefined}
-            groups={availableGroups}
+            routes={availableRoutes}
             onSubmit={editingKey ? handleUpdate : handleCreate}
             onCancel={closeForm}
             newKeyResult={!editingKey ? newKeyResult : undefined}

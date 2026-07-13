@@ -39,7 +39,7 @@ struct ApiKeyEntry {
     enabled: bool,
     rate_limit_rpm: u64,
     rate_limit_tpm: u64,
-    allowed_groups: String,
+    allowed_routes: String,
     cached_at: Instant,
 }
 
@@ -69,7 +69,7 @@ impl ApiKeyCache {
                     e.enabled,
                     e.rate_limit_rpm,
                     e.rate_limit_tpm,
-                    e.allowed_groups.clone(),
+                    e.allowed_routes.clone(),
                 )
             })
     }
@@ -84,7 +84,7 @@ impl ApiKeyCache {
         enabled: bool,
         rate_limit_rpm: u64,
         rate_limit_tpm: u64,
-        allowed_groups: String,
+        allowed_routes: String,
     ) {
         let mut cache = self.keys.write().await;
         if cache.len() >= 1000 {
@@ -98,7 +98,7 @@ impl ApiKeyCache {
                 enabled,
                 rate_limit_rpm,
                 rate_limit_tpm,
-                allowed_groups,
+                allowed_routes,
                 cached_at: Instant::now(),
             },
         );
@@ -172,7 +172,7 @@ async fn record_auth_failure(
         request_id: Some(request_id),
         api_key_id: None,
         channel_id: None,
-        group_id: None,
+        route_id: None,
         requested_model: model,
         actual_model: None,
         input_tokens: 0,
@@ -215,7 +215,7 @@ pub struct ApiKeyAuth {
     pub key_id: String,
     pub rate_limit_rpm: u64,
     pub rate_limit_tpm: u64,
-    pub allowed_groups: String,
+    pub allowed_routes: String,
 }
 
 impl<S: Send + Sync> FromRequestParts<S> for ApiKeyAuth {
@@ -251,7 +251,7 @@ impl<S: Send + Sync> FromRequestParts<S> for ApiKeyAuth {
 
         // 1. 检查缓存
         if let Some(cache) = parts.extensions.get::<ApiKeyCache>()
-            && let Some((id, _name, enabled, rpm, tpm, groups)) = cache.get(&api_key).await
+            && let Some((id, _name, enabled, rpm, tpm, routes)) = cache.get(&api_key).await
         {
             if !enabled {
                 record_auth_failure(
@@ -272,7 +272,7 @@ impl<S: Send + Sync> FromRequestParts<S> for ApiKeyAuth {
                 key_id: id,
                 rate_limit_rpm: rpm,
                 rate_limit_tpm: tpm,
-                allowed_groups: groups,
+                allowed_routes: routes,
             });
         }
 
@@ -297,7 +297,7 @@ impl<S: Send + Sync> FromRequestParts<S> for ApiKeyAuth {
         };
 
         let query_result = sqlx::query_as::<_, (String, String, bool, i32, i32, String)>(
-            "SELECT id, name, enabled, COALESCE(rate_limit_rpm, 0), COALESCE(rate_limit_tpm, 0), COALESCE(allowed_groups, '') FROM api_keys WHERE api_key = ?",
+            "SELECT id, name, enabled, COALESCE(rate_limit_rpm, 0), COALESCE(rate_limit_tpm, 0), COALESCE(allowed_routes, '') FROM api_keys WHERE api_key = ?",
         )
         .bind(&api_key)
         .fetch_optional(pool)
@@ -323,7 +323,7 @@ impl<S: Send + Sync> FromRequestParts<S> for ApiKeyAuth {
         };
 
         match result {
-            Some((id, name, enabled, rpm, tpm, groups)) => {
+            Some((id, name, enabled, rpm, tpm, routes)) => {
                 let rpm = rpm as u64;
                 let tpm = tpm as u64;
                 if let Some(cache) = parts.extensions.get::<ApiKeyCache>() {
@@ -335,7 +335,7 @@ impl<S: Send + Sync> FromRequestParts<S> for ApiKeyAuth {
                             enabled,
                             rpm,
                             tpm,
-                            groups.clone(),
+                            routes.clone(),
                         )
                         .await;
                 }
@@ -358,7 +358,7 @@ impl<S: Send + Sync> FromRequestParts<S> for ApiKeyAuth {
                     key_id: id,
                     rate_limit_rpm: rpm,
                     rate_limit_tpm: tpm,
-                    allowed_groups: groups,
+                    allowed_routes: routes,
                 })
             }
             None => {

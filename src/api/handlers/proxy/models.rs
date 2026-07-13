@@ -7,14 +7,14 @@ use crate::api::middleware::ApiKeyAuth;
 /// 获取可用模型列表（支持 API Key 分组权限和模型过滤）
 pub async fn list(auth: ApiKeyAuth, State(pool): State<SqlitePool>) -> impl IntoResponse {
     // 获取所有启用的分组名
-    let all_groups = sqlx::query_scalar::<_, String>("SELECT name FROM groups WHERE enabled = 1")
+    let all_groups = sqlx::query_scalar::<_, String>("SELECT name FROM routes WHERE enabled = 1")
         .fetch_all(&pool)
         .await
         .unwrap_or_default();
 
-    let models: Vec<String> = if !auth.allowed_groups.is_empty() {
-        // 优先使用 allowed_groups 过滤：Key 只能访问指定的分组
-        let allowed: Vec<String> = parse_supported_models(&auth.allowed_groups);
+    let models: Vec<String> = if !auth.allowed_routes.is_empty() {
+        // 优先使用 allowed_routes 过滤：Key 只能访问指定的分组
+        let allowed: Vec<String> = parse_supported_models(&auth.allowed_routes);
         all_groups
             .into_iter()
             .filter(|g| allowed.iter().any(|a| a.eq_ignore_ascii_case(g)))

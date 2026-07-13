@@ -1,7 +1,7 @@
 import { apiClient } from './client'
 import type { Channel } from './types'
 
-export interface GroupExport {
+export interface RouteExport {
   name: string
   match_regex: string | null
   retry_enabled: boolean
@@ -34,7 +34,7 @@ export interface BackupFile {
   app_version: string
   data: {
     channels: Channel[]
-    groups: GroupExport[]
+    routes: RouteExport[]
     api_keys: ApiKeyExport[]
     settings: SettingExport[]
   }
@@ -42,7 +42,7 @@ export interface BackupFile {
 
 export interface ImportResult {
   channels_imported: number
-  groups_imported: number
+  routes_imported: number
   api_keys_imported: number
   settings_imported: number
   errors: string[]
@@ -50,7 +50,7 @@ export interface ImportResult {
 
 export interface ResetResult {
   channels_deleted: number
-  groups_deleted: number
+  routes_deleted: number
   api_keys_deleted: number
   settings_reset: number
 }

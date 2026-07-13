@@ -1,10 +1,10 @@
 import { useState } from 'react'
-import { groupsApi } from '@/api/groups'
-import type { Group, CreateGroupRequest } from '@/api/types'
+import { routesApi } from '@/api/routes'
+import type { Route, CreateRouteRequest } from '@/api/types'
 import { Button } from '@/components/ui/button'
 import { StatusBadge } from '@/components/StatusBadge'
 import { ConfirmDeleteDialog } from '@/components/ConfirmDeleteDialog'
-import { GroupForm } from '@/components/GroupForm'
+import { RouteForm } from '@/components/RouteForm'
 import {
   Dialog,
   DialogContent,
@@ -14,9 +14,9 @@ import {
 import { FilterBar, PageHeader, DataTable, SortHeader } from '@/components/common'
 import { useTableLoader } from '@/hooks/useTableLoader'
 import {
-  useCreateGroup,
-  useUpdateGroup,
-  useDeleteGroup,
+  useCreateRoute,
+  useUpdateRoute,
+  useDeleteRoute,
   useChannels,
 } from '@/api/query-hooks'
 import { formatDate } from '@/lib/utils'
@@ -27,15 +27,15 @@ import {
   Trash2,
 } from 'lucide-react'
 
-export function Groups() {
-  // ─── Channels for GroupForm（React Query） ──────────────
+export function RoutesPage() {
+  // ─── Channels for RouteForm（React Query） ──────────────
   const { data: channelsData } = useChannels()
   const channels = channelsData?.items ?? []
 
   // ─── Table state via useTableLoader（服务端分页） ───────
-  const table = useTableLoader<Group>({
+  const table = useTableLoader<Route>({
     fetchFn: async (params) => {
-      const result = await groupsApi.list({
+      const result = await routesApi.list({
         page: params.page,
         page_size: params.pageSize,
         search: params.search || undefined,
@@ -50,21 +50,21 @@ export function Groups() {
 
   // ─── Dialog state ───────────────────────────────────────
   const [formOpen, setFormOpen] = useState(false)
-  const [editingGroup, setEditingGroup] = useState<Group | null>(null)
+  const [editingRoute, setEditingGroup] = useState<Route | null>(null)
   const [deleteId, setDeleteId] = useState<string | null>(null)
-  const [toggleTarget, setToggleTarget] = useState<Group | null>(null)
+  const [toggleTarget, setToggleTarget] = useState<Route | null>(null)
 
   // ─── Mutations ──────────────────────────────────────────
-  const createMutation = useCreateGroup()
-  const updateMutation = useUpdateGroup()
-  const deleteMutation = useDeleteGroup()
+  const createMutation = useCreateRoute()
+  const updateMutation = useUpdateRoute()
+  const deleteMutation = useDeleteRoute()
 
-  const handleCreate = async (data: CreateGroupRequest) => {
+  const handleCreate = async (data: CreateRouteRequest) => {
     createMutation.mutate(data, {
       onSuccess: () => {
         setFormOpen(false)
         table.refresh()
-        toast.success('分组创建成功')
+        toast.success('模型路由创建成功')
       },
       onError: (err: unknown) => {
         toast.error(`创建失败: ${err instanceof Error ? err.message : String(err)}`)
@@ -72,16 +72,16 @@ export function Groups() {
     })
   }
 
-  const handleUpdate = async (data: CreateGroupRequest) => {
-    if (!editingGroup) return
+  const handleUpdate = async (data: CreateRouteRequest) => {
+    if (!editingRoute) return
     updateMutation.mutate(
-      { id: editingGroup.id, data },
+      { id: editingRoute.id, data },
       {
         onSuccess: () => {
           setEditingGroup(null)
           setFormOpen(false)
           table.refresh()
-          toast.success('分组更新成功')
+          toast.success('模型路由更新成功')
         },
         onError: (err: unknown) => {
           toast.error(`更新失败: ${err instanceof Error ? err.message : String(err)}`)
@@ -90,13 +90,13 @@ export function Groups() {
     )
   }
 
-  const handleToggleEnabled = (group: Group) => {
+  const handleToggleEnabled = (group: Route) => {
     updateMutation.mutate(
       { id: group.id, data: { enabled: !group.enabled } },
       {
         onSuccess: () => {
           table.refresh()
-          toast.success(group.enabled ? '分组已禁用' : '分组已启用')
+          toast.success(group.enabled ? '模型路由已禁用' : '模型路由已启用')
         },
         onError: (err: unknown) => {
           toast.error(`操作失败: ${err instanceof Error ? err.message : String(err)}`)
@@ -117,7 +117,7 @@ export function Groups() {
       onSuccess: () => {
         setDeleteId(null)
         table.refresh()
-        toast.success('分组已删除')
+        toast.success('模型路由已删除')
       },
       onError: (err: unknown) => {
         toast.error(`删除失败: ${err instanceof Error ? err.message : String(err)}`)
@@ -126,7 +126,7 @@ export function Groups() {
   }
 
   // ─── Helpers ────────────────────────────────────────────
-  const openEdit = (group: Group) => {
+  const openEdit = (group: Route) => {
     setEditingGroup(group)
     setFormOpen(true)
   }
@@ -158,12 +158,12 @@ export function Groups() {
     <div className="space-y-4">
       {/* Page Header */}
       <PageHeader
-        title="分组管理"
-        subtitle="配置模型分组与负载均衡策略"
+        title="模型路由管理"
+        subtitle="配置模型模型路由与负载均衡策略"
         action={
           <Button onClick={openCreate}>
             <Plus className="mr-2 h-4 w-4" />
-            添加分组
+            添加模型路由
           </Button>
         }
       />
@@ -172,7 +172,7 @@ export function Groups() {
       <FilterBar
         searchValue={table.searchInput}
         onSearchChange={table.setSearchInput}
-        searchPlaceholder="搜索分组名称..."
+        searchPlaceholder="搜索模型路由名称..."
         statusValue={table.status}
         onStatusChange={table.setStatus}
         statusOptions={[
@@ -188,7 +188,7 @@ export function Groups() {
         columns={columns}
         loading={table.loading}
         isEmpty={!table.loading && table.data.length === 0}
-        emptyText={isFiltered ? '没有匹配的分组' : '暂无分组，点击上方按钮添加'}
+        emptyText={isFiltered ? '没有匹配的模型路由' : '暂无模型路由，点击上方按钮添加'}
         pagination={{
           total: table.total,
           page: table.page,
@@ -262,12 +262,12 @@ export function Groups() {
       >
         <DialogContent className="max-w-4xl max-h-[90vh] overflow-hidden flex flex-col">
           <DialogHeader>
-            <DialogTitle>{editingGroup ? '编辑分组' : '创建分组'}</DialogTitle>
+            <DialogTitle>{editingRoute ? '编辑模型路由' : '创建模型路由'}</DialogTitle>
           </DialogHeader>
-          <GroupForm
-            group={editingGroup ?? undefined}
+          <RouteForm
+            group={editingRoute ?? undefined}
             channels={channels}
-            onSubmit={editingGroup ? handleUpdate : handleCreate}
+            onSubmit={editingRoute ? handleUpdate : handleCreate}
             onCancel={closeForm}
           />
         </DialogContent>
@@ -279,7 +279,7 @@ export function Groups() {
         onOpenChange={(open) => {
           if (!open) setDeleteId(null)
         }}
-        message="确定要删除此分组吗？此操作不可撤销。"
+        message="确定要删除此模型路由吗？此操作不可撤销。"
         onConfirm={handleDelete}
       />
 
@@ -289,8 +289,8 @@ export function Groups() {
         onOpenChange={(open) => {
           if (!open) setToggleTarget(null)
         }}
-        title={toggleTarget?.enabled ? '禁用分组' : '启用分组'}
-        message={`确定要${toggleTarget?.enabled ? '禁用' : '启用'}分组「${toggleTarget?.name}」吗？`}
+        title={toggleTarget?.enabled ? '禁用模型路由' : '启用模型路由'}
+        message={`确定要${toggleTarget?.enabled ? '禁用' : '启用'}模型路由「${toggleTarget?.name}」吗？`}
         onConfirm={handleToggleConfirm}
       />
     </div>

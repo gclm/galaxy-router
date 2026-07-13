@@ -66,12 +66,12 @@ async fn validate_model_access(
     pool: &SqlitePool,
     key_id: &str,
     model: &str,
-    allowed_groups: &str,
+    allowed_routes: &str,
 ) -> Result<(), ProxyError> {
-    // === 第一关：检查 allowed_groups / supported_models ===
-    // allowed_groups 非空时，检查请求的 model 是否在允许的分组列表中
-    if !allowed_groups.is_empty() {
-        let allowed: Vec<&str> = allowed_groups
+    // === 第一关：检查 allowed_routes / supported_models ===
+    // allowed_routes 非空时，检查请求的 model 是否在允许的分组列表中
+    if !allowed_routes.is_empty() {
+        let allowed: Vec<&str> = allowed_routes
             .split(',')
             .map(|s| s.trim())
             .filter(|s| !s.is_empty())
@@ -83,7 +83,7 @@ async fn validate_model_access(
             )));
         }
     } else {
-        // allowed_groups 为空时回退到 supported_models（兼容旧逻辑）
+        // allowed_routes 为空时回退到 supported_models（兼容旧逻辑）
         let supported = sqlx::query_scalar::<_, String>(
             "SELECT supported_models FROM api_keys WHERE id = ? AND enabled = 1",
         )
@@ -107,11 +107,11 @@ async fn validate_model_access(
     }
 
     // === 第二关：检查分组是否存在 ===
-    // 仅在 allowed_groups 非空时严格检查（Octopus 策略：明确指定了分组才校验）
-    // allowed_groups 为空时跳过，由后续 Relay candidate 构建检查渠道可用性
-    if !allowed_groups.is_empty() {
+    // 仅在 allowed_routes 非空时严格检查（Octopus 策略：明确指定了分组才校验）
+    // allowed_routes 为空时跳过，由后续 Relay candidate 构建检查渠道可用性
+    if !allowed_routes.is_empty() {
         let group_exists: bool = sqlx::query_scalar::<_, i32>(
-            "SELECT COUNT(*) FROM groups WHERE name = ? AND enabled = 1",
+            "SELECT COUNT(*) FROM routes WHERE name = ? AND enabled = 1",
         )
         .bind(model)
         .fetch_one(pool)
@@ -481,7 +481,7 @@ pub async fn handle_proxy_request(
 
     // 验证 API Key 是否有权访问目标模型（三段式：403→404→503）
     if let Err(e) =
-        validate_model_access(&state.pool, &auth.key_id, model, &auth.allowed_groups).await
+        validate_model_access(&state.pool, &auth.key_id, model, &auth.allowed_routes).await
     {
         record_early_failure(
             state, &request_id, api_key_id, model, &headers, &body, is_stream, &e,

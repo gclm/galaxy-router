@@ -37,7 +37,7 @@ const navSections: NavSection[] = [
     label: '管理',
     items: [
       { title: '渠道管理', href: '/channels', icon: Radio },
-      { title: '分组管理', href: '/groups', icon: Layers },
+      { title: '模型路由管理', href: '/routes', icon: Layers },
       { title: 'API Keys', href: '/api-keys', icon: Key },
     ],
   },

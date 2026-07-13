@@ -30,7 +30,7 @@ pub struct RelayCandidate {
     /// 上游使用的模型名（来自 group_item.model_name 或直接映射）
     pub target_model: String,
     /// 所属分组 ID（直接渠道为 None）
-    pub group_id: Option<String>,
+    pub route_id: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]

@@ -121,7 +121,7 @@ fn candidate(id: &str, score: f64) -> RelayCandidate {
         score,
         sticky: false,
         target_model: "gpt-4o".to_string(),
-        group_id: None,
+        route_id: None,
     }
 }
 
@@ -133,7 +133,7 @@ fn sticky_candidate(id: &str, score: f64) -> RelayCandidate {
         score,
         sticky: true,
         target_model: "gpt-4o".to_string(),
-        group_id: None,
+        route_id: None,
     }
 }
 
