@@ -8,3 +8,8 @@ pub mod protocol;
 pub mod relay;
 pub mod scheduler;
 pub mod static_assets;
+pub mod app_state;
+pub mod domain;
+pub mod llm;
+pub mod repository;
+pub mod service;
