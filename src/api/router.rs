@@ -13,7 +13,7 @@ use serde_json::{Value, json};
 use sqlx::SqlitePool;
 use tower_http::trace::TraceLayer;
 
-use crate::api::handlers::admin::api_keys::{self, ApiKeyState};
+use crate::api::handlers::admin::api_keys;
 use crate::api::handlers::admin::auth;
 use crate::api::handlers::admin::backup::{self, BackupState};
 use crate::api::handlers::admin::channels::{self, ChannelState};
@@ -59,13 +59,6 @@ pub async fn create_router(
         timezone_offset: tz,
     };
 
-    let api_key_cache = crate::api::middleware::ApiKeyCache::new();
-    let api_key_state = ApiKeyState {
-        pool: pool.clone(),
-        api_key_cache,
-        timezone_offset: tz,
-    };
-
     let models_state = ModelsState {
         model_registry: model_registry.clone(),
         fetch_client: reqwest::Client::builder()
@@ -86,9 +79,10 @@ pub async fn create_router(
         ProxyState::new(pool.clone(), model_registry.clone()).await
     };
 
-    // v1.1.2: 统一 AppState（Settings/SystemInfo/Auth/Usage/Budget/Route 已切，其余 handler 后续 commit 逐个切）
+    // v1.1.2: 统一 AppState（Settings/SystemInfo/Auth/Usage/Budget/Route/ApiKey 已切，其余 handler 后续 commit 逐个切）
     let start_time = Arc::new(Instant::now());
-    let app_state = AppState::new(pool.clone(), config.clone(), start_time, jwt_service, shared_cache.clone());
+    let api_key_cache = crate::api::middleware::ApiKeyCache::new();
+    let app_state = AppState::new(pool.clone(), config.clone(), start_time, jwt_service, shared_cache.clone(), api_key_cache);
 
     // 需要认证的管理路由（每个 nest 独立管理状态）
     let protected_admin = Router::new()
@@ -134,7 +128,7 @@ pub async fn create_router(
                         .put(api_keys::update)
                         .delete(api_keys::delete),
                 )
-                .with_state(api_key_state),
+                .with_state(app_state.clone()),
         )
         .nest(
             "/stats",

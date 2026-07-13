@@ -8,6 +8,7 @@ use std::time::Instant;
 
 use sqlx::SqlitePool;
 
+use crate::api::middleware::ApiKeyCache;
 use crate::auth::JwtService;
 use crate::config::AppConfig;
 use crate::relay::cache::ProxyCache;
@@ -25,6 +26,7 @@ pub struct AppState {
     pub start_time: Arc<Instant>,
     pub jwt_service: JwtService,
     pub cache: ProxyCache,
+    pub api_key_cache: ApiKeyCache,
 }
 
 impl AppState {
@@ -34,6 +36,7 @@ impl AppState {
         start_time: Arc<Instant>,
         jwt_service: JwtService,
         cache: ProxyCache,
+        api_key_cache: ApiKeyCache,
     ) -> Self {
         let timezone_offset = config.server.timezone_offset;
         Self {
@@ -44,6 +47,7 @@ impl AppState {
             start_time,
             jwt_service,
             cache,
+            api_key_cache,
         }
     }
 }

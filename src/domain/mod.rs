@@ -6,10 +6,11 @@
 //! - `setting`：SettingResponse（v1.1.2）
 //! - `route`：Route / RouteItem + 请求 DTO（v1.1.2）
 //! - `channel`：Channel / Endpoint / UpstreamKey
-//! - `api_key`：ApiKey
+//! - `api_key`：ApiKey + 请求 DTO（v1.1.2；parse_supported_models 留 handler 供 relay/proxy 复用）
 //! - `budget`：SetBudgetRequest（v1.1.2；BudgetLimit 带 FromRow 留 repository）
 //! - `usage`：UsageLog / UsageStats
 
+pub mod api_key;
 pub mod auth;
 pub mod budget;
 pub mod route;
