@@ -1,14 +1,4 @@
-# Keel 工作流
-
-这个项目使用 Keel 工作流管理开发流程。
-
-- 知识层: .gclm-harness/（must/ architecture/ reference/ memory/）
-- 任务系统: .gclm-harness/tasks/
-- SOP: .gclm-harness/sop/
-- 启动时 Hook 自动注入项目上下文和任务状态，不需要手动指定文件路径
-- 路由: 新功能 → sop/feature.md，Bug → sop/issue.md，重构 → sop/refactor.md
-- Trivial 改动（改 typo/配置）不走 SOP，直接改
-- 任务文档（design.md / checklist.yaml / report.md）统一放在 `.gclm-harness/tasks/{slug}/` 下，不要写到项目源码的 docs/ 里
+# galaxy-router 开发约定
 
 ## 交互约定
 
