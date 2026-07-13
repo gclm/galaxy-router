@@ -2,25 +2,12 @@ use axum::Json;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use serde::{Deserialize, Serialize};
-use sqlx::SqlitePool;
-use std::sync::Arc;
 
+use crate::app_state::AppState;
 use crate::error::app::{ApiError, ApiResponse};
-use crate::config::AppConfig;
 
-#[derive(Clone)]
-pub struct SettingsState {
-    pub pool: SqlitePool,
-    pub config: Arc<AppConfig>,
-}
-
-#[derive(Debug, Serialize)]
-pub struct SettingResponse {
-    pub key: String,
-    pub category: String,
-    pub value: String,
-    pub description: Option<String>,
-}
+// SettingResponse 已移至 domain::setting（v1.1.2），re-export 保兼容
+pub use crate::domain::setting::SettingResponse;
 
 #[derive(Debug, Deserialize)]
 pub struct UpdateSettingRequest {
@@ -60,25 +47,14 @@ pub struct AuthInfo {
 }
 
 pub async fn list(
-    State(state): State<SettingsState>,
+    State(state): State<AppState>,
 ) -> Result<Json<ApiResponse<Vec<SettingResponse>>>, (StatusCode, Json<ApiError>)> {
-    let rows: Vec<(String, String, String, Option<String>)> = sqlx::query_as(
-        "SELECT key, category, value, description FROM settings ORDER BY category, key",
-    )
-    .fetch_all(&state.pool)
-    .await
-    .map_err(|e| ApiError::internal_error(e.to_string()))?;
-
-    let items = rows
-        .into_iter()
-        .map(|(key, category, value, description)| SettingResponse {
-            key,
-            category,
-            value,
-            description,
-        })
-        .collect();
-
+    let items = state
+        .repositories
+        .settings
+        .list()
+        .await
+        .map_err(|e| ApiError::internal_error(e.to_string()))?;
     Ok(Json(ApiResponse::success(items)))
 }
 
@@ -96,7 +72,7 @@ const ALLOWED_SETTING_KEYS: &[&str] = &[
 ];
 
 pub async fn update(
-    State(state): State<SettingsState>,
+    State(state): State<AppState>,
     Path(key): Path<String>,
     Json(body): Json<UpdateSettingRequest>,
 ) -> Result<Json<ApiResponse<()>>, (StatusCode, Json<ApiError>)> {
@@ -107,15 +83,14 @@ pub async fn update(
         )));
     }
 
-    let result =
-        sqlx::query("UPDATE settings SET value = ?, updated_at = CURRENT_TIMESTAMP WHERE key = ?")
-            .bind(&body.value)
-            .bind(&key)
-            .execute(&state.pool)
-            .await
-            .map_err(|e| ApiError::internal_error(e.to_string()))?;
+    let updated = state
+        .repositories
+        .settings
+        .update(&key, &body.value)
+        .await
+        .map_err(|e| ApiError::internal_error(e.to_string()))?;
 
-    if result.rows_affected() == 0 {
+    if !updated {
         return Err(ApiError::not_found(format!("设置项 {} 不存在", key)));
     }
 
@@ -123,7 +98,7 @@ pub async fn update(
 }
 
 pub async fn infra(
-    State(state): State<SettingsState>,
+    State(state): State<AppState>,
 ) -> Result<Json<ApiResponse<InfraConfigResponse>>, (StatusCode, Json<ApiError>)> {
     let cfg = &state.config;
     Ok(Json(ApiResponse::success(InfraConfigResponse {

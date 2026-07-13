@@ -28,9 +28,9 @@ impl AppState {
     /// 装配应用状态（v1.1.0 骨架：仅注入 pool + config）。
     pub fn new(pool: SqlitePool, config: Arc<AppConfig>) -> Self {
         Self {
-            pool,
+            pool: pool.clone(),
             config,
-            repositories: Repositories::new(),
+            repositories: Repositories::new(pool),
             services: Services::new(),
         }
     }

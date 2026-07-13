@@ -20,7 +20,7 @@ use crate::api::handlers::admin::channels::{self, ChannelState};
 use crate::api::handlers::admin::fetch_models;
 use crate::api::handlers::admin::routes::{self, RouteState};
 use crate::api::handlers::admin::model_info::{self, ModelsState};
-use crate::api::handlers::admin::settings::{self, SettingsState};
+use crate::api::handlers::admin::settings;
 use crate::api::handlers::admin::stats::{self, StatsApiState};
 use crate::api::handlers::admin::system_info::{self, SystemInfoState};
 use crate::api::handlers::admin::update_check;
@@ -30,6 +30,7 @@ use crate::config::{AppConfig, QueuingConfig};
 use crate::metrics::query::StatsState;
 use crate::relay::cache::ProxyCache;
 use crate::relay::state::ProxyState;
+use crate::app_state::AppState;
 use crate::static_assets;
 
 /// 创建应用路由
@@ -41,6 +42,7 @@ pub async fn create_router(
     config: AppConfig,
     model_registry: crate::metrics::model::ModelRegistry,
 ) -> Router {
+    let config = Arc::new(config);
     let token_expiry_hours = config.auth.token_expiry_hours;
     let auth_state = AuthState {
         pool: pool.clone(),
@@ -94,11 +96,6 @@ pub async fn create_router(
 
     let update_check_state = update_check::UpdateCheckState::from_pool(&pool).await;
 
-    let settings_state = SettingsState {
-        pool: pool.clone(),
-        config: std::sync::Arc::new(config),
-    };
-
     let backup_state = BackupState { pool: pool.clone() };
 
     let proxy_state = if queuing.enabled {
@@ -108,6 +105,9 @@ pub async fn create_router(
     } else {
         ProxyState::new(pool.clone(), model_registry.clone()).await
     };
+
+    // v1.1.2: 统一 AppState（Settings 已切，其余 handler 后续 commit 逐个切）
+    let app_state = AppState::new(pool.clone(), config.clone());
 
     // 需要认证的管理路由（每个 nest 独立管理状态）
     let protected_admin = Router::new()
@@ -202,7 +202,7 @@ pub async fn create_router(
                 .route("/", get(settings::list))
                 .route("/infra", get(settings::infra))
                 .route("/{key}", put(settings::update))
-                .with_state(settings_state),
+                .with_state(app_state.clone()),
         )
         .nest(
             "/backups",

@@ -20,6 +20,7 @@ mod domain;
 mod llm;
 mod repository;
 mod service;
+mod util;
 
 use config::AppConfig;
 use db::Database;
@@ -117,13 +118,6 @@ async fn main() -> Result<()> {
     ));
     pricing_refresher.start();
     info!("Pricing refresher started");
-
-    // v1.1.0 骨架：装配统一 AppState（v1.1.3 起接入 handler，当前仅证明可装配）
-    let _app_state = app_state::AppState::new(
-        database.pool().clone(),
-        Arc::new(config.clone()),
-    );
-    info!("AppState assembled (v1.1.0 skeleton)");
 
     // 创建路由
     let addr = config.server_addr();

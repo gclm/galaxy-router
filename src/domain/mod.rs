@@ -1,11 +1,11 @@
-//! 领域模型层（v1.1.0 骨架）。
+//! 领域模型层（v1.1.0 骨架，v1.1.2 起填充）。
 //!
 //! 纯数据结构 + 业务规则，零框架依赖（允许 serde）。
-//! 实际子模块将在后续批次填充：
+//! 子模块随分层重构逐个填入：
+//! - `setting`：SettingResponse（v1.1.2）
+//! - `route`：Route / RouteItem（v1.1.2 后续 commit）
 //! - `channel`：Channel / Endpoint / UpstreamKey
-//! - `route`：Route / RouteItem（原 group / group_item，v1.1.2 改名）
 //! - `api_key`：ApiKey / BudgetLimit
-//! - `usage`：UsageLog / UsageStats / AttemptStats
-//! - `proxy`：ProxyRequest 等纯入站数据
-//!
-//! v1.1.0 不声明任何子模块（避免空文件），仅占位。
+//! - `usage`：UsageLog / UsageStats
+
+pub mod setting;

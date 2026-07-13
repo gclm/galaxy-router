@@ -2,26 +2,9 @@ use serde::{Deserialize, Serialize};
 use sqlx::{AssertSqlSafe, SqlitePool};
 use std::collections::HashMap;
 
-/// 生成 SQLite datetime() 修饰符，如 "+8 hours" 或 "-5 hours"
-pub fn tz_modifier(offset: i32) -> String {
-    assert!(
-        (-12..=14).contains(&offset),
-        "时区偏移量超出合理范围: {}",
-        offset
-    );
-    if offset >= 0 {
-        format!("+{} hours", offset)
-    } else {
-        format!("-{} hours", offset.abs())
-    }
-}
-
-/// 生成当前本地时间字符串（用于 INSERT）
-pub fn now_local_str(offset: i32) -> String {
-    (chrono::Utc::now() + chrono::Duration::hours(offset as i64))
-        .format("%Y-%m-%d %H:%M:%S")
-        .to_string()
-}
+// v1.1.2: tz_modifier / now_local_str 已移至 crate::util::timeutil，这里 re-export 保兼容
+// （api_keys/channels/routes handler 仍 use crate::metrics::query::{tz_modifier,now_local_str}）。Commit 4 删 query 时移除。
+pub use crate::util::timeutil::{now_local_str, tz_modifier};
 
 /// 统计状态
 #[derive(Clone)]

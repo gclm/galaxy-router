@@ -13,3 +13,4 @@ pub mod domain;
 pub mod llm;
 pub mod repository;
 pub mod service;
+pub mod util;
