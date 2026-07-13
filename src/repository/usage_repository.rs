@@ -1,148 +1,18 @@
-use serde::{Deserialize, Serialize};
-use sqlx::{AssertSqlSafe, SqlitePool};
+//! Usage 数据访问层（v1.1.2 从 metrics/query 迁入）。
+//!
+//! 统计/日志查询 SQL 全部隔离在此。行类型（UsageLogRow/UsageLogDetail）带
+//! `sqlx::FromRow` 留在本层；纯 DTO（StatsOverview 等）在 domain::usage。
+
 use std::collections::HashMap;
 
-// v1.1.2: tz_modifier / now_local_str 已移至 crate::util::timeutil，这里 re-export 保兼容
-// （api_keys/channels/routes handler 仍 use crate::metrics::query::{tz_modifier,now_local_str}）。Commit 4 删 query 时移除。
-pub use crate::util::timeutil::{now_local_str, tz_modifier};
+use async_trait::async_trait;
+use serde::{Deserialize, Serialize};
+use sqlx::{AssertSqlSafe, SqlitePool};
 
-/// 统计状态
-#[derive(Clone)]
-pub struct StatsState {
-    pub pool: SqlitePool,
-    pub timezone_offset: i32,
-}
-
-impl StatsState {
-    pub fn new(pool: SqlitePool, timezone_offset: i32) -> Self {
-        Self {
-            pool,
-            timezone_offset,
-        }
-    }
-
-    fn tz_modifier(&self) -> String {
-        tz_modifier(self.timezone_offset)
-    }
-
-    fn now_local(&self) -> chrono::DateTime<chrono::Utc> {
-        chrono::Utc::now() + chrono::Duration::hours(self.timezone_offset as i64)
-    }
-
-    /// 本地"最近 days 天(含今天)"对应的 UTC 时间范围 [start, end)。
-    /// created_at 以 UTC 存储,用裸列 `created_at >= ? AND created_at < ?` 比较才能命中
-    /// idx_usage_logs_created_at(避免 `date(datetime(created_at,...))` 让索引失效、全表扫)。
-    fn range_utc_days(&self, days: i32) -> (String, String) {
-        let tz = self.timezone_offset as i64;
-        let today = (chrono::Utc::now() + chrono::Duration::hours(tz)).date_naive();
-        let start = today - chrono::Duration::days((days.max(1) - 1) as i64);
-        let end = today + chrono::Duration::days(1);
-        let to_utc = |d: chrono::NaiveDate| {
-            (d.and_hms_opt(0, 0, 0).unwrap() - chrono::Duration::hours(tz))
-                .format("%Y-%m-%d %H:%M:%S")
-                .to_string()
-        };
-        (to_utc(start), to_utc(end))
-    }
-
-    /// 本地日期范围 [start_local, end_local](含两端)对应的 UTC 范围 [start, end_next_day)。
-    fn range_utc_between(&self, start_local: &str, end_local: &str) -> (String, String) {
-        let tz = self.timezone_offset as i64;
-        let today = (chrono::Utc::now() + chrono::Duration::hours(tz)).date_naive();
-        let start = chrono::NaiveDate::parse_from_str(start_local, "%Y-%m-%d").unwrap_or(today);
-        let end =
-            chrono::NaiveDate::parse_from_str(end_local, "%Y-%m-%d").unwrap_or(today) + chrono::Duration::days(1);
-        let to_utc = |d: chrono::NaiveDate| {
-            (d.and_hms_opt(0, 0, 0).unwrap() - chrono::Duration::hours(tz))
-                .format("%Y-%m-%d %H:%M:%S")
-                .to_string()
-        };
-        (to_utc(start), to_utc(end))
-    }
-}
-
-/// 按日期聚合的统计行
-type DailyRow = (String, i32, i32, i32, i32, i32, i32, i32, f64);
-
-/// 渠道统计行类型
-type ChannelStatsRow = (String, String, i32, i32, i32, i32, i32, f64);
-
-/// 统计概览
-#[derive(Debug, Serialize, Deserialize)]
-pub struct StatsOverview {
-    pub total_requests: i64,
-    pub total_input_tokens: i64,
-    pub total_output_tokens: i64,
-    pub total_cost: f64,
-    pub today_requests: i64,
-    pub today_input_tokens: i64,
-    pub today_output_tokens: i64,
-    pub today_cost: f64,
-    pub latency_p50: Option<f64>,
-    pub latency_p95: Option<f64>,
-    pub latency_p99: Option<f64>,
-}
-
-/// 按模型统计
-#[derive(Debug, Serialize, Deserialize)]
-pub struct ModelStats {
-    pub model: String,
-    pub request_count: i32,
-    pub input_tokens: i32,
-    pub output_tokens: i32,
-    pub total_cost: f64,
-}
-
-/// 按渠道统计
-#[derive(Debug, Serialize, Deserialize)]
-pub struct ChannelStats {
-    pub channel_id: String,
-    pub channel_name: String,
-    pub request_count: i32,
-    pub success_count: i32,
-    pub failure_count: i32,
-    pub input_tokens: i32,
-    pub output_tokens: i32,
-    pub total_cost: f64,
-}
-
-/// 每日统计（按天聚合后返回给前端）
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct DailyStats {
-    pub date: String,
-    pub request_count: i32,
-    pub success_count: i32,
-    pub failure_count: i32,
-    pub input_tokens: i32,
-    pub output_tokens: i32,
-    pub cache_read_tokens: i32,
-    pub cache_creation_tokens: i32,
-    pub total_cost: f64,
-}
-
-/// 按 API Key 统计
-#[derive(Debug, Serialize, Deserialize)]
-pub struct ApiKeyStats {
-    pub api_key_id: String,
-    pub api_key_name: Option<String>,
-    pub request_count: i32,
-    pub success_count: i32,
-    pub failure_count: i32,
-    pub input_tokens: i32,
-    pub output_tokens: i32,
-    pub total_cost: f64,
-    pub avg_latency_ms: f64,
-}
-
-/// 请求日志筛选条件
-pub struct LogsFilter {
-    pub offset: u32,
-    pub limit: u32,
-    pub model: Option<String>,
-    pub channel_id: Option<String>,
-    pub status: Option<String>,
-    pub api_key_id: Option<String>,
-}
+use crate::domain::usage::{
+    ApiKeyStats, ChannelStats, DailyStats, LogsFilter, ModelStats, PagedResult, StatsOverview,
+};
+use crate::util::timeutil::tz_modifier;
 
 /// 请求日志（含渠道名和 Key 名）
 #[derive(Debug, Serialize, Deserialize, sqlx::FromRow)]
@@ -208,14 +78,128 @@ pub struct UsageLogDetail {
     pub raw_attempts: Option<String>,
 }
 
-/// 分页结果
-pub struct PagedResult<T> {
-    pub items: Vec<T>,
-    pub total: i64,
+/// 按日期聚合的统计行
+type DailyRow = (String, i32, i32, i32, i32, i32, i32, i32, f64);
+
+/// 渠道统计行类型
+type ChannelStatsRow = (String, String, i32, i32, i32, i32, i32, f64);
+
+#[async_trait]
+pub trait UsageRepository: Send + Sync {
+    async fn get_overview(&self) -> Result<StatsOverview, sqlx::Error>;
+    /// 计算延迟百分位（p50/p95/p99）
+    async fn get_latency_percentiles(
+        &self,
+        days: i32,
+    ) -> Result<(Option<f64>, Option<f64>, Option<f64>), sqlx::Error>;
+    async fn get_model_stats(&self, days: i32) -> Result<Vec<ModelStats>, sqlx::Error>;
+    async fn get_channel_stats(&self, days: i32) -> Result<Vec<ChannelStats>, sqlx::Error>;
+    async fn get_daily_stats(&self, days: i32) -> Result<Vec<DailyStats>, sqlx::Error>;
+    async fn get_daily_stats_by_range(
+        &self,
+        start: &str,
+        end: &str,
+    ) -> Result<Vec<DailyStats>, sqlx::Error>;
+    async fn get_model_stats_by_range(
+        &self,
+        start: &str,
+        end: &str,
+    ) -> Result<Vec<ModelStats>, sqlx::Error>;
+    async fn get_channel_stats_by_range(
+        &self,
+        start: &str,
+        end: &str,
+    ) -> Result<Vec<ChannelStats>, sqlx::Error>;
+    async fn get_logs(&self, filter: LogsFilter) -> Result<PagedResult<UsageLogRow>, sqlx::Error>;
+    async fn get_log_detail(&self, id: &str) -> Result<Option<UsageLogDetail>, sqlx::Error>;
+    async fn get_log_models(&self) -> Result<Vec<String>, sqlx::Error>;
+    async fn get_api_key_stats(&self, days: i32) -> Result<Vec<ApiKeyStats>, sqlx::Error>;
 }
 
-impl StatsState {
-    pub async fn get_overview(&self) -> Result<StatsOverview, sqlx::Error> {
+pub struct SqliteUsageRepository {
+    pool: SqlitePool,
+    timezone_offset: i32,
+}
+
+impl SqliteUsageRepository {
+    pub fn new(pool: SqlitePool, timezone_offset: i32) -> Self {
+        Self {
+            pool,
+            timezone_offset,
+        }
+    }
+
+    fn tz_modifier(&self) -> String {
+        tz_modifier(self.timezone_offset)
+    }
+
+    fn now_local(&self) -> chrono::DateTime<chrono::Utc> {
+        chrono::Utc::now() + chrono::Duration::hours(self.timezone_offset as i64)
+    }
+
+    /// 本地"最近 days 天(含今天)"对应的 UTC 时间范围 [start, end)。
+    /// created_at 以 UTC 存储,用裸列 `created_at >= ? AND created_at < ?` 比较才能命中
+    /// idx_usage_logs_created_at(避免 `date(datetime(created_at,...))` 让索引失效、全表扫)。
+    fn range_utc_days(&self, days: i32) -> (String, String) {
+        let tz = self.timezone_offset as i64;
+        let today = (chrono::Utc::now() + chrono::Duration::hours(tz)).date_naive();
+        let start = today - chrono::Duration::days((days.max(1) - 1) as i64);
+        let end = today + chrono::Duration::days(1);
+        let to_utc = |d: chrono::NaiveDate| {
+            (d.and_hms_opt(0, 0, 0).unwrap() - chrono::Duration::hours(tz))
+                .format("%Y-%m-%d %H:%M:%S")
+                .to_string()
+        };
+        (to_utc(start), to_utc(end))
+    }
+
+    /// 本地日期范围 [start_local, end_local](含两端)对应的 UTC 范围 [start, end_next_day)。
+    fn range_utc_between(&self, start_local: &str, end_local: &str) -> (String, String) {
+        let tz = self.timezone_offset as i64;
+        let today = (chrono::Utc::now() + chrono::Duration::hours(tz)).date_naive();
+        let start = chrono::NaiveDate::parse_from_str(start_local, "%Y-%m-%d").unwrap_or(today);
+        let end =
+            chrono::NaiveDate::parse_from_str(end_local, "%Y-%m-%d").unwrap_or(today) + chrono::Duration::days(1);
+        let to_utc = |d: chrono::NaiveDate| {
+            (d.and_hms_opt(0, 0, 0).unwrap() - chrono::Duration::hours(tz))
+                .format("%Y-%m-%d %H:%M:%S")
+                .to_string()
+        };
+        (to_utc(start), to_utc(end))
+    }
+
+    /// 将小时级结果补齐到完整 24 小时（00:00 ~ 23:00）
+    fn fill_hourly(&self, rows: Vec<DailyRow>) -> Vec<DailyStats> {
+        let map: HashMap<String, DailyStats> = rows
+            .into_iter()
+            .map(|r| {
+                let s = daily_row_to_stats(r);
+                (s.date.clone(), s)
+            })
+            .collect();
+
+        let mut result = Vec::with_capacity(24);
+        for h in 0..24 {
+            let key = format!("{:02}:00", h);
+            result.push(map.get(&key).cloned().unwrap_or(DailyStats {
+                date: key,
+                request_count: 0,
+                success_count: 0,
+                failure_count: 0,
+                input_tokens: 0,
+                output_tokens: 0,
+                cache_read_tokens: 0,
+                cache_creation_tokens: 0,
+                total_cost: 0.0,
+            }));
+        }
+        result
+    }
+}
+
+#[async_trait]
+impl UsageRepository for SqliteUsageRepository {
+    async fn get_overview(&self) -> Result<StatsOverview, sqlx::Error> {
         let total: (i64, i64, i64, f64) = sqlx::query_as(
             "SELECT
                 COUNT(*),
@@ -257,8 +241,7 @@ impl StatsState {
         })
     }
 
-    /// 计算延迟百分位（p50/p95/p99）
-    pub async fn get_latency_percentiles(
+    async fn get_latency_percentiles(
         &self,
         days: i32,
     ) -> Result<(Option<f64>, Option<f64>, Option<f64>), sqlx::Error> {
@@ -278,8 +261,7 @@ impl StatsState {
         Ok(compute_percentiles(&latencies))
     }
 
-    /// 获取按模型统计
-    pub async fn get_model_stats(&self, days: i32) -> Result<Vec<ModelStats>, sqlx::Error> {
+    async fn get_model_stats(&self, days: i32) -> Result<Vec<ModelStats>, sqlx::Error> {
         let (utc_start, utc_end) = self.range_utc_days(days);
         let stats = sqlx::query_as::<_, (String, i32, i32, i32, f64)>(
             "SELECT
@@ -310,8 +292,7 @@ impl StatsState {
             .collect())
     }
 
-    /// 获取按渠道统计
-    pub async fn get_channel_stats(&self, days: i32) -> Result<Vec<ChannelStats>, sqlx::Error> {
+    async fn get_channel_stats(&self, days: i32) -> Result<Vec<ChannelStats>, sqlx::Error> {
         let (utc_start, utc_end) = self.range_utc_days(days);
         let rows: Vec<ChannelStatsRow> = sqlx::query_as(
             "SELECT
@@ -351,8 +332,7 @@ impl StatsState {
             .collect())
     }
 
-    /// 获取按天统计（days=1 时按小时聚合，补齐 24 小时）
-    pub async fn get_daily_stats(&self, days: i32) -> Result<Vec<DailyStats>, sqlx::Error> {
+    async fn get_daily_stats(&self, days: i32) -> Result<Vec<DailyStats>, sqlx::Error> {
         let tz = self.tz_modifier();
 
         if days <= 1 {
@@ -411,8 +391,7 @@ impl StatsState {
         Ok(rows.into_iter().map(daily_row_to_stats).collect())
     }
 
-    /// 按日期范围获取按天统计
-    pub async fn get_daily_stats_by_range(
+    async fn get_daily_stats_by_range(
         &self,
         start: &str,
         end: &str,
@@ -445,8 +424,7 @@ impl StatsState {
         Ok(rows.into_iter().map(daily_row_to_stats).collect())
     }
 
-    /// 按日期范围获取按模型统计
-    pub async fn get_model_stats_by_range(
+    async fn get_model_stats_by_range(
         &self,
         start: &str,
         end: &str,
@@ -481,8 +459,7 @@ impl StatsState {
             .collect())
     }
 
-    /// 按日期范围获取按渠道统计
-    pub async fn get_channel_stats_by_range(
+    async fn get_channel_stats_by_range(
         &self,
         start: &str,
         end: &str,
@@ -526,11 +503,7 @@ impl StatsState {
             .collect())
     }
 
-    /// 获取请求日志（分页 + 筛选）
-    pub async fn get_logs(
-        &self,
-        filter: LogsFilter,
-    ) -> Result<PagedResult<UsageLogRow>, sqlx::Error> {
+    async fn get_logs(&self, filter: LogsFilter) -> Result<PagedResult<UsageLogRow>, sqlx::Error> {
         use sqlx::QueryBuilder;
 
         let mut count_builder = QueryBuilder::new("SELECT COUNT(*) FROM usage_logs ul WHERE 1=1");
@@ -619,8 +592,7 @@ impl StatsState {
         })
     }
 
-    /// 获取单条日志详情（含请求/响应内容）
-    pub async fn get_log_detail(&self, id: &str) -> Result<Option<UsageLogDetail>, sqlx::Error> {
+    async fn get_log_detail(&self, id: &str) -> Result<Option<UsageLogDetail>, sqlx::Error> {
         let tz = self.tz_modifier();
         let row = sqlx::query_as::<_, UsageLogDetail>(
             AssertSqlSafe(format!(r#"SELECT ul.id, ul.api_key_id, ak.name as api_key_name,
@@ -647,8 +619,7 @@ impl StatsState {
         Ok(row)
     }
 
-    /// 获取日志中出现过的不重复模型列表
-    pub async fn get_log_models(&self) -> Result<Vec<String>, sqlx::Error> {
+    async fn get_log_models(&self) -> Result<Vec<String>, sqlx::Error> {
         let models = sqlx::query_scalar::<_, String>(
             "SELECT DISTINCT requested_model FROM usage_logs ORDER BY requested_model",
         )
@@ -658,8 +629,7 @@ impl StatsState {
         Ok(models)
     }
 
-    /// 按 API Key 聚合统计
-    pub async fn get_api_key_stats(&self, days: i32) -> Result<Vec<ApiKeyStats>, sqlx::Error> {
+    async fn get_api_key_stats(&self, days: i32) -> Result<Vec<ApiKeyStats>, sqlx::Error> {
         let cutoff = self.now_local() - chrono::Duration::days(days as i64);
         let cutoff_str = cutoff.format("%Y-%m-%d %H:%M:%S").to_string();
 
@@ -715,34 +685,6 @@ impl StatsState {
             )
             .collect())
     }
-
-    /// 将小时级结果补齐到完整 24 小时（00:00 ~ 23:00）
-    fn fill_hourly(&self, rows: Vec<DailyRow>) -> Vec<DailyStats> {
-        let map: HashMap<String, DailyStats> = rows
-            .into_iter()
-            .map(|r| {
-                let s = daily_row_to_stats(r);
-                (s.date.clone(), s)
-            })
-            .collect();
-
-        let mut result = Vec::with_capacity(24);
-        for h in 0..24 {
-            let key = format!("{:02}:00", h);
-            result.push(map.get(&key).cloned().unwrap_or(DailyStats {
-                date: key,
-                request_count: 0,
-                success_count: 0,
-                failure_count: 0,
-                input_tokens: 0,
-                output_tokens: 0,
-                cache_read_tokens: 0,
-                cache_creation_tokens: 0,
-                total_cost: 0.0,
-            }));
-        }
-        result
-    }
 }
 
 fn daily_row_to_stats(row: DailyRow) -> DailyStats {
@@ -775,6 +717,7 @@ fn compute_percentiles(sorted: &[i32]) -> (Option<f64>, Option<f64>, Option<f64>
 mod tests {
     use super::*;
     use crate::db::Database;
+    use crate::domain::usage::{DailyStats, LogsFilter};
 
     async fn make_pool() -> sqlx::SqlitePool {
         let db_path = format!("/tmp/galaxy_stats_mod_{}.db", uuid::Uuid::now_v7());
@@ -783,8 +726,8 @@ mod tests {
         Database::new(&db_url).await.unwrap().pool().clone()
     }
 
-    fn new_state(pool: sqlx::SqlitePool) -> StatsState {
-        StatsState::new(pool, 0) // UTC
+    fn new_state(pool: sqlx::SqlitePool) -> SqliteUsageRepository {
+        SqliteUsageRepository::new(pool, 0) // UTC
     }
 
     #[allow(clippy::too_many_arguments)]

@@ -32,10 +32,11 @@ impl AppState {
         start_time: Arc<Instant>,
         jwt_service: JwtService,
     ) -> Self {
+        let timezone_offset = config.server.timezone_offset;
         Self {
             pool: pool.clone(),
             config,
-            repositories: Repositories::new(pool),
+            repositories: Repositories::new(pool, timezone_offset),
             services: Services::new(),
             start_time,
             jwt_service,

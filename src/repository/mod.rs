@@ -11,9 +11,11 @@ use sqlx::SqlitePool;
 pub mod auth_repository;
 pub mod settings_repository;
 pub mod system_info_repository;
+pub mod usage_repository;
 use auth_repository::{AuthRepository, SqliteAuthRepository};
 use settings_repository::{SettingsRepository, SqliteSettingsRepository};
 use system_info_repository::{SqliteSystemInfoRepository, SystemInfoRepository};
+use usage_repository::{SqliteUsageRepository, UsageRepository};
 
 /// 统一持有所有 repository（v1.1.2 起随 handler 迁移逐个填入）。
 #[derive(Clone)]
@@ -21,15 +23,17 @@ pub struct Repositories {
     pub settings: Arc<dyn SettingsRepository>,
     pub system_info: Arc<dyn SystemInfoRepository>,
     pub auth: Arc<dyn AuthRepository>,
+    pub usage: Arc<dyn UsageRepository>,
 }
 
 impl Repositories {
-    /// 构造 repository 集合（注入 pool 给各 repository）。
-    pub fn new(pool: SqlitePool) -> Self {
+    /// 构造 repository 集合（注入 pool + 时区偏移给各 repository）。
+    pub fn new(pool: SqlitePool, timezone_offset: i32) -> Self {
         Self {
             settings: Arc::new(SqliteSettingsRepository::new(pool.clone())),
             system_info: Arc::new(SqliteSystemInfoRepository::new(pool.clone())),
-            auth: Arc::new(SqliteAuthRepository::new(pool)),
+            auth: Arc::new(SqliteAuthRepository::new(pool.clone())),
+            usage: Arc::new(SqliteUsageRepository::new(pool, timezone_offset)),
         }
     }
 }

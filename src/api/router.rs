@@ -21,13 +21,12 @@ use crate::api::handlers::admin::fetch_models;
 use crate::api::handlers::admin::routes::{self, RouteState};
 use crate::api::handlers::admin::model_info::{self, ModelsState};
 use crate::api::handlers::admin::settings;
-use crate::api::handlers::admin::stats::{self, StatsApiState};
+use crate::api::handlers::admin::stats;
 use crate::api::handlers::admin::system_info;
 use crate::api::handlers::admin::update_check;
 use crate::api::handlers::proxy::{chat, embeddings, images, messages, models, responses};
 use crate::api::middleware::require_admin_auth;
 use crate::config::{AppConfig, QueuingConfig};
-use crate::metrics::query::StatsState;
 use crate::relay::cache::ProxyCache;
 use crate::relay::state::ProxyState;
 use crate::app_state::AppState;
@@ -71,10 +70,6 @@ pub async fn create_router(
         pool: pool.clone(),
         api_key_cache,
         timezone_offset: tz,
-    };
-
-    let stats_state = StatsApiState {
-        stats: StatsState::new(pool.clone(), config.server.timezone_offset),
     };
 
     let models_state = ModelsState {
@@ -159,14 +154,14 @@ pub async fn create_router(
                 .route("/logs", get(stats::logs))
                 .route("/logs/models", get(stats::log_models))
                 .route("/logs/{id}", get(stats::log_detail))
-                .with_state(stats_state.clone()),
+                .with_state(app_state.clone()),
         )
         .nest(
             "/budgets",
             Router::new()
                 .route("/", get(stats::list_budgets).post(stats::set_budget))
                 .route("/{id}", delete(stats::delete_budget))
-                .with_state(stats_state),
+                .with_state(app_state.clone()),
         )
         .nest(
             "/models",

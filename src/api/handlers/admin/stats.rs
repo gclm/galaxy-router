@@ -6,8 +6,9 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use sqlx::AssertSqlSafe;
 
+use crate::app_state::AppState;
 use crate::error::app::{ApiError, ApiResponse};
-use crate::metrics::query::{StatsState, tz_modifier};
+use crate::util::timeutil::tz_modifier;
 
 /// 查询参数
 #[derive(Debug, Deserialize)]
@@ -24,18 +25,12 @@ impl StatsQuery {
     }
 }
 
-/// 统计 API 状态
-#[derive(Clone)]
-pub struct StatsApiState {
-    pub stats: StatsState,
-}
-
 /// 获取统计概览
 pub async fn overview(
-    State(state): State<StatsApiState>,
+    State(state): State<AppState>,
 ) -> Result<Json<ApiResponse<serde_json::Value>>, (StatusCode, Json<ApiError>)> {
     let overview = state
-        .stats
+        .repositories.usage
         .get_overview()
         .await
         .map_err(|e: sqlx::Error| ApiError::internal_error(e.to_string()))?;
@@ -45,14 +40,14 @@ pub async fn overview(
 
 /// 获取按模型统计
 pub async fn models(
-    State(state): State<StatsApiState>,
+    State(state): State<AppState>,
     Query(query): Query<StatsQuery>,
 ) -> Result<Json<ApiResponse<serde_json::Value>>, (StatusCode, Json<ApiError>)> {
     let stats = match (&query.start_date, &query.end_date) {
-        (Some(start), Some(end)) => state.stats.get_model_stats_by_range(start, end).await,
+        (Some(start), Some(end)) => state.repositories.usage.get_model_stats_by_range(start, end).await,
         _ => {
             let days = query.days();
-            state.stats.get_model_stats(days).await
+            state.repositories.usage.get_model_stats(days).await
         }
     }
     .map_err(|e: sqlx::Error| ApiError::internal_error(e.to_string()))?;
@@ -62,14 +57,14 @@ pub async fn models(
 
 /// 获取按渠道统计
 pub async fn channels(
-    State(state): State<StatsApiState>,
+    State(state): State<AppState>,
     Query(query): Query<StatsQuery>,
 ) -> Result<Json<ApiResponse<serde_json::Value>>, (StatusCode, Json<ApiError>)> {
     let stats = match (&query.start_date, &query.end_date) {
-        (Some(start), Some(end)) => state.stats.get_channel_stats_by_range(start, end).await,
+        (Some(start), Some(end)) => state.repositories.usage.get_channel_stats_by_range(start, end).await,
         _ => {
             let days = query.days();
-            state.stats.get_channel_stats(days).await
+            state.repositories.usage.get_channel_stats(days).await
         }
     }
     .map_err(|e: sqlx::Error| ApiError::internal_error(e.to_string()))?;
@@ -79,14 +74,14 @@ pub async fn channels(
 
 /// 获取按天统计
 pub async fn daily(
-    State(state): State<StatsApiState>,
+    State(state): State<AppState>,
     Query(query): Query<StatsQuery>,
 ) -> Result<Json<ApiResponse<serde_json::Value>>, (StatusCode, Json<ApiError>)> {
     let stats = match (&query.start_date, &query.end_date) {
-        (Some(start), Some(end)) => state.stats.get_daily_stats_by_range(start, end).await,
+        (Some(start), Some(end)) => state.repositories.usage.get_daily_stats_by_range(start, end).await,
         _ => {
             let days = query.days();
-            state.stats.get_daily_stats(days).await
+            state.repositories.usage.get_daily_stats(days).await
         }
     }
     .map_err(|e: sqlx::Error| ApiError::internal_error(e.to_string()))?;
@@ -107,7 +102,7 @@ pub struct LogsQuery {
 
 /// 获取请求日志
 pub async fn logs(
-    State(state): State<StatsApiState>,
+    State(state): State<AppState>,
     Query(query): Query<LogsQuery>,
 ) -> Result<Json<ApiResponse<serde_json::Value>>, (StatusCode, Json<ApiError>)> {
     let page = query.page.unwrap_or(1).max(1);
@@ -115,8 +110,8 @@ pub async fn logs(
     let offset = (page - 1) * page_size;
 
     let result = state
-        .stats
-        .get_logs(crate::metrics::query::LogsFilter {
+        .repositories.usage
+        .get_logs(crate::domain::usage::LogsFilter {
             offset,
             limit: page_size,
             model: query.model,
@@ -141,11 +136,11 @@ pub struct LogIdParam {
 
 /// 获取单条日志详情（含请求/响应内容）
 pub async fn log_detail(
-    State(state): State<StatsApiState>,
+    State(state): State<AppState>,
     axum::extract::Path(param): axum::extract::Path<LogIdParam>,
 ) -> Result<Json<ApiResponse<serde_json::Value>>, (StatusCode, Json<ApiError>)> {
     let detail = state
-        .stats
+        .repositories.usage
         .get_log_detail(&param.id)
         .await
         .map_err(|e: sqlx::Error| ApiError::internal_error(e.to_string()))?;
@@ -158,10 +153,10 @@ pub async fn log_detail(
 
 /// 获取日志中不重复的模型列表（供前端筛选下拉框使用）
 pub async fn log_models(
-    State(state): State<StatsApiState>,
+    State(state): State<AppState>,
 ) -> Result<Json<ApiResponse<serde_json::Value>>, (StatusCode, Json<ApiError>)> {
     let models = state
-        .stats
+        .repositories.usage
         .get_log_models()
         .await
         .map_err(|e: sqlx::Error| ApiError::internal_error(e.to_string()))?;
@@ -171,12 +166,12 @@ pub async fn log_models(
 
 /// 获取按 API Key 聚合统计
 pub async fn api_keys(
-    State(state): State<StatsApiState>,
+    State(state): State<AppState>,
     Query(query): Query<StatsQuery>,
 ) -> Result<Json<ApiResponse<serde_json::Value>>, (StatusCode, Json<ApiError>)> {
     let days = query.days();
     let stats = state
-        .stats
+        .repositories.usage
         .get_api_key_stats(days)
         .await
         .map_err(|e: sqlx::Error| ApiError::internal_error(e.to_string()))?;
@@ -186,12 +181,12 @@ pub async fn api_keys(
 
 /// 获取延迟百分位统计
 pub async fn latency(
-    State(state): State<StatsApiState>,
+    State(state): State<AppState>,
     Query(query): Query<StatsQuery>,
 ) -> Result<Json<ApiResponse<serde_json::Value>>, (StatusCode, Json<ApiError>)> {
     let days = query.days();
     let (p50, p95, p99) = state
-        .stats
+        .repositories.usage
         .get_latency_percentiles(days)
         .await
         .map_err(|e: sqlx::Error| ApiError::internal_error(e.to_string()))?;
@@ -228,7 +223,7 @@ pub struct SetBudgetRequest {
 
 /// 设置/更新预算限制（upsert）
 pub async fn set_budget(
-    State(state): State<StatsApiState>,
+    State(state): State<AppState>,
     Json(req): Json<SetBudgetRequest>,
 ) -> Result<Json<ApiResponse<BudgetLimit>>, (StatusCode, Json<ApiError>)> {
     let monthly = req.monthly_limit_usd.unwrap_or(0.0);
@@ -238,7 +233,7 @@ pub async fn set_budget(
     // 验证 API Key 存在
     let exists: bool = sqlx::query_scalar::<_, i32>("SELECT COUNT(*) FROM api_keys WHERE id = ?")
         .bind(&req.api_key_id)
-        .fetch_one(&state.stats.pool)
+        .fetch_one(&state.pool)
         .await
         .map_err(|e| ApiError::internal_error(e.to_string()))
         .map(|c| c > 0)?;
@@ -262,17 +257,17 @@ pub async fn set_budget(
     .bind(monthly)
     .bind(daily)
     .bind(enabled)
-    .execute(&state.stats.pool)
+    .execute(&state.pool)
     .await
     .map_err(|e| ApiError::internal_error(e.to_string()))?;
 
     // 查询返回
-    let tz = tz_modifier(state.stats.timezone_offset);
+    let tz = tz_modifier(state.config.server.timezone_offset);
     let row = sqlx::query_as::<_, BudgetLimit>(
         AssertSqlSafe(format!("SELECT id, api_key_id, monthly_limit_usd, daily_limit_usd, enabled, datetime(created_at, '{}') as created_at, datetime(updated_at, '{}') as updated_at FROM budget_limits WHERE api_key_id = ?", tz, tz).as_str()),
     )
     .bind(&req.api_key_id)
-    .fetch_one(&state.stats.pool)
+    .fetch_one(&state.pool)
     .await
     .map_err(|e| ApiError::internal_error(e.to_string()))?;
 
@@ -281,13 +276,13 @@ pub async fn set_budget(
 
 /// 获取所有预算限制
 pub async fn list_budgets(
-    State(state): State<StatsApiState>,
+    State(state): State<AppState>,
 ) -> Result<Json<ApiResponse<Vec<BudgetLimit>>>, (StatusCode, Json<ApiError>)> {
-    let tz = tz_modifier(state.stats.timezone_offset);
+    let tz = tz_modifier(state.config.server.timezone_offset);
     let rows = sqlx::query_as::<_, BudgetLimit>(
         AssertSqlSafe(format!("SELECT id, api_key_id, monthly_limit_usd, daily_limit_usd, enabled, datetime(created_at, '{}') as created_at, datetime(updated_at, '{}') as updated_at FROM budget_limits ORDER BY created_at DESC", tz, tz).as_str()),
     )
-    .fetch_all(&state.stats.pool)
+    .fetch_all(&state.pool)
     .await
     .map_err(|e| ApiError::internal_error(e.to_string()))?;
 
@@ -296,12 +291,12 @@ pub async fn list_budgets(
 
 /// 删除预算限制
 pub async fn delete_budget(
-    State(state): State<StatsApiState>,
+    State(state): State<AppState>,
     axum::extract::Path(id): axum::extract::Path<String>,
 ) -> Result<Json<ApiResponse<()>>, (StatusCode, Json<ApiError>)> {
     let result = sqlx::query("DELETE FROM budget_limits WHERE id = ?")
         .bind(&id)
-        .execute(&state.stats.pool)
+        .execute(&state.pool)
         .await
         .map_err(|e| ApiError::internal_error(e.to_string()))?;
 

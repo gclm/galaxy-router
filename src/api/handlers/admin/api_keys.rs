@@ -10,7 +10,7 @@ use crate::api::handlers::admin::channels::PaginatedResponse;
 use crate::api::middleware::ApiKeyCache;
 use crate::api::response::generate_id;
 use crate::error::app::{ApiError, ApiResponse};
-use crate::metrics::query::{now_local_str, tz_modifier};
+use crate::util::timeutil::{now_local_str, tz_modifier};
 
 /// API Key
 #[derive(Debug, Serialize, Deserialize, Clone)]
