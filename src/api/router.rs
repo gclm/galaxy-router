@@ -22,7 +22,7 @@ use crate::api::handlers::admin::routes::{self, RouteState};
 use crate::api::handlers::admin::model_info::{self, ModelsState};
 use crate::api::handlers::admin::settings;
 use crate::api::handlers::admin::stats::{self, StatsApiState};
-use crate::api::handlers::admin::system_info::{self, SystemInfoState};
+use crate::api::handlers::admin::system_info;
 use crate::api::handlers::admin::update_check;
 use crate::api::handlers::proxy::{chat, embeddings, images, messages, models, responses};
 use crate::api::middleware::require_admin_auth;
@@ -89,11 +89,6 @@ pub async fn create_router(
             .expect("Failed to create HTTP client"),
     };
 
-    let system_info_state = SystemInfoState {
-        pool: pool.clone(),
-        start_time: std::sync::Arc::new(std::time::Instant::now()),
-    };
-
     let update_check_state = update_check::UpdateCheckState::from_pool(&pool).await;
 
     let backup_state = BackupState { pool: pool.clone() };
@@ -106,8 +101,9 @@ pub async fn create_router(
         ProxyState::new(pool.clone(), model_registry.clone()).await
     };
 
-    // v1.1.2: 统一 AppState（Settings 已切，其余 handler 后续 commit 逐个切）
-    let app_state = AppState::new(pool.clone(), config.clone());
+    // v1.1.2: 统一 AppState（Settings/SystemInfo 已切，其余 handler 后续 commit 逐个切）
+    let start_time = Arc::new(Instant::now());
+    let app_state = AppState::new(pool.clone(), config.clone(), start_time);
 
     // 需要认证的管理路由（每个 nest 独立管理状态）
     let protected_admin = Router::new()
@@ -188,7 +184,7 @@ pub async fn create_router(
             "/system-info",
             Router::new()
                 .route("/", get(system_info::get))
-                .with_state(system_info_state),
+                .with_state(app_state.clone()),
         )
         .nest(
             "/update-check",

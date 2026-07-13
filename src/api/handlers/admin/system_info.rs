@@ -1,17 +1,9 @@
 use axum::{Json, extract::State};
-use serde::Serialize;
-use sqlx::SqlitePool;
-use std::sync::Arc;
-use std::time::Instant;
-
-use crate::error::app::{ApiError, ApiResponse};
 use axum::http::StatusCode;
+use serde::Serialize;
 
-#[derive(Clone)]
-pub struct SystemInfoState {
-    pub pool: SqlitePool,
-    pub start_time: Arc<Instant>,
-}
+use crate::app_state::AppState;
+use crate::error::app::{ApiError, ApiResponse};
 
 #[derive(Debug, Serialize)]
 pub struct SystemInfo {
@@ -23,20 +15,12 @@ pub struct SystemInfo {
 }
 
 pub async fn get(
-    State(state): State<SystemInfoState>,
+    State(state): State<AppState>,
 ) -> Result<Json<ApiResponse<SystemInfo>>, (StatusCode, Json<ApiError>)> {
-    let channel_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM channels")
-        .fetch_one(&state.pool)
-        .await
-        .map_err(|e| ApiError::internal_error(e.to_string()))?;
-
-    let route_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM routes")
-        .fetch_one(&state.pool)
-        .await
-        .map_err(|e| ApiError::internal_error(e.to_string()))?;
-
-    let api_key_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM api_keys")
-        .fetch_one(&state.pool)
+    let (channel_count, route_count, api_key_count) = state
+        .repositories
+        .system_info
+        .count_summary()
         .await
         .map_err(|e| ApiError::internal_error(e.to_string()))?;
 
