@@ -804,6 +804,7 @@ mod tests {
         StatsState::new(pool, 0) // UTC
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn seed_log(
         pool: &sqlx::SqlitePool,
         model: &str,

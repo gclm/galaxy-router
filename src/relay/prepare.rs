@@ -354,11 +354,11 @@ mod tests {
         // 使用新的多维度估算，英文单词约 1.02 token/word
         // "a".repeat(30) 是 30 个字母，但被识别为一个单词
         let tokens = estimate_tokens(&"a".repeat(30));
-        assert!(tokens >= 1 && tokens <= 5);
+        assert!((1..=5).contains(&tokens));
 
         // 多个单词
         let tokens = estimate_tokens("hello world test");
-        assert!(tokens >= 3 && tokens <= 6);
+        assert!((3..=6).contains(&tokens));
 
         // 单个字符（1.02 向上取整 = 2）
         assert_eq!(estimate_tokens("a"), 2);

@@ -14,7 +14,7 @@ async fn test_settings_list_returns_200() {
     let body = assert_status(resp, StatusCode::OK).await;
     assert_eq!(body["code"], 0);
     // 默认有 6 个设置项（migration 1 插入）
-    assert!(body["data"].as_array().unwrap().len() >= 1);
+    assert!(!body["data"].as_array().unwrap().is_empty());
 }
 
 #[tokio::test]

@@ -174,7 +174,7 @@ mod tests {
         assert!(result.is_err(), "超出限制应拒绝");
         let retry_after = result.unwrap_err();
         assert!(
-            retry_after >= 1.0 && retry_after <= 60.0,
+            (1.0..=60.0).contains(&retry_after),
             "retry_after 应在合理范围"
         );
     }
