@@ -18,12 +18,12 @@ use crate::repository::Repositories;
 use crate::service::Services;
 
 /// 应用统一状态。
-#[allow(dead_code)] // v1.1.2 进行中：字段随 handler 迁移逐个被消费，末 commit 删除
 #[derive(Clone)]
 pub struct AppState {
     pub pool: SqlitePool,
     pub config: Arc<AppConfig>,
     pub repositories: Repositories,
+    #[allow(dead_code)] // v1.1.0 骨架，待 v1.1.3 service 层填充
     pub services: Services,
     pub start_time: Arc<Instant>,
     pub jwt_service: JwtService,

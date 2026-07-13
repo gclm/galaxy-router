@@ -15,7 +15,7 @@ use tower_http::trace::TraceLayer;
 
 use crate::api::handlers::admin::api_keys;
 use crate::api::handlers::admin::auth;
-use crate::api::handlers::admin::backup::{self, BackupState};
+use crate::api::handlers::admin::backup;
 use crate::api::handlers::admin::channels;
 use crate::api::handlers::admin::fetch_models;
 use crate::api::handlers::admin::routes;
@@ -49,8 +49,6 @@ pub async fn create_router(
 
     let update_check_context = update_check::UpdateCheckContext::from_pool(&pool).await;
 
-    let backup_state = BackupState { pool: pool.clone() };
-
     let proxy_state = if queuing.enabled {
         ProxyState::new(pool.clone(), model_registry.clone())
             .await
@@ -59,7 +57,7 @@ pub async fn create_router(
         ProxyState::new(pool.clone(), model_registry.clone()).await
     };
 
-    // v1.1.2: 统一 AppState（Settings/SystemInfo/Auth/Usage/Budget/Route/ApiKey/Channel/Models/UpdateCheck 已切，仅剩 backup）
+    // v1.1.2: 统一 AppState（11 个 admin State 全部合并完成）
     let start_time = Arc::new(Instant::now());
     let api_key_cache = crate::api::middleware::ApiKeyCache::new();
     let channel_http_client = reqwest::Client::builder()
@@ -171,7 +169,7 @@ pub async fn create_router(
             "/backups",
             Router::new()
                 .route("/", get(backup::export).post(backup::import).delete(backup::reset))
-                .with_state(backup_state),
+                .with_state(app_state.clone()),
         )
         .layer(middleware::from_fn(require_admin_auth))
         .layer(middleware::from_fn(crate::api::middleware::require_json));

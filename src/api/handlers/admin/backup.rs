@@ -9,15 +9,11 @@ type RouteRow = (String, String, Option<String>, bool, i32, bool);
 
 use crate::api::handlers::admin::channels::Channel;
 use crate::api::handlers::admin::channels::ChannelRow;
+use crate::app_state::AppState;
 use crate::error::app::{ApiError, ApiResponse};
 
 const BACKUP_FORMAT: &str = "galaxy-router-backup";
 const BACKUP_VERSION: i32 = 1;
-
-#[derive(Clone)]
-pub struct BackupState {
-    pub pool: SqlitePool,
-}
 
 /// 导出文件格式
 #[derive(Debug, Serialize, Deserialize)]
@@ -80,7 +76,7 @@ pub struct ImportResult {
 
 /// 导出全部配置数据
 pub async fn export(
-    State(state): State<BackupState>,
+    State(state): State<AppState>,
 ) -> Result<Json<ApiResponse<BackupFile>>, (StatusCode, Json<ApiError>)> {
     let pool = &state.pool;
 
@@ -105,7 +101,7 @@ pub async fn export(
 
 /// 导入配置数据
 pub async fn import(
-    State(state): State<BackupState>,
+    State(state): State<AppState>,
     Json(backup): Json<BackupFile>,
 ) -> Result<Json<ApiResponse<ImportResult>>, (StatusCode, Json<ApiError>)> {
     if backup.format != BACKUP_FORMAT {
@@ -176,7 +172,7 @@ pub struct ResetResult {
 
 /// 恢复出厂设置（删除渠道、分组、API Key、设置，保留用户和定价）
 pub async fn reset(
-    State(state): State<BackupState>,
+    State(state): State<AppState>,
 ) -> Result<Json<ApiResponse<ResetResult>>, (StatusCode, Json<ApiError>)> {
     let mut tx = state
         .pool
