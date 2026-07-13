@@ -12,7 +12,7 @@ mod types;
 // 公共类型（部分 re-export 当前未被本 crate 引用，但属于稳定公开 API）
 #[allow(unused_imports)]
 pub use types::{
-    Channel, ChannelState, CreateChannelRequest, CustomHeader, EndpointConfig, EndpointType,
+    Channel, CreateChannelRequest, CustomHeader, EndpointConfig, EndpointType,
     ListChannelsQuery, PaginatedResponse, TestEndpointRequest, TestEndpointResponse,
     UpdateChannelRequest, UpstreamApiKey,
 };

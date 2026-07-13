@@ -27,6 +27,7 @@ pub struct AppState {
     pub jwt_service: JwtService,
     pub cache: ProxyCache,
     pub api_key_cache: ApiKeyCache,
+    pub channel_http_client: reqwest::Client,
 }
 
 impl AppState {
@@ -37,6 +38,7 @@ impl AppState {
         jwt_service: JwtService,
         cache: ProxyCache,
         api_key_cache: ApiKeyCache,
+        channel_http_client: reqwest::Client,
     ) -> Self {
         let timezone_offset = config.server.timezone_offset;
         Self {
@@ -48,6 +50,7 @@ impl AppState {
             jwt_service,
             cache,
             api_key_cache,
+            channel_http_client,
         }
     }
 }

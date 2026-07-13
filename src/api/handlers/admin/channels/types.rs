@@ -1,8 +1,7 @@
 use serde::{Deserialize, Serialize};
-use sqlx::SqlitePool;
 
 #[derive(sqlx::FromRow)]
-pub(crate) struct ChannelRow {
+pub struct ChannelRow {
     pub(crate) id: String,
     pub(crate) name: String,
     pub(crate) api_keys: String,
@@ -165,15 +164,6 @@ pub struct UpdateChannelRequest {
     pub timeout_secs: Option<i32>,
     pub max_concurrency: Option<i32>,
     pub enabled: Option<bool>,
-}
-
-/// 渠道状态
-#[derive(Clone)]
-pub struct ChannelState {
-    pub pool: SqlitePool,
-    pub cache: crate::relay::cache::ProxyCache,
-    pub http_client: reqwest::Client,
-    pub timezone_offset: i32,
 }
 
 /// 端点测试请求（不依赖已保存渠道：base_url/headers/api_key/model 都从请求体传，新增渠道也能测）

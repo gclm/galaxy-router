@@ -2,9 +2,10 @@ use axum::{Json, extract::State, http::StatusCode};
 use reqwest::Client;
 
 use super::types::{
-    ChannelState, CustomHeader, EndpointConfig, EndpointType, TestEndpointRequest,
+    CustomHeader, EndpointConfig, EndpointType, TestEndpointRequest,
     TestEndpointResponse,
 };
+use crate::app_state::AppState;
 use crate::error::app::{ApiError, ApiResponse};
 
 /// 端点测试：对指定端点发流式探测请求，返回连通性 + 思维链诊断（per-endpoint，不合并）。
@@ -13,7 +14,7 @@ use crate::error::app::{ApiError, ApiResponse};
 /// - 连通性（success/latency/ttft/tokens）
 /// - 思维链诊断（响应是否含 `<think>` 标签 + 样本）—— 只检测不应用
 pub async fn test_endpoint(
-    State(state): State<ChannelState>,
+    State(state): State<AppState>,
     Json(req): Json<TestEndpointRequest>,
 ) -> Result<Json<ApiResponse<TestEndpointResponse>>, (StatusCode, Json<ApiError>)> {
     let endpoint_type = parse_protocol(&req.endpoint_type)
@@ -32,7 +33,7 @@ pub async fn test_endpoint(
     };
 
     let (result, reasoning, latency_ms, ttft, pt, ct) = probe_endpoint_raw(
-        &state.http_client,
+        &state.channel_http_client,
         &endpoint,
         &req.api_key,
         &body,

@@ -16,7 +16,7 @@ use tower_http::trace::TraceLayer;
 use crate::api::handlers::admin::api_keys;
 use crate::api::handlers::admin::auth;
 use crate::api::handlers::admin::backup::{self, BackupState};
-use crate::api::handlers::admin::channels::{self, ChannelState};
+use crate::api::handlers::admin::channels;
 use crate::api::handlers::admin::fetch_models;
 use crate::api::handlers::admin::routes;
 use crate::api::handlers::admin::model_info::{self, ModelsState};
@@ -47,18 +47,6 @@ pub async fn create_router(
 
     let shared_cache = ProxyCache::new();
 
-    let tz = config.server.timezone_offset;
-
-    let channel_state = ChannelState {
-        pool: pool.clone(),
-        cache: shared_cache.clone(),
-        http_client: reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(30))
-            .build()
-            .expect("Failed to create HTTP client"),
-        timezone_offset: tz,
-    };
-
     let models_state = ModelsState {
         model_registry: model_registry.clone(),
         fetch_client: reqwest::Client::builder()
@@ -79,10 +67,14 @@ pub async fn create_router(
         ProxyState::new(pool.clone(), model_registry.clone()).await
     };
 
-    // v1.1.2: 统一 AppState（Settings/SystemInfo/Auth/Usage/Budget/Route/ApiKey 已切，其余 handler 后续 commit 逐个切）
+    // v1.1.2: 统一 AppState（Settings/SystemInfo/Auth/Usage/Budget/Route/ApiKey/Channel 已切，其余 handler 后续 commit 逐个切）
     let start_time = Arc::new(Instant::now());
     let api_key_cache = crate::api::middleware::ApiKeyCache::new();
-    let app_state = AppState::new(pool.clone(), config.clone(), start_time, jwt_service, shared_cache.clone(), api_key_cache);
+    let channel_http_client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+        .expect("Failed to create HTTP client");
+    let app_state = AppState::new(pool.clone(), config.clone(), start_time, jwt_service, shared_cache.clone(), api_key_cache, channel_http_client);
 
     // 需要认证的管理路由（每个 nest 独立管理状态）
     let protected_admin = Router::new()
@@ -104,7 +96,7 @@ pub async fn create_router(
                         .put(channels::update)
                         .delete(channels::delete),
                 )
-                .with_state(channel_state),
+                .with_state(app_state.clone()),
         )
         .nest(
             "/routes",

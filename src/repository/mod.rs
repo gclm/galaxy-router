@@ -11,6 +11,7 @@ use sqlx::SqlitePool;
 pub mod api_key_repository;
 pub mod auth_repository;
 pub mod budget_repository;
+pub mod channel_repository;
 pub mod route_repository;
 pub mod settings_repository;
 pub mod system_info_repository;
@@ -18,6 +19,7 @@ pub mod usage_repository;
 use api_key_repository::{ApiKeyRepository, SqliteApiKeyRepository};
 use auth_repository::{AuthRepository, SqliteAuthRepository};
 use budget_repository::{BudgetRepository, SqliteBudgetRepository};
+use channel_repository::{ChannelRepository, SqliteChannelRepository};
 use route_repository::{RouteRepository, SqliteRouteRepository};
 use settings_repository::{SettingsRepository, SqliteSettingsRepository};
 use system_info_repository::{SqliteSystemInfoRepository, SystemInfoRepository};
@@ -33,6 +35,7 @@ pub struct Repositories {
     pub budget: Arc<dyn BudgetRepository>,
     pub route: Arc<dyn RouteRepository>,
     pub api_key: Arc<dyn ApiKeyRepository>,
+    pub channel: Arc<dyn ChannelRepository>,
 }
 
 impl Repositories {
@@ -45,7 +48,8 @@ impl Repositories {
             usage: Arc::new(SqliteUsageRepository::new(pool.clone(), timezone_offset)),
             budget: Arc::new(SqliteBudgetRepository::new(pool.clone(), timezone_offset)),
             route: Arc::new(SqliteRouteRepository::new(pool.clone(), timezone_offset)),
-            api_key: Arc::new(SqliteApiKeyRepository::new(pool, timezone_offset)),
+            api_key: Arc::new(SqliteApiKeyRepository::new(pool.clone(), timezone_offset)),
+            channel: Arc::new(SqliteChannelRepository::new(pool, timezone_offset)),
         }
     }
 }
