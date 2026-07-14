@@ -69,6 +69,12 @@ const ALLOWED_SETTING_KEYS: &[&str] = &[
     "cors.allow_origins",
     "github.repo",
     "update.mirror",
+    // 插件开关（Step C）
+    "plugin.cch_rewrite",
+    "plugin.tracking_removal",
+    "plugin.cache_key_injection",
+    "plugin.thinking_fix",
+    "plugin.master_switch",
 ];
 
 pub async fn update(
@@ -92,6 +98,15 @@ pub async fn update(
 
     if !updated {
         return Err(ApiError::not_found(format!("设置项 {} 不存在", key)));
+    }
+
+    // 插件开关变更：重建 PluginChain 内存缓存（Step C）
+    if key.starts_with("plugin.") {
+        state
+            .plugin_chain
+            .refresh(&*state.repositories.settings)
+            .await
+            .map_err(|e| ApiError::internal_error(e.to_string()))?;
     }
 
     Ok(Json(ApiResponse::success(())))

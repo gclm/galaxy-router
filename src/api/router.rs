@@ -65,11 +65,13 @@ pub async fn create_router(
         .timeout(std::time::Duration::from_secs(10))
         .build()
         .expect("Failed to create HTTP client");
+    let plugin_chain = crate::llm::plugin::PluginChain::build_default_chain();
     let app_state = if queuing.enabled {
         AppState::new(
             pool.clone(), config.clone(), start_time, jwt_service, shared_cache, api_key_cache,
             channel_http_client, model_registry.clone(), models_http_client, update_check_context,
             lb_state, rate_limiter, proxy_http_client,
+            plugin_chain,
         )
         .with_queue(queuing.max_queue_size, queuing.queue_timeout_secs)
     } else {
@@ -77,8 +79,14 @@ pub async fn create_router(
             pool.clone(), config.clone(), start_time, jwt_service, shared_cache, api_key_cache,
             channel_http_client, model_registry.clone(), models_http_client, update_check_context,
             lb_state, rate_limiter, proxy_http_client,
+            plugin_chain,
         )
     };
+    app_state
+        .plugin_chain
+        .refresh(&*app_state.repositories.settings)
+        .await
+        .unwrap_or_else(|e| tracing::warn!("插件开关 load 失败: {e}"));
 
     // 需要认证的管理路由（每个 nest 独立管理状态）
     let protected_admin = Router::new()

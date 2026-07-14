@@ -25,6 +25,7 @@ use crate::relay::ratelimit::RateLimiter;
 use crate::repository::Repositories;
 use crate::scheduler::selector::{RouteInfo, RouteItemInfo};
 use crate::scheduler::state::LoadBalancerState;
+use crate::llm::plugin::PluginChain;
 use crate::service::Services;
 
 /// 应用统一状态。
@@ -55,6 +56,8 @@ pub struct AppState {
     key_counter: Arc<AtomicU64>,
     /// 上游转发客户端（300s + 可选 proxy.url，原 ProxyState.http_client）
     pub proxy_http_client: reqwest::Client,
+    // --- Step C：请求插件链 ---
+    pub plugin_chain: PluginChain,
 }
 
 impl AppState {
@@ -73,6 +76,7 @@ impl AppState {
         lb_state: LoadBalancerState,
         rate_limiter: RateLimiter,
         proxy_http_client: reqwest::Client,
+        plugin_chain: PluginChain,
     ) -> Self {
         let timezone_offset = config.server.timezone_offset;
         Self {
@@ -94,6 +98,7 @@ impl AppState {
             queue: None,
             key_counter: Arc::new(AtomicU64::new(0)),
             proxy_http_client,
+            plugin_chain,
         }
     }
 
@@ -317,6 +322,7 @@ impl AppState {
             queue: None,
             key_counter: Arc::new(AtomicU64::new(0)),
             proxy_http_client: reqwest::Client::new(),
+            plugin_chain: PluginChain::new_empty(),
         }
     }
 }
