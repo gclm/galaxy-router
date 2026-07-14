@@ -602,8 +602,9 @@ impl UsageRepository for SqliteUsageRepository {
                       ul.cache_read_tokens, ul.cache_creation_tokens,
                       ul.cost, ul.latency_ms, ul.ttft_ms, ul.status_code, ul.error_message, datetime(ul.created_at, '{}') as created_at,
                       ul.endpoint_type, ul.request_type,
-                      ul.request_content, ul.response_content, ul.is_stream, ul.upstream_key_hint, ul.user_agent, ul.attempts as raw_attempts
+                      up.request_content, up.response_content, ul.is_stream, ul.upstream_key_hint, ul.user_agent, ul.attempts as raw_attempts
                FROM usage_logs ul
+               LEFT JOIN usage_payloads up ON up.log_id = ul.id
                LEFT JOIN api_keys ak ON ul.api_key_id = ak.id
                LEFT JOIN channels c ON ul.channel_id = c.id
                WHERE ul.id = ?"#, tz).as_str()),
@@ -1049,11 +1050,19 @@ mod tests {
         sqlx::query(
             r#"INSERT INTO usage_logs
                (id, requested_model, status_code, input_tokens, output_tokens,
-                cost, request_type, is_stream, request_content, response_content, attempts)
-               VALUES (?, 'gpt-4o', 200, 10, 5, 0.001, 'passthrough', 0, '{}', '{}', ?)"#,
+                cost, request_type, is_stream, attempts)
+               VALUES (?, 'gpt-4o', 200, 10, 5, 0.001, 'passthrough', 0, ?)"#,
         )
         .bind(&id)
         .bind(attempts)
+        .execute(&pool)
+        .await
+        .unwrap();
+        // content 拆到 usage_payloads（Step E 拆表）
+        sqlx::query(
+            "INSERT INTO usage_payloads (log_id, request_content, response_content) VALUES (?, '{}', '{}')",
+        )
+        .bind(&id)
         .execute(&pool)
         .await
         .unwrap();

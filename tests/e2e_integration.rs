@@ -126,8 +126,9 @@ async fn test_e2e_auth_failure_writes_usage_log() {
         Option<String>,
         Option<String>,
     ) = sqlx::query_as(
-        "SELECT requested_model, user_agent, error_message, request_content \
-         FROM usage_logs WHERE request_type = 'auth_failure' LIMIT 1",
+        "SELECT ul.requested_model, ul.user_agent, ul.error_message, up.request_content \
+         FROM usage_logs ul LEFT JOIN usage_payloads up ON up.log_id = ul.id \
+         WHERE ul.request_type = 'auth_failure' LIMIT 1",
     )
     .fetch_one(&pool)
     .await

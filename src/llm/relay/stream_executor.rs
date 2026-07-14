@@ -1150,7 +1150,7 @@ mod tests {
     async fn wait_for_response_content(pool: &sqlx::SqlitePool) -> Option<String> {
         for _ in 0..40 {
             let row: Option<(Option<String>,)> =
-                sqlx::query_as("SELECT response_content FROM usage_logs LIMIT 1")
+                sqlx::query_as("SELECT response_content FROM usage_payloads LIMIT 1")
                     .fetch_optional(pool)
                     .await
                     .unwrap();

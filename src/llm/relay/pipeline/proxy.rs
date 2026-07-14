@@ -4,7 +4,6 @@ use axum::http::{HeaderMap, StatusCode};
 use std::pin::Pin;
 
 use crate::api::handlers::admin::channels::EndpointType;
-use crate::metrics::recorder::redaction::sanitize_json_content;
 use crate::metrics::recorder::save_request_record;
 use crate::relay::candidates::build_relay_candidates;
 use crate::error::proxy::ProxyError;
@@ -53,9 +52,7 @@ pub async fn proxy_request(
     };
 
     let model = body["model"].as_str().unwrap_or("unknown").to_string();
-    let request_content = serde_json::to_string(&body)
-        .ok()
-        .map(|c| sanitize_json_content(&c));
+    let request_content = serde_json::to_string(&body).ok();
     let user_agent = headers
         .get("user-agent")
         .and_then(|v| v.to_str().ok())

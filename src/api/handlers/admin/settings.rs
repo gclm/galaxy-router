@@ -75,6 +75,8 @@ const ALLOWED_SETTING_KEYS: &[&str] = &[
     "plugin.cache_key_injection",
     "plugin.thinking_fix",
     "plugin.master_switch",
+    // Step E：响应内容记录开关
+    "usage.record_content",
 ];
 
 pub async fn update(

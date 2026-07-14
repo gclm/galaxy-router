@@ -55,7 +55,8 @@ impl StatsRecorder {
         Self { pool }
     }
 
-    /// 记录请求日志
+    /// 记录请求日志：usage_logs 写统计字段，usage_payloads 写请求/响应原文（过 redaction，
+    /// 受 `usage.record_content` 开关控制）。拆表避免大 TEXT 拖慢 usage_logs 的分页/聚合查询。
     pub async fn record_request(&self, record: RequestRecord) -> Result<(), sqlx::Error> {
         let id = generate_id();
         let attempts_json = if record.attempts.is_empty() {
@@ -64,6 +65,14 @@ impl StatsRecorder {
             Some(serde_json::to_string(&record.attempts).unwrap_or_default())
         };
 
+        // redaction 统一（落库前，承接所有 8 处调用点）
+        let req_sanitized = record
+            .request_content
+            .map(|c| redaction::sanitize_json_content(&c));
+        let resp_sanitized = record
+            .response_content
+            .map(|c| redaction::sanitize_json_content(&c));
+
         sqlx::query(
             r#"
             INSERT INTO usage_logs (
@@ -71,9 +80,9 @@ impl StatsRecorder {
                 requested_model, actual_model,
                 input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens,
                 cost, latency_ms, ttft_ms, status_code, error_message,
-                endpoint_type, request_type, request_content, response_content, is_stream,
+                endpoint_type, request_type, is_stream,
                 upstream_key_hint, attempts, user_agent
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             "#,
         )
         .bind(&id)
@@ -94,14 +103,32 @@ impl StatsRecorder {
         .bind(&record.error_message)
         .bind(&record.endpoint_type)
         .bind(&record.request_type)
-        .bind(&record.request_content)
-        .bind(&record.response_content)
         .bind(record.is_stream)
         .bind(&record.upstream_key_hint)
         .bind(&attempts_json)
         .bind(&record.user_agent)
         .execute(&self.pool)
         .await?;
+
+        // usage_payloads：受开关控制（默认 true），仅在有原文时写
+        let record_content: bool = sqlx::query_scalar::<_, String>(
+            "SELECT value FROM settings WHERE key = 'usage.record_content'",
+        )
+        .fetch_optional(&self.pool)
+        .await?
+        .and_then(|v| v.parse::<bool>().ok())
+        .unwrap_or(true);
+
+        if record_content && (req_sanitized.is_some() || resp_sanitized.is_some()) {
+            sqlx::query(
+                "INSERT OR IGNORE INTO usage_payloads (log_id, request_content, response_content) VALUES (?, ?, ?)",
+            )
+            .bind(&id)
+            .bind(req_sanitized)
+            .bind(resp_sanitized)
+            .execute(&self.pool)
+            .await?;
+        }
 
         Ok(())
     }
@@ -635,5 +662,62 @@ mod tests {
         assert!(record.upstream_key_hint.is_none());
         assert_eq!(record.request_type, "unknown");
         assert_eq!(record.attempts.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn record_request_writes_payload_and_redacts() {
+        let pool = make_pool().await;
+        let rec = StatsRecorder::new(pool.clone());
+        let mut record = base_record(vec![]);
+        record.request_content =
+            Some(r#"{"authorization":"sk-secret123","prompt":"hi"}"#.into());
+        record.response_content = Some(r#"{"content":"answer","api_key":"sk-leak"}"#.into());
+        rec.record_request(record).await.unwrap();
+
+        // usage_logs 仍写（拆表后无 content 列，但统计字段在）
+        let log_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM usage_logs")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(log_count, 1);
+
+        // usage_payloads 写 content，且过 redaction（密钥 → [REDACTED]）
+        let (req, resp): (Option<String>, Option<String>) =
+            sqlx::query_as("SELECT request_content, response_content FROM usage_payloads LIMIT 1")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        let req = req.expect("request_content 应填充");
+        assert!(req.contains("[REDACTED]"), "authorization 应脱敏: {}", req);
+        assert!(!req.contains("sk-secret123"), "密钥不应明文: {}", req);
+        assert!(req.contains("prompt"), "非敏感字段保留: {}", req);
+        let resp = resp.expect("response_content 应填充");
+        assert!(resp.contains("[REDACTED]"), "response api_key 应脱敏: {}", resp);
+        assert!(!resp.contains("sk-leak"), "密钥不应明文: {}", resp);
+    }
+
+    #[tokio::test]
+    async fn record_request_skips_payload_when_record_content_disabled() {
+        let pool = make_pool().await;
+        // 关闭开关
+        sqlx::query("UPDATE settings SET value='false' WHERE key='usage.record_content'")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let rec = StatsRecorder::new(pool.clone());
+        rec.record_request(base_record(vec![])).await.unwrap();
+
+        // usage_logs 仍写
+        let log_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM usage_logs")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(log_count, 1);
+        // usage_payloads 不写（开关关闭）
+        let payload_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM usage_payloads")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(payload_count, 0);
     }
 }
