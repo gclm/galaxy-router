@@ -13,6 +13,7 @@ use sqlx::SqlitePool;
 
 use crate::app_state::AppState;
 use crate::error::app::{ApiError, ApiResponse};
+use crate::repository::settings_repository::{SettingsRepository, SqliteSettingsRepository};
 
 /// GitHub API 域名（固定；owner/repo 在 settings.github.repo 配置）
 const GITHUB_API_BASE: &str = "https://api.github.com";
@@ -34,13 +35,20 @@ pub struct UpdateCheckContext {
 impl UpdateCheckContext {
     /// 生产：从 settings 读取代理 + GitHub 仓库 + 镜像，构建客户端（在 router 启动时调用）。
     pub async fn from_pool(pool: &SqlitePool) -> Self {
-        let proxy_url = read_proxy_url(pool).await;
-        let github_repo = read_setting(pool, "github.repo")
+        let settings = SqliteSettingsRepository::new(pool.clone());
+        let proxy_url = read_proxy_url(&settings).await;
+        let github_repo = settings
+            .get("github.repo")
             .await
+            .ok()
+            .flatten()
             .filter(|s| !s.is_empty())
             .unwrap_or_else(|| DEFAULT_GITHUB_REPO.to_string());
-        let mirror = read_setting(pool, "update.mirror")
+        let mirror = settings
+            .get("update.mirror")
             .await
+            .ok()
+            .flatten()
             .filter(|s| !s.is_empty());
         Self {
             http_client: build_proxied_client(proxy_url),
@@ -193,27 +201,23 @@ fn apply_mirror(prefix: &str, url: &str) -> String {
     format!("{prefix}/{url}")
 }
 
-/// 读取 settings 表某个 key 的值
-async fn read_setting(pool: &SqlitePool, key: &str) -> Option<String> {
-    sqlx::query_scalar::<_, String>("SELECT value FROM settings WHERE key = ?")
-        .bind(key)
-        .fetch_optional(pool)
+/// 读取代理 URL：仅当 proxy.enabled=true 且 proxy.url 非空时返回
+async fn read_proxy_url(settings: &SqliteSettingsRepository) -> Option<String> {
+    let enabled = settings
+        .get("proxy.enabled")
         .await
         .ok()
         .flatten()
-}
-
-/// 读取代理 URL：仅当 proxy.enabled=true 且 proxy.url 非空时返回
-async fn read_proxy_url(pool: &SqlitePool) -> Option<String> {
-    let enabled = read_setting(pool, "proxy.enabled")
-        .await
         .and_then(|v| v.parse::<bool>().ok())
         .unwrap_or(false);
     if !enabled {
         return None;
     }
-    read_setting(pool, "proxy.url")
+    settings
+        .get("proxy.url")
         .await
+        .ok()
+        .flatten()
         .filter(|v| !v.is_empty())
 }
 

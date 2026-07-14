@@ -1,8 +1,8 @@
-//! 数据访问层（v1.1.0 骨架，v1.1.2 起填入各 repository trait + impl）。
+//! 数据访问层。
 //!
-//! SQL 隔离在此层。各 repository 随 handler 迁移逐个填入：
-//! - `settings_repository` / `system_info_repository`（v1.1.2）
-//! - `auth/usage/budget/route/api_key/channel/backup`（v1.1.2 后续 commit）
+//! SQL 隔离在此层。v1.1.2 填入 8 个 repository trait + impl：
+//! settings / system_info / auth / usage / budget / route / api_key / channel。
+//! backup 的 SQL 暂留 handler（跨表组装 + row_to_channel 依赖，留 v1.1.3+）。
 
 use std::sync::Arc;
 

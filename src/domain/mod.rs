@@ -1,14 +1,10 @@
-//! 领域模型层（v1.1.0 骨架，v1.1.2 起填充）。
+//! 领域模型层。
 //!
 //! 纯数据结构 + 业务规则，零框架依赖（允许 serde）。
-//! 子模块随分层重构逐个填入：
-//! - `auth`：InitRequest / LoginRequest / ChangePasswordRequest / AuthResponse / UserInfoResponse（v1.1.2）
-//! - `setting`：SettingResponse（v1.1.2）
-//! - `route`：Route / RouteItem + 请求 DTO（v1.1.2）
-//! - `channel`：Channel / Endpoint / UpstreamKey
-//! - `api_key`：ApiKey + 请求 DTO（v1.1.2；parse_supported_models 留 handler 供 relay/proxy 复用）
-//! - `budget`：SetBudgetRequest（v1.1.2；BudgetLimit 带 FromRow 留 repository）
-//! - `usage`：UsageLog / UsageStats
+//! v1.1.2 填入 auth / setting / route / api_key / budget / usage（纯 DTO）。
+//! - 带 `sqlx::FromRow` 的行类型留各 repository（UsageLogRow / BudgetLimit 等）。
+//! - `channel` 未进 domain：Channel / EndpointType 等被 relay/proxy 9+ 处依赖，留 `channels/types`（待 v1.1.4/5 relay 重构后归位）。
+//! - `parse_supported_models` 留 `api_keys.rs`（relay/proxy 依赖）。
 
 pub mod api_key;
 pub mod auth;

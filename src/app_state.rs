@@ -1,7 +1,7 @@
-//! 应用统一状态（v1.1.0 骨架，v1.1.2 起接入 handler）。
+//! 应用统一状态。
 //!
-//! v1.1.2 起各 admin handler 从各自 `*State` 增量切到 `State<AppState>`。
-//! 字段随 handler 迁移逐个补入。
+//! v1.1.2：11 个 admin `*State` 全部合并到 `State<AppState>`。
+//! v1.1.3 待办：service 层填充（services 字段）、`new` 参数重构为 builder。
 
 use std::sync::Arc;
 use std::time::Instant;
@@ -36,7 +36,7 @@ pub struct AppState {
 }
 
 impl AppState {
-    #[allow(clippy::too_many_arguments)] // v1.1.2 过渡：参数随字段增加，Commit 10 收尾时重构（builder/Config struct）
+    #[allow(clippy::too_many_arguments)] // 待 v1.1.3 重构为 builder/Config struct
     pub fn new(
         pool: SqlitePool,
         config: Arc<AppConfig>,
