@@ -79,10 +79,11 @@ pub trait ResponsePlugin: Send + Sync {
 }
 
 /// 有状态流式 processor（每请求实例化，持有跨 chunk 累积状态）。镜像 StreamConverter 模式。
-/// thinking-1 只 observe（累积 reasoning 喂落库）；thinking-2 加改写（`<think>` 内容分离）。
+/// thinking-2：observe 改写 event——剥离正文 content 混入的 `<think>...</think>` 归
+/// `reasoning_content`（转发侧），同时累积 reasoning 供落库。
 pub trait StreamResponseProcessor: Send {
-    /// 每事件观察（不改 event）。累积 reasoning 供 `finish_reasoning` 返回。
-    fn observe(&mut self, event: &LlmStreamResponse);
+    /// 每事件改写：剥离正文 content 混入的 `<think>` 归 reasoning_content；累积 reasoning 供落库。
+    fn observe(&mut self, event: &mut LlmStreamResponse);
     /// 流结束，返回累积的 reasoning（非空才 Some，喂 `resp_json["reasoning"]` 落库）。
     fn finish_reasoning(&mut self) -> Option<String>;
 }

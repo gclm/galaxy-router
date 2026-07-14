@@ -524,7 +524,7 @@ impl ProxyStreamRelayExecutor {
                                     &upstream_endpoint_clone,
                                     &event_bytes,
                                 ) {
-                                    Ok(Some(llm_stream)) => {
+                                    Ok(Some(mut llm_stream)) => {
                                         // 收集内容用于统计
                                         if let Some(choice) = llm_stream.first_choice() {
                                             if let Some(crate::protocol::model::Content::Text(t)) =
@@ -562,9 +562,9 @@ impl ProxyStreamRelayExecutor {
                                                 }
                                             }
                                         }
-                                        // thinking 流式 hook：累积 reasoning 承接原内联收集
+                                        // thinking 流式 hook：剥离正文 content 的 <think> 归 reasoning_content（改写转发流）
                                         if let Some(p) = thinking_processor.as_mut() {
-                                            p.observe(&llm_stream);
+                                            p.observe(&mut llm_stream);
                                         }
                                         // 有状态转换：一个事件可能产生多个 SSE 输出
                                         match converter.convert(&llm_stream) {
