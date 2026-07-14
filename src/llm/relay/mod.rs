@@ -9,5 +9,6 @@ pub mod queue;
 pub mod ratelimit;
 pub mod run;
 pub mod stream_executor;
+mod stream_error;
 
 pub mod scheduler_task;
