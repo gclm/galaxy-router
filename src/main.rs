@@ -11,7 +11,7 @@ mod config;
 mod db;
 mod error;
 mod metrics;
-mod protocol;
+use crate::llm::protocol;
 mod relay;
 mod scheduler;
 mod static_assets;

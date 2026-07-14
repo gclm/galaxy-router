@@ -7,4 +7,5 @@
 //! - `scheduler/`：负载均衡（选渠道）
 //! - `plugin/`：请求/响应拦截改写（cch / tracking / cache_key / thinking）
 //!
-//! v1.1.0 不声明子模块、不移动任何现有代码（纯加法骨架）。
+//! Step A 起逐个迁入顶层模块（protocol / scheduler / relay），plugin 待后续。
+pub mod protocol;
