@@ -1,4 +1,4 @@
-# Galaxy Router v1.1 架构重构与功能规划（分批次发布）
+# Galaxy Router v1.1 架构重构与功能规划（步骤化推进）
 
 > 日期: 2026-07-13
 > 状态: 设计阶段
@@ -358,11 +358,11 @@ impl PluginChain {
 }
 ```
 
-**开关机制（v1.1.3 落地）**：
+**开关机制（Step C 落地）**：
 
 - **冷启动**：AppState 构造时一次性从 settings 表 load 所有插件开关到 `enabled`，启动后缓存必定 warm；`unwrap_or` 用插件 `default_enabled()` 兜底（thinking→true，其余→false），避免 setting 缺失时 thinking 静默关闭。
 - **不每请求查 DB**：`enabled` 是内存缓存，4 个插件不会变成每请求 4 次查询。
-- **失效 hook（v1.1.3 核实项）**：settings 更新时需重建 `enabled` + `master_switch`。**实施时核实** settings 更新当前是否触发 ProxyCache 失效（约束 #6）——已覆盖则复用，未覆盖则新增 settings→PluginChain 重建 hook。
+- **失效 hook（Step C 核实项）**：settings 更新时需重建 `enabled` + `master_switch`。**实施时核实** settings 更新当前是否触发 ProxyCache 失效（约束 #6）——已覆盖则复用，未覆盖则新增 settings→PluginChain 重建 hook。
 - **全局总开关 `plugin.master_switch`**：默认 true，置 false 时所有插件跳过（紧急回滚——cch/tracking/cache_key 默认对所有 Anthropic/Responses 流量改写，须有刹车）。
 
 > ⚠️ **流式响应改写**：`thinking` 在流式下不能直接 `rewrite_response(body)`（body 是逐块到达的）。需在 `stream_executor` 加流式 hook，按 SSE 事件累积后再分离。复杂度高于请求侧，单列为 thinking 插件子任务（§3.3.5）。
@@ -520,9 +520,9 @@ inbound 只处理**客户端请求**（入站解析），按请求协议（chat 
 
 > ⚠️ **redaction 必须显式安排**：§4.2 要默认记录 response_content，§4.4 要保护门户隐私。脱敏（密钥 / PII / 敏感 header）是这两条的安全前提，不能在拆分中丢弃或漏迁。
 
-#### 其他 >500 行文件拆分（v1.1.4）
+#### 其他 >500 行文件拆分（Step D）
 
-下列文件 >500 行但上文未单独列出，v1.1.4 按维度拆（目标 <500 行，函数级划分实施时定）：
+下列文件 >500 行但上文未单独列出，Step D 按维度拆（目标 <500 行，函数级划分实施时定）：
 
 | 文件 (行数) | 拆分维度 |
 |---|---|
@@ -555,7 +555,7 @@ CREATE INDEX IF NOT EXISTS idx_usage_logs_route_id ON usage_logs(route_id);
 -- 注：UNIQUE 约束（route_items 的 UNIQUE(group_id,channel_id,model_name)、
 -- usage_daily 的 UNIQUE(date,api_key_id,channel_id,group_id,model)）随列改名自动跟随，无需重建。
 
--- 新增插件配置项（随 v1.1.1 迁移先建，v1.1.3 插件系统启用时读取；v1.1.1/3 期间存在但闲置）
+-- 新增插件配置项（随 v1.1.1 迁移先建，Step C 插件系统启用时读取；v1.1.1→Step C 期间存在但闲置）
 INSERT OR IGNORE INTO settings (key, category, value, description) VALUES
     ('plugin.cch_rewrite', 'plugin', 'true', '清理 Claude Code cch 标记，提升缓存命中率'),
     ('plugin.tracking_removal', 'plugin', 'true', '清洗 Claude Code 隐私跟踪标记'),
@@ -623,7 +623,7 @@ impl StreamAccumulator {
 - **拆表存储（已定）**：大 TEXT 直接塞 `usage_logs` 会拖慢其 9+ 处分页/聚合查询——SQLite 单文件库对大行更敏感。新建 `usage_payloads`，`usage_logs` 只留统计字段，详情按需 join：
 
   ```sql
-  -- src/db/migrations/18_create_usage_payloads.sql（v1.1.5 批次，路径对齐约束 #5）
+  -- src/db/migrations/18_create_usage_payloads.sql（Step E，路径对齐约束 #5）
   CREATE TABLE IF NOT EXISTS usage_payloads (
       log_id TEXT PRIMARY KEY REFERENCES usage_logs(id) ON DELETE CASCADE,
       request_content TEXT,
@@ -637,7 +637,7 @@ impl StreamAccumulator {
       ('usage.record_content', 'usage', 'true', '是否记录请求/响应原文到 usage_payloads（关闭=新请求不写 payload，历史不受影响）');
   ```
   ```sql
-  -- src/db/migrations/19_drop_usage_logs_content_columns.sql（v1.1.5 批次）
+  -- src/db/migrations/19_drop_usage_logs_content_columns.sql（Step E）
   -- 回填：先把 usage_logs 现有内容搬到 usage_payloads
   INSERT OR IGNORE INTO usage_payloads (log_id, request_content, response_content, created_at)
   SELECT id, request_content, response_content, created_at FROM usage_logs
@@ -833,23 +833,37 @@ GROUP BY date
 
 ## 5. 实施计划
 
-### 5.1 发布批次
+### 5.1 开发节奏
 
-v1.1 是统一版本线（架构重构 + 功能增强全部归此），通过 patch 版本分批次发布，每批次可独立编译/测试/发布。按依赖顺序排列：
+> **2026-07-14 更新**：v1.1.0/1.1.1/1.1.2 已发版。后续 relay 重构改用**步骤（Step）序列**——紧耦合的重构没必要各自 bump 版本发版，累计到一个合适节点再发。原"v1.1.3=插件 / v1.1.4=拆分 / v1.1.5=记录"的版本划分作废。本节同时补 design doc 原两处空白：**物理聚合无批次**（→ Step A）、**ProxyState 未处置**（→ Step B）。
 
-| 批次 | 内容 | 依赖 | DB 迁移 |
+**已发版**（版本线 v1.1.x）：
+
+| 版本 | 内容 | DB 迁移 |
+|---|---|---|
+| ✅ v1.1.0 | 架构骨架：`domain/` `repository/` `service/` `llm/` 目录 + `AppState` 空壳（不影响功能） | — |
+| ✅ v1.1.1 | 重命名 Group→Route 全链路（DB + Rust + API + 前端） | 17 |
+| ✅ v1.1.2 | admin SQL 下沉 handler→repository + 11 个 admin `*State` 合并 `State<AppState>` | — |
+
+**relay 重构（Step 序列，不发版，累计发版）**：
+
+| Step | 状态 | 内容 | commit / DB |
 |---|---|---|---|
-| **v1.1.0** | 架构骨架：`domain/` `repository/` `service/` `llm/` 目录 + `AppState` 空壳（不影响现有功能） | — | — |
-| **v1.1.1** | 重命名 Group→Route 全链路（DB + Rust + API + 前端） | v1.1.0 | 17 |
-| **v1.1.2** | SQL 下沉 handler→repository + 各 handler 切换 `State<AppState>` | v1.1.1 | — |
-| **v1.1.3** | 插件系统：RequestPlugin/ResponsePlugin + 4 插件（thinking 删旧 reasoning，同 commit） | v1.1.2 | — |
-| **v1.1.4** | 大文件拆分（stream_executor / executor / pipeline / sse / prepare / scheduler-state / inbound） | v1.1.3 | — |
-| **v1.1.5** | 响应内容记录：StreamAccumulator + usage_payloads + redaction 接入 | v1.1.4 | 18/19 |
-| **v1.1.6** | 请求详情可视化（前端详情抽屉，消费 usage_payloads） | v1.1.5 | — |
-| **v1.1.7** | Key 持有者门户（portal + JWT 鉴权） | v1.1.2 | — |
-| **v1.1.8** | 统计与渠道增强（缓存命中分析 / 错误率趋势 / 供应商预设） | v1.1.2 | — |
+| ✅ A 物理聚合 | 完成 | `protocol`/`scheduler`/`relay` → `src/llm/`（双 crate 根 re-export：`lib.rs` `pub use` + `main.rs` `use`；11231 行调用点零改动） | `0f892cc` / `aad90ec` / `605162f` |
+| ✅ B State 统一 | 完成 | 删 `ProxyState`→统一 `State<AppState>`（AppState 并入 lb_state / stats_recorder / rate_limiter / queue / proxy_http_client + 路由渠道查询方法）；**修 3 个双实例 bug**：`LoadBalancerState`（后台健康探测原本对 proxy 选渠道完全失效）、`ApiKeyCache`（admin 禁 key 后 proxy 原本要等 TTL）、`ProxyCache`（admin 与 proxy 缓存分裂） | `6e87553` |
+| ⏳ C 插件系统 | 待做 | `llm/plugin/` + RequestPlugin/ResponsePlugin + 4 插件（cch / tracking / cache_key / thinking）+ 删 `stream_executor` reasoning（同 commit，§3.3.3 / §5.2） | — |
+| ⏳ D 大文件拆分 | 待做 | stream_executor(1072) / executor(720) / pipeline(696) / sse(634) / prepare / scheduler-state / inbound（§3.4） | — |
+| ⏳ E 响应内容记录 | 待做 | StreamAccumulator + `usage_payloads` + redaction 接入（§4.2） | 18 / 19 |
 
-> 各批次完成后跑 `make check` + 相关测试，绿了再发下一个 patch。前端适配随对应批次落地（v1.1.1 改名、v1.1.6 可视化、v1.1.7 门户）。
+**功能增强（独立发版，不绑 relay 重构节奏）**：
+
+| 内容 | 依赖 |
+|---|---|
+| 请求详情可视化（前端详情抽屉，消费 `usage_payloads`） | Step E |
+| Key 持有者门户（portal + JWT 鉴权，§4.4） | v1.1.2 |
+| 统计与渠道增强（缓存命中分析 / 错误率趋势 / 供应商预设，§4.5） | v1.1.2 |
+
+> 每步完成跑 `make check`（`cargo clippy --all-targets -- -D warnings` 零警告 + `cargo test` 700+ 全绿）再下一步。Step B 含真实行为变化（双实例修复），已写入 commit message。
 
 ### 5.2 关键约束
 
@@ -857,9 +871,9 @@ v1.1 是统一版本线（架构重构 + 功能增强全部归此），通过 pa
 
 **State 合并（v1.1.0 引入 / v1.1.2 切换）**：现有 10 个 admin handler `*State` 字段高度重叠（`pool` 重复 7 次，`cache` / `timezone_offset` / `http_client` 各重复多次），分 State 是纯样板。对齐 axonhub（单一 `Server` struct + `dependencies/`），合并为单一 `AppState`——持有 `Repositories` + `Services` + `ProxyCache` + `http_client` + `api_key_cache` + `config` + `timezone_offset` 等全部依赖，所有 handler 统一 `State<AppState>`。
 
-**thinking 删 reasoning（v1.1.3）**：删除 `stream_executor.rs:445–775` 与 thinking 插件上线**同 commit**，避免 reasoning 能力空窗或双写。先补齐插件测试覆盖原 reasoning 行为再切换。
+**thinking 删 reasoning（Step C）**：删除 `stream_executor.rs:445–775` 与 thinking 插件上线**同 commit**，避免 reasoning 能力空窗或双写。先补齐插件测试覆盖原 reasoning 行为再切换。
 
-**响应记录迁移（v1.1.5）**：迁移 18 建 `usage_payloads` + 回填 + `usage.record_content` 设置；迁移 19 从 `usage_logs` 删 content 列（SQLite 3.35+ DROP COLUMN）。落库前过 redaction。
+**响应记录迁移（Step E）**：迁移 18 建 `usage_payloads` + 回填 + `usage.record_content` 设置；迁移 19 从 `usage_logs` 删 content 列（SQLite 3.35+ DROP COLUMN）。落库前过 redaction。
 
 ---
 
@@ -895,7 +909,7 @@ v1.1 是统一版本线（架构重构 + 功能增强全部归此），通过 pa
 | response_content 存储 | **拆 `usage_payloads` 表**（log_id, request_content, response_content），`usage_logs` 只留统计字段（SQLite 单文件库对大行敏感） | §4.2 |
 | 管理员可见原文 | **默认可见**（调试优先）；密钥/敏感 header 仍落库前 redaction | §4.2 |
 
-> **v1.1 版本线 + 9 批次（§5.1）已定，可进入 v1.1.0 实施。** 指纹算法 / JWT / 灰度开关等实施细节见各章节，实施时若微调回此处更新。
+> **v1.1 版本线 + relay 重构 Step 序列（§5.1）已定。** v1.1.0/1.1.1/1.1.2 已发版，Step A/B 已完成，下一步 Step C（插件系统）。指纹算法 / JWT / 灰度开关等实施细节见各章节，实施时若微调回此处更新。
 
 ---
 
