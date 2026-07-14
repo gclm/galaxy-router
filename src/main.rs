@@ -13,7 +13,7 @@ mod error;
 mod metrics;
 use crate::llm::protocol;
 mod relay;
-mod scheduler;
+use crate::llm::scheduler;
 mod static_assets;
 mod app_state;
 mod domain;

@@ -9,3 +9,4 @@
 //!
 //! Step A 起逐个迁入顶层模块（protocol / scheduler / relay），plugin 待后续。
 pub mod protocol;
+pub mod scheduler;
