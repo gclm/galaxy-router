@@ -219,6 +219,7 @@ impl ProxyStreamRelayExecutor {
             &self.client_endpoint,
             selection,
             upstream_api_key,
+            &self.state.plugin_chain,
         )
         .await?;
         let start_time = std::time::Instant::now();

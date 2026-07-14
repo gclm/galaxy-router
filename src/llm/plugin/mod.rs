@@ -7,7 +7,9 @@
 //! （不每请求查 DB）；settings 更新时再次 `refresh` 重建；`master_switch` 总开关
 //! （false 时所有插件跳过，紧急回滚）。
 
-#![allow(dead_code)] // C1 基建：C2 接入 prepare 钩子后移除
+pub mod cache_key;
+pub mod cch;
+pub mod tracking;
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -35,7 +37,8 @@ pub struct PluginContext {
     pub channel_id: String,
     /// 渠道 API Key 指纹（`ChannelInfo::key_hint`）
     pub host_key: String,
-    /// User-Agent 中的客户端标识
+    /// User-Agent 中的客户端标识（C2 三插件未用，保留供未来插件）
+    #[allow(dead_code)]
     pub client_name: Option<String>,
 }
 
@@ -43,7 +46,8 @@ pub struct PluginContext {
 pub enum PluginResult {
     /// 继续传递（可能已改写 body）
     Continue(Value),
-    /// 中止请求
+    /// 中止请求（暂无插件使用，保留以备未来插件 Abort）
+    #[allow(dead_code)]
     Abort(ProxyError),
 }
 
@@ -80,6 +84,7 @@ impl PluginChain {
     }
 
     /// 测试用空链（无插件，master_switch=false，`apply_request` 直返原 body）
+    #[cfg(test)]
     pub fn new_empty() -> Self {
         Self {
             request_plugins: Arc::new(vec![]),
@@ -134,7 +139,27 @@ impl PluginChain {
     }
 }
 
-/// 注册内置请求插件（C2 填 cch / tracking / cache_key；C1 暂空）。
+/// 注册内置请求插件（cch / tracking / cache_key）。
 fn build_request_plugins() -> Vec<Box<dyn RequestPlugin>> {
-    vec![]
+    vec![
+        Box::new(cch::CchRewriter),
+        Box::new(tracking::TrackingRemover),
+        Box::new(cache_key::CacheKeyInjector),
+    ]
+}
+
+/// 清理 system 字段（兼容 string / `[{text}]` 两形态）。cch / tracking 共用。
+pub(crate) fn clean_system(body: &mut Value, clean_fn: impl Fn(&str) -> String) {
+    match body.get_mut("system") {
+        Some(Value::String(s)) => *s = clean_fn(s),
+        Some(Value::Array(arr)) => {
+            for item in arr.iter_mut() {
+                let cleaned = item.get("text").and_then(|t| t.as_str()).map(&clean_fn);
+                if let Some(c) = cleaned {
+                    item["text"] = Value::String(c);
+                }
+            }
+        }
+        _ => {}
+    }
 }

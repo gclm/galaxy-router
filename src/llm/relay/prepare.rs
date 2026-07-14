@@ -5,6 +5,7 @@ use crate::metrics::attempt::AttemptStats;
 use crate::metrics::usage::estimator::TokenEstimator;
 use crate::relay::converter::{RelayPipeline, RelayPipelineRequest};
 use crate::error::proxy::ProxyError;
+use crate::llm::plugin::{PluginChain, PluginContext};
 use crate::relay::converter::get_outbound;
 use crate::scheduler::selector::SelectionResult;
 
@@ -219,6 +220,7 @@ pub(crate) async fn prepare_proxy_request(
     client_endpoint: &EndpointType,
     selection: &SelectionResult,
     api_key: &str,
+    plugin_chain: &PluginChain,
 ) -> Result<PreparedProxyRequest, ProxyError> {
     let model = body["model"].as_str().unwrap_or("unknown").to_string();
     let upstream_endpoint = selection.endpoint.endpoint_type.clone();
@@ -240,16 +242,27 @@ pub(crate) async fn prepare_proxy_request(
     })
     .await
     .map_err(|e| ProxyError::TransformError(e.to_string()))?;
-    let mut request_body = serde_json::to_vec(&prepared_pipeline.body)
-        .map_err(|e| ProxyError::TransformError(e.to_string()))?;
+    let mut body_value = prepared_pipeline.body;
 
-    // 协议转换和非转换路径统一注入 stream_options
-    if needs_usage_injection
-        && let Ok(mut req_val) = serde_json::from_slice::<serde_json::Value>(&request_body)
-    {
-        req_val["stream_options"] = serde_json::json!({"include_usage": true});
-        request_body = serde_json::to_vec(&req_val).unwrap_or(request_body);
+    // Step C：请求插件链改写（cch / tracking / cache_key）
+    let ctx = PluginContext {
+        upstream_endpoint: upstream_endpoint.clone(),
+        channel_id: selection.channel.id.clone(),
+        host_key: selection.channel.key_hint(api_key),
+        client_name: headers
+            .get("user-agent")
+            .and_then(|v| v.to_str().ok())
+            .map(|s| s.to_string()),
+    };
+    body_value = plugin_chain.apply_request(body_value, &ctx).await?;
+
+    // 协议转换和非转换路径统一注入 stream_options（直接改 Value，单次序列化）
+    if needs_usage_injection {
+        body_value["stream_options"] = serde_json::json!({"include_usage": true});
     }
+
+    let request_body = serde_json::to_vec(&body_value)
+        .map_err(|e| ProxyError::TransformError(e.to_string()))?;
 
     // 不应转发到上游的 hop-by-hop / 鉴权 / 连接管理请求头
     static HOP_BY_HOP: &[&str] = &[
@@ -489,6 +502,7 @@ mod tests {
             &EndpointType::OpenAiChat,
             &selection,
             "sk-test",
+            &PluginChain::new_empty(),
         )
         .await
         .expect("prepare succeeds");
