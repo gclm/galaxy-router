@@ -52,6 +52,32 @@ fn decrement_active_once(
     }
 }
 
+/// thinking passthrough 改写：decode 上游 SSE → processor.observe 改写 → reencode（OpenAiChat serde）。
+/// 仅 passthrough + thinking 启用 + endpoint==OpenAiChat 时调用。decode 返回 None
+/// （`[DONE]`/心跳）或失败时透传原字节，保证不影响非 content 事件与 usage/finish 结构。
+fn rewrite_thinking_passthrough(
+    endpoint: &EndpointType,
+    event_bytes: &[u8],
+    processor: Option<&mut Box<dyn crate::llm::plugin::StreamResponseProcessor>>,
+) -> Bytes {
+    let Some(processor) = processor else {
+        return Bytes::from(event_bytes.to_vec());
+    };
+    match RelayPipeline::decode_stream_event(endpoint, event_bytes) {
+        Ok(Some(mut llm_stream)) => {
+            processor.observe(&mut llm_stream);
+            match serde_json::to_string(&llm_stream) {
+                Ok(data) => Bytes::from(format!("data: {}\n\n", data).into_bytes()),
+                Err(e) => {
+                    tracing::warn!("thinking passthrough reencode 失败，透传原字节: {}", e);
+                    Bytes::from(event_bytes.to_vec())
+                }
+            }
+        }
+        _ => Bytes::from(event_bytes.to_vec()),
+    }
+}
+
 struct StreamPanicGuard {
     state: AppState,
     record: RequestRecord,
@@ -649,6 +675,10 @@ impl ProxyStreamRelayExecutor {
                     }
                 }
             } else {
+                // thinking passthrough 改写：仅 OpenAiChat（DeepSeek/QwQ 直连客户端，<think> 混 content）。
+                // 其他协议 passthrough 透传（其上游用结构化 thinking_delta，且 inbound encode 会破坏流结构）。
+                let thinking_pt_rewrite = thinking_processor.is_some()
+                    && upstream_endpoint_clone == EndpointType::OpenAiChat;
                 while let Some(chunk) = stream.next().await {
                     match chunk {
                         Ok(bytes) => {
@@ -681,16 +711,38 @@ impl ProxyStreamRelayExecutor {
                                     {
                                         stream_error = Some(error);
                                     }
-                                    collect_sse_content(
-                                        text,
-                                        &upstream_endpoint_clone,
-                                        &mut collected_text,
-                                        &mut collected_reasoning,
-                                        &mut collected_tool_calls,
-                                    );
+                                    // 落库收集：thinking 改写时 reasoning 由 processor 累积，collect 用 dummy 避免重复
+                                    if thinking_pt_rewrite {
+                                        let mut _dummy_reasoning = String::new();
+                                        collect_sse_content(
+                                            text,
+                                            &upstream_endpoint_clone,
+                                            &mut collected_text,
+                                            &mut _dummy_reasoning,
+                                            &mut collected_tool_calls,
+                                        );
+                                    } else {
+                                        collect_sse_content(
+                                            text,
+                                            &upstream_endpoint_clone,
+                                            &mut collected_text,
+                                            &mut collected_reasoning,
+                                            &mut collected_tool_calls,
+                                        );
+                                    }
                                 }
 
-                                if !stream_send(&stream_tx, Bytes::from(event_bytes)).await {
+                                // 转发：thinking 改写时 decode→observe→reencode；否则透传原始字节
+                                let send_bytes = if thinking_pt_rewrite {
+                                    rewrite_thinking_passthrough(
+                                        &upstream_endpoint_clone,
+                                        &event_bytes,
+                                        thinking_processor.as_mut(),
+                                    )
+                                } else {
+                                    Bytes::from(event_bytes)
+                                };
+                                if !stream_send(&stream_tx, send_bytes).await {
                                     client_disconnected = true;
                                 }
                                 if client_disconnected {
@@ -721,13 +773,25 @@ impl ProxyStreamRelayExecutor {
                     {
                         stream_error = Some(error);
                     }
-                    collect_sse_content(
-                        text,
-                        &upstream_endpoint_clone,
-                        &mut collected_text,
-                        &mut collected_reasoning,
-                        &mut collected_tool_calls,
-                    );
+                    // 残余事件：thinking 改写时 reasoning 由 processor，collect 用 dummy（残余通常无 content/reasoning）
+                    if thinking_pt_rewrite {
+                        let mut _dummy_reasoning = String::new();
+                        collect_sse_content(
+                            text,
+                            &upstream_endpoint_clone,
+                            &mut collected_text,
+                            &mut _dummy_reasoning,
+                            &mut collected_tool_calls,
+                        );
+                    } else {
+                        collect_sse_content(
+                            text,
+                            &upstream_endpoint_clone,
+                            &mut collected_text,
+                            &mut collected_reasoning,
+                            &mut collected_tool_calls,
+                        );
+                    }
                 }
             }
 
@@ -1246,5 +1310,109 @@ mod tests {
             "response_content 应含累积 reasoning: {}",
             resp
         );
+    }
+
+    /// mock upstream 返回 OpenAI Chat SSE 流（content 混入 `<think>`，模拟 DeepSeek/QwQ）。
+    async fn spawn_mock_upstream_sse_think_in_content() -> String {
+        async fn mock_stream() -> axum::response::Response {
+            let body = concat!(
+                "data: {\"id\":\"1\",\"object\":\"chat.completion.chunk\",\"created\":0,\"model\":\"gpt-4o\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"<think>plan</think>final\"},\"finish_reason\":null}]}\n\n",
+                "data: {\"id\":\"1\",\"object\":\"chat.completion.chunk\",\"created\":0,\"model\":\"gpt-4o\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\" answer\"},\"finish_reason\":null}]}\n\n",
+                "data: {\"id\":\"1\",\"object\":\"chat.completion.chunk\",\"created\":0,\"model\":\"gpt-4o\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n",
+                "data: {\"id\":\"1\",\"object\":\"chat.completion.chunk\",\"created\":0,\"model\":\"gpt-4o\",\"choices\":[],\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":5,\"total_tokens\":15}}\n\n",
+                "data: [DONE]\n\n",
+            );
+            axum::response::Response::builder()
+                .header("content-type", "text/event-stream")
+                .body(Body::from(body))
+                .unwrap()
+        }
+        let app = Router::new().route("/v1/chat/completions", post(mock_stream));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let _ = axum::serve(listener, app).await;
+        });
+        let url = format!("http://{}/v1/chat/completions", addr);
+        for _ in 0..20 {
+            if reqwest::Client::new()
+                .request(reqwest::Method::POST, &url)
+                .body("{}")
+                .send()
+                .await
+                .is_ok()
+            {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+        url
+    }
+
+    /// passthrough（client==upstream==OpenAiChat）+ thinking：正文 content 混入的 `<think>`
+    /// 应被剥离归入 reasoning_content 转发（decode→observe→reencode 路径）。
+    #[tokio::test]
+    async fn proxy_stream_passthrough_strips_think_for_openai_chat() {
+        let upstream = spawn_mock_upstream_sse_think_in_content().await;
+        let (state, _pool) = make_state_with_channel(&upstream).await;
+
+        let body = serde_json::json!({
+            "model": "gpt-4o",
+            "messages": [{"role": "user", "content": "hi"}],
+            "stream": true
+        });
+        let headers = axum::http::HeaderMap::new();
+        let (status, stream, _ct) = proxy_stream(
+            &state,
+            "test-pt",
+            Some("key-1"),
+            &headers,
+            &body,
+            &EndpointType::OpenAiChat, // client==upstream → passthrough
+        )
+        .await
+        .expect("proxy_stream should succeed");
+        assert_eq!(status, 200);
+
+        // 合并转发的 SSE，解析 content / reasoning_content
+        let mut content = String::new();
+        let mut reasoning = String::new();
+        let items: Vec<_> = stream.collect().await;
+        for item in items {
+            let bytes = item.unwrap(); // Item=Result<Bytes, Infallible>，Err 不可能
+            let Ok(text) = std::str::from_utf8(&bytes[..]) else {
+                continue;
+            };
+            for line in text.lines() {
+                let Some(data) = line.strip_prefix("data: ") else {
+                    continue;
+                };
+                if data == "[DONE]" {
+                    continue;
+                }
+                let Ok(v) = serde_json::from_str::<serde_json::Value>(data) else {
+                    continue;
+                };
+                if let Some(c) = v["choices"][0]["delta"]["content"].as_str() {
+                    content.push_str(c);
+                }
+                if let Some(r) = v["choices"][0]["delta"]["reasoning_content"].as_str() {
+                    reasoning.push_str(r);
+                }
+            }
+        }
+        // `<think>plan</think>` 剥离：正文 "final answer"，reasoning "plan"
+        assert!(
+            !content.contains("<think>"),
+            "正文不应含 <think>: {}",
+            content
+        );
+        assert!(
+            !content.contains("plan"),
+            "plan 应剥离到 reasoning，正文不应含: {}",
+            content
+        );
+        assert_eq!(content, "final answer");
+        assert_eq!(reasoning, "plan");
     }
 }
