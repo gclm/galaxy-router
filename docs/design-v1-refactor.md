@@ -851,7 +851,7 @@ GROUP BY date
 |---|---|---|---|
 | ✅ A 物理聚合 | 完成 | `protocol`/`scheduler`/`relay` → `src/llm/`（双 crate 根 re-export：`lib.rs` `pub use` + `main.rs` `use`；11231 行调用点零改动） | `0f892cc` / `aad90ec` / `605162f` |
 | ✅ B State 统一 | 完成 | 删 `ProxyState`→统一 `State<AppState>`（AppState 并入 lb_state / stats_recorder / rate_limiter / queue / proxy_http_client + 路由渠道查询方法）；**修 3 个双实例 bug**：`LoadBalancerState`（后台健康探测原本对 proxy 选渠道完全失效）、`ApiKeyCache`（admin 禁 key 后 proxy 原本要等 TTL）、`ProxyCache`（admin 与 proxy 缓存分裂） | `6e87553` |
-| ⏳ C 插件系统 | 待做 | `llm/plugin/` + RequestPlugin/ResponsePlugin + 4 插件（cch / tracking / cache_key / thinking）+ 删 `stream_executor` reasoning（同 commit，§3.3.3 / §5.2） | — |
+| ✅ C 请求插件 | 完成 | `llm/plugin/` RequestPlugin trait + cch/tracking/cache_key（C3 用 `/Users/gclm/workspace/refs/gt_ai_gateway` 源码校准，移植真实正则）；ResponsePlugin + thinking + 删 reasoning **推迟**为单独步骤 | `dab1479`/`a1fa8cf`/`92ac05c` |
 | ⏳ D 大文件拆分 | 待做 | stream_executor(1072) / executor(720) / pipeline(696) / sse(634) / prepare / scheduler-state / inbound（§3.4） | — |
 | ⏳ E 响应内容记录 | 待做 | StreamAccumulator + `usage_payloads` + redaction 接入（§4.2） | 18 / 19 |
 
