@@ -34,6 +34,7 @@ const PLUGIN_SETTINGS: [(&str, &str); 4] = [
 /// 插件执行上下文
 pub struct PluginContext {
     pub upstream_endpoint: EndpointType,
+    #[allow(dead_code)] // C3 校准后无插件用，保留供未来插件
     pub channel_id: String,
     /// 渠道 API Key 指纹（`ChannelInfo::key_hint`）
     pub host_key: String,
