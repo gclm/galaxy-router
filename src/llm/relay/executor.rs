@@ -11,6 +11,7 @@ use crate::relay::run::{
 };
 use crate::error::proxy::ProxyError;
 use crate::app_state::{AppState, ProxySuccess};
+use crate::llm::plugin::PluginContext;
 use crate::scheduler::selector::SelectionResult;
 
 /// RAII guard：确保函数退出时自动递减活跃请求数
@@ -513,6 +514,24 @@ impl ProxyRelayExecutor {
             .lb_state
             .circuit_breaker
             .record_success(&prepared.channel_id, upstream_key_hint)
+            .await;
+
+        // thinking 非流式 hook：apply_response（usage 已在上游提取，保护计费）
+        // thinking-1 thinking 插件 no-op；thinking-2 填内容分离后此处改写 body_value
+        let ctx = PluginContext {
+            upstream_endpoint: prepared.upstream_endpoint.clone(),
+            channel_id: prepared.channel_id.clone(),
+            host_key: upstream_key_hint.to_string(),
+            client_name: self
+                .headers
+                .get("user-agent")
+                .and_then(|v| v.to_str().ok())
+                .map(|s| s.to_string()),
+        };
+        let body_value = self
+            .state
+            .plugin_chain
+            .apply_response(body_value, &ctx)
             .await;
 
         let final_body = if prepared.needs_conversion {

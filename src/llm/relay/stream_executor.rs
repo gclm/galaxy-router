@@ -22,6 +22,7 @@ use crate::relay::run::{
 };
 use crate::error::proxy::{ProxyError, sse_stream_error_status};
 use crate::app_state::AppState;
+use crate::llm::plugin::PluginContext;
 use crate::scheduler::selector::SelectionResult;
 use axum::http::StatusCode;
 use futures::Stream;
@@ -449,6 +450,19 @@ impl ProxyStreamRelayExecutor {
             let mut ttft_ms: Option<i32> = None;
             let mut first_token_seen = false;
 
+            // thinking 流式 processor：needs_conversion 路径累积 reasoning 承接落库
+            // （删原内联收集后由 processor 承接；passthrough 路径仍用 collect_sse_content）
+            let ctx = PluginContext {
+                upstream_endpoint: upstream_endpoint_clone.clone(),
+                channel_id: sc_channel_id.clone(),
+                host_key: sc_upstream_key_hint.clone(),
+                client_name: sc_user_agent.clone(),
+            };
+            let mut thinking_processor = state_clone
+                .plugin_chain
+                .new_stream_processor(&ctx)
+                .await;
+
             if needs_conversion {
                 let mut converter = RelayPipeline::create_stream_converter(
                     &sc_client_endpoint,
@@ -519,9 +533,6 @@ impl ProxyStreamRelayExecutor {
                                             {
                                                 collected_text.push_str(t);
                                             }
-                                            if let Some(r) = &choice.delta.reasoning_content {
-                                                collected_reasoning.push_str(r);
-                                            }
                                             if let Some(tcs) = &choice.delta.tool_calls {
                                                 for tc in tcs {
                                                     if !tc.id.is_empty() {
@@ -550,6 +561,10 @@ impl ProxyStreamRelayExecutor {
                                                     }
                                                 }
                                             }
+                                        }
+                                        // thinking 流式 hook：累积 reasoning 承接原内联收集
+                                        if let Some(p) = thinking_processor.as_mut() {
+                                            p.observe(&llm_stream);
                                         }
                                         // 有状态转换：一个事件可能产生多个 SSE 输出
                                         match converter.convert(&llm_stream) {
@@ -733,6 +748,14 @@ impl ProxyStreamRelayExecutor {
             let output_tokens = usage.output_tokens;
             let cache_read = usage.cache_read;
             let cache_creation = usage.cache_creation;
+
+            // thinking 流式 hook：流结束取累积 reasoning，合并进 collected_reasoning
+            // （needs_conversion 路径删了内联收集，由 processor 承接；passthrough 仍由 collect_sse_content 填）
+            if let Some(p) = thinking_processor.as_mut()
+                && let Some(r) = p.finish_reasoning()
+            {
+                collected_reasoning.push_str(&r);
+            }
 
             let (status_code, error_message, response_content) = if let Some(error) = stream_error {
                 state_clone
@@ -1069,5 +1092,159 @@ impl StreamKeyLoopOutcome {
                 response_written: false,
             },
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::db::Database;
+    use crate::llm::plugin::PluginChain;
+    use crate::metrics::model::ModelRegistry;
+    use crate::relay::pipeline::proxy_stream;
+    use axum::body::Body;
+    use axum::{Router, routing::post};
+    use futures::StreamExt;
+
+    use super::*;
+
+    /// mock upstream 返回 OpenAI Chat SSE 流（含 reasoning_content delta）。
+    async fn spawn_mock_upstream_sse() -> String {
+        async fn mock_stream() -> axum::response::Response {
+            let body = concat!(
+                "data: {\"id\":\"1\",\"object\":\"chat.completion.chunk\",\"created\":0,\"model\":\"gpt-4o\",\"choices\":[{\"index\":0,\"delta\":{\"reasoning_content\":\"think1\"},\"finish_reason\":null}]}\n\n",
+                "data: {\"id\":\"1\",\"object\":\"chat.completion.chunk\",\"created\":0,\"model\":\"gpt-4o\",\"choices\":[{\"index\":0,\"delta\":{\"reasoning_content\":\"think2\"},\"finish_reason\":null}]}\n\n",
+                "data: {\"id\":\"1\",\"object\":\"chat.completion.chunk\",\"created\":0,\"model\":\"gpt-4o\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"answer\"},\"finish_reason\":null}]}\n\n",
+                "data: {\"id\":\"1\",\"object\":\"chat.completion.chunk\",\"created\":0,\"model\":\"gpt-4o\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n",
+                "data: {\"id\":\"1\",\"object\":\"chat.completion.chunk\",\"created\":0,\"model\":\"gpt-4o\",\"choices\":[],\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":5,\"total_tokens\":15}}\n\n",
+                "data: [DONE]\n\n",
+            );
+            axum::response::Response::builder()
+                .header("content-type", "text/event-stream")
+                .body(Body::from(body))
+                .unwrap()
+        }
+        let app = Router::new().route("/v1/chat/completions", post(mock_stream));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let _ = axum::serve(listener, app).await;
+        });
+        let url = format!("http://{}/v1/chat/completions", addr);
+        for _ in 0..20 {
+            if reqwest::Client::new()
+                .request(reqwest::Method::POST, &url)
+                .body("{}")
+                .send()
+                .await
+                .is_ok()
+            {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+        url
+    }
+
+    async fn make_state_with_channel(upstream_url: &str) -> (AppState, sqlx::SqlitePool) {
+        let db_path = format!("/tmp/galaxy_stream_{}.db", uuid::Uuid::now_v7());
+        let _ = std::fs::remove_file(&db_path);
+        let db_url = format!("sqlite:{}?mode=rwc", db_path);
+        let db = Database::new(&db_url).await.unwrap();
+        let pool = db.pool().clone();
+
+        let base_url = upstream_url.trim_end_matches("/chat/completions");
+        let api_keys = r#"[{"key":"sk-mock","note":"","enabled":true}]"#;
+        let endpoints = format!(
+            r#"[{{"type":"openai_chat","base_url":"{}","enabled":true}}]"#,
+            base_url
+        );
+        sqlx::query(
+            "INSERT INTO channels (id, name, api_keys, endpoints, models, enabled) \
+             VALUES ('ch-mock', 'mock', ?, ?, '[\"gpt-4o\"]', 1)",
+        )
+        .bind(api_keys)
+        .bind(&endpoints)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        sqlx::query("INSERT INTO routes (id, name, enabled) VALUES ('grp-mock', 'gpt-4o', 1)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO route_items (id, route_id, channel_id, model_name) \
+             VALUES ('item-mock', 'grp-mock', 'ch-mock', 'gpt-4o')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let registry = ModelRegistry::new(pool.clone());
+        let mut state = AppState::new_for_test(pool.clone(), registry);
+        // 启用 thinking 插件（conversion 路径 reasoning 由 processor 承接）
+        state.plugin_chain = PluginChain::build_default_chain();
+        state
+            .plugin_chain
+            .refresh(&*state.repositories.settings)
+            .await
+            .unwrap();
+        (state, pool)
+    }
+
+    /// 等待 spawn task 异步落库完成，返回 response_content。
+    async fn wait_for_response_content(pool: &sqlx::SqlitePool) -> Option<String> {
+        for _ in 0..40 {
+            let row: Option<(Option<String>,)> =
+                sqlx::query_as("SELECT response_content FROM usage_logs LIMIT 1")
+                    .fetch_optional(pool)
+                    .await
+                    .unwrap();
+            if let Some((Some(r),)) = row {
+                return Some(r);
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+        None
+    }
+
+    /// conversion 路径（client Anthropic ↔ upstream OpenAiChat）：thinking processor
+    /// 累积 reasoning_content，流结束喂 resp_json["reasoning"] 落库（承接原内联收集）。
+    #[tokio::test]
+    async fn proxy_stream_conversion_collects_reasoning_via_processor() {
+        let upstream = spawn_mock_upstream_sse().await;
+        let (state, pool) = make_state_with_channel(&upstream).await;
+
+        let body = serde_json::json!({
+            "model": "gpt-4o",
+            "messages": [{"role": "user", "content": "hi"}],
+            "max_tokens": 100,
+            "stream": true
+        });
+        let headers = axum::http::HeaderMap::new();
+        let (status, stream, _ct) = proxy_stream(
+            &state,
+            "test-stream-conv",
+            Some("key-1"),
+            &headers,
+            &body,
+            &EndpointType::Anthropic,
+        )
+        .await
+        .expect("proxy_stream should succeed");
+        assert_eq!(status, 200);
+
+        // 消费完整转发流（流结束 spawn task 才落库）
+        let _collected: Vec<_> = stream.collect().await;
+
+        let resp = wait_for_response_content(&pool)
+            .await
+            .expect("usage_logs 应落库且 response_content 填充");
+        // thinking processor 累积 think1+think2 → resp_json["reasoning"]
+        assert!(
+            resp.contains("think1think2"),
+            "response_content 应含累积 reasoning: {}",
+            resp
+        );
     }
 }
