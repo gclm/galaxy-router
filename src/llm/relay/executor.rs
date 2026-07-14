@@ -10,12 +10,12 @@ use crate::relay::run::{
     RelayAttemptError, RelayAttemptExecutor, RelayAttemptResult, RelayCandidate, RelayRequest,
 };
 use crate::error::proxy::ProxyError;
-use crate::relay::state::{ProxyState, ProxySuccess};
+use crate::app_state::{AppState, ProxySuccess};
 use crate::scheduler::selector::SelectionResult;
 
 /// RAII guard：确保函数退出时自动递减活跃请求数
 struct ActiveRequestGuard {
-    state: ProxyState,
+    state: AppState,
     channel_id: String,
 }
 
@@ -32,7 +32,7 @@ impl Drop for ActiveRequestGuard {
 /// 非流式代理执行器：将 RelayRun 的候选迭代与真实 proxy 执行连接
 #[derive(Clone)]
 pub(crate) struct ProxyRelayExecutor {
-    state: ProxyState,
+    state: AppState,
     headers: axum::http::HeaderMap,
     body: serde_json::Value,
     client_endpoint: EndpointType,
@@ -43,7 +43,7 @@ pub(crate) struct ProxyRelayExecutor {
 
 impl ProxyRelayExecutor {
     pub(crate) fn new(
-        state: ProxyState,
+        state: AppState,
         headers: axum::http::HeaderMap,
         body: serde_json::Value,
         client_endpoint: EndpointType,
@@ -417,7 +417,7 @@ impl ProxyRelayExecutor {
 
         let response = self
             .state
-            .http_client
+            .proxy_http_client
             .post(&prepared.url)
             .timeout(std::time::Duration::from_secs(
                 selection.channel.timeout_secs,
@@ -538,14 +538,14 @@ impl ProxyRelayExecutor {
 #[cfg(test)]
 mod tests {
     // ============================================================
-    // 端到端：mock 本地 upstream + 真实 ProxyState 调 proxy_request
+    // 端到端：mock 本地 upstream + 真实 AppState 调 proxy_request
     // ============================================================
 
     use crate::db::Database;
     use crate::metrics::model::ModelRegistry;
     use crate::error::proxy::ProxyError;
     use crate::relay::pipeline::proxy_request;
-    use crate::relay::state::ProxyState;
+    use crate::app_state::AppState;
     use axum::{Router, routing::post};
 
     async fn spawn_mock_upstream() -> String {
@@ -591,7 +591,7 @@ mod tests {
         url
     }
 
-    async fn make_state_with_channel(upstream_url: &str) -> (ProxyState, sqlx::SqlitePool) {
+    async fn make_state_with_channel(upstream_url: &str) -> (AppState, sqlx::SqlitePool) {
         let db_path = format!("/tmp/galaxy_execute_{}.db", uuid::Uuid::now_v7());
         let _ = std::fs::remove_file(&db_path);
         let db_url = format!("sqlite:{}?mode=rwc", db_path);
@@ -635,7 +635,7 @@ mod tests {
         .unwrap();
 
         let registry = ModelRegistry::new(pool.clone());
-        let state = ProxyState::new(pool.clone(), registry).await;
+        let state = AppState::new_for_test(pool.clone(), registry);
         (state, pool)
     }
 
@@ -684,7 +684,7 @@ mod tests {
         let db = Database::new(&db_url).await.unwrap();
         let pool = db.pool().clone();
         let registry = ModelRegistry::new(pool.clone());
-        let state = ProxyState::new(pool.clone(), registry).await;
+        let state = AppState::new_for_test(pool.clone(), registry);
 
         let body = serde_json::json!({
             "model": "gpt-4o",

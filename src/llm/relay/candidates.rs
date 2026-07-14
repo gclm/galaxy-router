@@ -3,7 +3,7 @@ use std::collections::{BTreeMap, HashSet};
 use crate::api::handlers::admin::channels::EndpointType;
 use crate::error::proxy::ProxyError;
 use crate::relay::run::RelayCandidate;
-use crate::relay::state::ProxyState;
+use crate::app_state::AppState;
 use crate::scheduler::scoring::{
     CandidateScoreInput, SchedulerScoreWeights, ScoredCandidate, select_top_k_candidates,
 };
@@ -116,7 +116,7 @@ fn tier_and_demote(scored: Vec<(i32, ScoredCandidate)>) -> Vec<ScoredCandidate> 
 /// 2. 查找分组 → 获取 route_items → score_candidates 打分排序
 /// 3. 构建 Vec<RelayCandidates>（sticky 在前，按 score 降序）
 pub(crate) async fn build_relay_candidates(
-    state: &ProxyState,
+    state: &AppState,
     model: &str,
     _client_endpoint: &EndpointType,
     session_hash: Option<&str>,

@@ -3,7 +3,7 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 
 use crate::relay::channel::ChannelInfo;
-use crate::relay::state::RouteInfo;
+use crate::scheduler::selector::RouteInfo;
 
 /// 缓存大小限制
 const CACHE_MAX_SIZE: usize = 1000;

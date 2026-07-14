@@ -98,11 +98,11 @@ async fn main() -> Result<()> {
 
     info!("Model registry initialized");
 
-    // 启动后台调度器
+    // 启动后台调度器（lb_state 与 proxy 主链路共享同一实例，修复健康探测失效 bug）
     let lb_state = scheduler::state::LoadBalancerState::new();
     let rate_limiter = relay::ratelimit::RateLimiter::new();
     let scheduler = Arc::new(relay::scheduler_task::Scheduler::new(
-        lb_state,
+        lb_state.clone(),
         rate_limiter.clone(),
         database.pool().clone(),
     ));
@@ -130,6 +130,8 @@ async fn main() -> Result<()> {
         &addr,
         config,
         model_registry,
+        lb_state,
+        rate_limiter,
     )
     .await;
 

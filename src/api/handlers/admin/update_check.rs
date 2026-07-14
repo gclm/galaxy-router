@@ -61,7 +61,7 @@ impl UpdateCheckContext {
 
     /// 测试：注入 client + api_base + github_repo + mirror
     #[cfg(test)]
-    fn with_client(
+    pub fn with_client(
         client: reqwest::Client,
         api_base: &str,
         github_repo: &str,

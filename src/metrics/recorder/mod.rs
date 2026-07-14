@@ -2,7 +2,7 @@ use crate::api::response::generate_id;
 use crate::metrics::attempt::AttemptStats;
 use crate::relay::ratelimit::RateLimiter;
 use crate::error::proxy::ProxyError;
-use crate::relay::state::ProxyState;
+use crate::app_state::AppState;
 use sqlx::SqlitePool;
 
 /// 统计记录器
@@ -220,7 +220,7 @@ pub(crate) fn channel_attempts_snapshot(attempts: &[AttemptStats]) -> Vec<Channe
 /// 保存单条请求日志（汇总所有尝试）
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn save_request_record(
-    state: &ProxyState,
+    state: &AppState,
     request_id: Option<String>,
     api_key_id: Option<&str>,
     route_id: Option<&str>,

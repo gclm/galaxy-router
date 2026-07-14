@@ -27,12 +27,12 @@ use crate::api::handlers::admin::update_check;
 use crate::api::handlers::proxy::{chat, embeddings, images, messages, models, responses};
 use crate::api::middleware::require_admin_auth;
 use crate::config::{AppConfig, QueuingConfig};
-use crate::relay::cache::ProxyCache;
-use crate::relay::state::ProxyState;
 use crate::app_state::AppState;
+use crate::relay::cache::ProxyCache;
 use crate::static_assets;
 
 /// 创建应用路由
+#[allow(clippy::too_many_arguments)]
 pub async fn create_router(
     pool: SqlitePool,
     jwt_secret: String,
@@ -40,6 +40,8 @@ pub async fn create_router(
     _server_addr: &str,
     config: AppConfig,
     model_registry: crate::metrics::model::ModelRegistry,
+    lb_state: crate::scheduler::state::LoadBalancerState,
+    rate_limiter: crate::relay::ratelimit::RateLimiter,
 ) -> Router {
     let config = Arc::new(config);
     let token_expiry_hours = config.auth.token_expiry_hours;
@@ -49,15 +51,10 @@ pub async fn create_router(
 
     let update_check_context = update_check::UpdateCheckContext::from_pool(&pool).await;
 
-    let proxy_state = if queuing.enabled {
-        ProxyState::new(pool.clone(), model_registry.clone())
-            .await
-            .with_queue(queuing.max_queue_size, queuing.queue_timeout_secs)
-    } else {
-        ProxyState::new(pool.clone(), model_registry.clone()).await
-    };
+    // 上游转发客户端（300s + 可选 proxy.url，原 ProxyState::new 构造逻辑）
+    let proxy_http_client = build_proxy_http_client(&pool).await;
 
-    // v1.1.2: 统一 AppState（11 个 admin State 全部合并完成）
+    // 统一 AppState；Step B：原 ProxyState 字段并入，proxy 链路也用 AppState
     let start_time = Arc::new(Instant::now());
     let api_key_cache = crate::api::middleware::ApiKeyCache::new();
     let channel_http_client = reqwest::Client::builder()
@@ -68,7 +65,20 @@ pub async fn create_router(
         .timeout(std::time::Duration::from_secs(10))
         .build()
         .expect("Failed to create HTTP client");
-    let app_state = AppState::new(pool.clone(), config.clone(), start_time, jwt_service, shared_cache.clone(), api_key_cache, channel_http_client, model_registry.clone(), models_http_client, update_check_context);
+    let app_state = if queuing.enabled {
+        AppState::new(
+            pool.clone(), config.clone(), start_time, jwt_service, shared_cache, api_key_cache,
+            channel_http_client, model_registry.clone(), models_http_client, update_check_context,
+            lb_state, rate_limiter, proxy_http_client,
+        )
+        .with_queue(queuing.max_queue_size, queuing.queue_timeout_secs)
+    } else {
+        AppState::new(
+            pool.clone(), config.clone(), start_time, jwt_service, shared_cache, api_key_cache,
+            channel_http_client, model_registry.clone(), models_http_client, update_check_context,
+            lb_state, rate_limiter, proxy_http_client,
+        )
+    };
 
     // 需要认证的管理路由（每个 nest 独立管理状态）
     let protected_admin = Router::new()
@@ -180,7 +190,7 @@ pub async fn create_router(
         // 健康检查（返回初始化状态）
         .route("/api/v1/health", get(health_check))
         // 代理 API 路由
-        .nest("/v1", proxy_routes(proxy_state, pool.clone()))
+        .nest("/v1", proxy_routes(app_state.clone(), pool.clone()))
         // 初始化接口（无需认证）
         .nest(
             "/api/v1/init",
@@ -247,12 +257,10 @@ async fn health_check(
 }
 
 /// 代理 API 路由
-fn proxy_routes(proxy_state: ProxyState, pool: SqlitePool) -> Router {
-    use crate::api::middleware::ApiKeyCache;
-
+fn proxy_routes(app_state: AppState, pool: SqlitePool) -> Router {
     let pool_clone = pool.clone();
-    let api_key_cache = ApiKeyCache::new();
-    let stats_recorder = proxy_state.stats_recorder.clone();
+    let api_key_cache = app_state.api_key_cache.clone();
+    let stats_recorder = app_state.stats_recorder.clone();
 
     Router::new()
         .route("/chat/completions", post(chat::proxy))
@@ -260,7 +268,7 @@ fn proxy_routes(proxy_state: ProxyState, pool: SqlitePool) -> Router {
         .route("/messages", post(messages::proxy))
         .route("/embeddings", post(embeddings::proxy))
         .route("/images/generations", post(images::proxy))
-        .with_state(proxy_state)
+        .with_state(app_state)
         .route("/models", get(models::list))
         .with_state(pool)
         .layer(middleware::from_fn(
@@ -277,4 +285,51 @@ fn proxy_routes(proxy_state: ProxyState, pool: SqlitePool) -> Router {
                 }
             },
         ))
+}
+
+/// 构建上游转发客户端（300s 超时 + 可选 proxy.url，原 ProxyState::new 内联逻辑）。
+/// 行为原样搬迁，settings 的 SQL 下沉留后续。
+async fn build_proxy_http_client(pool: &SqlitePool) -> reqwest::Client {
+    let proxy_enabled: bool = sqlx::query_scalar::<_, String>(
+        "SELECT value FROM settings WHERE key = 'proxy.enabled'",
+    )
+    .fetch_optional(pool)
+    .await
+    .ok()
+    .flatten()
+    .and_then(|v| v.parse().ok())
+    .unwrap_or(false);
+
+    let proxy_url = if proxy_enabled {
+        sqlx::query_scalar::<_, String>("SELECT value FROM settings WHERE key = 'proxy.url'")
+            .fetch_optional(pool)
+            .await
+            .ok()
+            .flatten()
+            .filter(|v| !v.is_empty())
+    } else {
+        None
+    };
+
+    let mut client_builder =
+        reqwest::Client::builder().timeout(std::time::Duration::from_secs(300));
+
+    if let Some(url) = proxy_url {
+        match reqwest::Proxy::all(&url) {
+            Ok(proxy) => {
+                tracing::info!("上游代理已启用: {}", url);
+                client_builder = client_builder.proxy(proxy);
+            }
+            Err(e) => {
+                tracing::warn!("代理配置无效，忽略代理: {}", e);
+                client_builder = client_builder.no_proxy();
+            }
+        }
+    } else {
+        client_builder = client_builder.no_proxy();
+    }
+
+    client_builder
+        .build()
+        .expect("Failed to create proxy HTTP client")
 }

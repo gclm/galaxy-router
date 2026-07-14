@@ -21,7 +21,7 @@ use crate::relay::run::{
     RelayStreamAttemptResult, RelayStreamSuccess,
 };
 use crate::error::proxy::{ProxyError, sse_stream_error_status};
-use crate::relay::state::ProxyState;
+use crate::app_state::AppState;
 use crate::scheduler::selector::SelectionResult;
 use axum::http::StatusCode;
 use futures::Stream;
@@ -30,7 +30,7 @@ pub(crate) type RelayBodyStream = Pin<Box<dyn Stream<Item = Result<Bytes, Infall
 
 /// 仅在未被 decrement 过时执行一次 decrement（用于流式请求的错误路径）
 fn decrement_active_once(
-    state: &ProxyState,
+    state: &AppState,
     channel_id: &str,
     done: &std::sync::Arc<std::sync::atomic::AtomicBool>,
 ) {
@@ -52,13 +52,13 @@ fn decrement_active_once(
 }
 
 struct StreamPanicGuard {
-    state: ProxyState,
+    state: AppState,
     record: RequestRecord,
     armed: bool,
 }
 
 impl StreamPanicGuard {
-    fn new(state: ProxyState, record: RequestRecord) -> Self {
+    fn new(state: AppState, record: RequestRecord) -> Self {
         Self {
             state,
             record,
@@ -117,7 +117,7 @@ impl Drop for StreamPanicGuard {
 /// 流式代理执行器：将 RelayStreamRun 的候选迭代与真实 SSE 执行连接。
 #[derive(Clone)]
 pub(crate) struct ProxyStreamRelayExecutor {
-    state: ProxyState,
+    state: AppState,
     request_id: String,
     headers: axum::http::HeaderMap,
     body: serde_json::Value,
@@ -129,7 +129,7 @@ pub(crate) struct ProxyStreamRelayExecutor {
 
 impl ProxyStreamRelayExecutor {
     pub(crate) fn new(
-        state: ProxyState,
+        state: AppState,
         request_id: String,
         headers: axum::http::HeaderMap,
         body: serde_json::Value,
@@ -225,7 +225,7 @@ impl ProxyStreamRelayExecutor {
 
         let response = self
             .state
-            .http_client
+            .proxy_http_client
             .post(&prepared.url)
             .timeout(std::time::Duration::from_secs(
                 selection.channel.timeout_secs,

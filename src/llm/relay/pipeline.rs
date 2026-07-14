@@ -7,7 +7,7 @@ use crate::metrics::recorder::redaction::sanitize_json_content;
 use crate::metrics::recorder::save_request_record;
 use crate::relay::candidates::build_relay_candidates;
 use crate::error::proxy::{ErrorFormat, ProxyError};
-use crate::relay::state::ProxyState;
+use crate::app_state::AppState;
 
 /// 验证字符串可作为 HTTP header value
 /// 用于在保存上游 API Key 时一次性拦截含 CRLF / 控制字符的输入，
@@ -130,13 +130,13 @@ async fn validate_model_access(
 
 /// 非流式代理请求（支持重试和排队）
 pub async fn proxy_request(
-    state: &ProxyState,
+    state: &AppState,
     request_id: &str,
     api_key_id: Option<&str>,
     headers: &HeaderMap,
     body: &serde_json::Value,
     client_endpoint: &EndpointType,
-) -> Result<crate::relay::state::ProxySuccess, ProxyError> {
+) -> Result<crate::app_state::ProxySuccess, ProxyError> {
     let _permit = if let Some(queue) = &state.queue {
         Some(match queue.acquire().await {
             Ok(p) => p,
@@ -263,7 +263,7 @@ pub async fn proxy_request(
         )
         .await;
 
-        Ok(crate::relay::state::ProxySuccess {
+        Ok(crate::app_state::ProxySuccess {
             status: StatusCode::OK,
             body: response_body.into_bytes(),
         })
@@ -290,7 +290,7 @@ pub async fn proxy_request(
 
 /// 流式代理请求（支持重试和排队）
 pub async fn proxy_stream(
-    state: &ProxyState,
+    state: &AppState,
     request_id: &str,
     api_key_id: Option<&str>,
     headers: &HeaderMap,
@@ -439,7 +439,7 @@ pub async fn proxy_stream(
 
 /// 统一代理请求入口（供各 handler 调用）
 pub async fn handle_proxy_request(
-    state: &ProxyState,
+    state: &AppState,
     auth: crate::api::middleware::ApiKeyAuth,
     headers: HeaderMap,
     body: serde_json::Value,
@@ -541,7 +541,7 @@ pub async fn handle_proxy_request(
 /// 导致"CC 已经失败但请求日志缺失"现象（参考 axonhub 每次请求必建 Request 实体的设计）。
 #[allow(clippy::too_many_arguments)]
 async fn record_early_failure(
-    state: &ProxyState,
+    state: &AppState,
     request_id: &str,
     api_key_id: Option<&str>,
     model: &str,
