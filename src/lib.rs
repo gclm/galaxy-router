@@ -5,7 +5,7 @@ pub mod db;
 pub mod error;
 pub mod metrics;
 pub use crate::llm::protocol;
-pub mod relay;
+pub use crate::llm::relay;
 pub use crate::llm::scheduler;
 pub mod static_assets;
 pub mod app_state;
