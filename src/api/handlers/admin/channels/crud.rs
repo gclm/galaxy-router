@@ -4,10 +4,10 @@ use axum::{
     http::StatusCode,
 };
 
-use super::types::{
-    CreateChannelRequest, ListChannelsQuery, PaginatedResponse, UpdateChannelRequest,
+use super::types::PaginatedResponse;
+use crate::domain::channel::{
+    Channel, CreateChannelRequest, ListChannelsQuery, UpdateChannelRequest,
 };
-use crate::domain::channel::Channel;
 use crate::repository::channel_repository::row_to_channel;
 use crate::app_state::AppState;
 use crate::error::app::{ApiError, ApiResponse};

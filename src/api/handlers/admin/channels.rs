@@ -9,9 +9,7 @@ mod crud;
 mod probe;
 mod types;
 
-pub use types::{
-    CreateChannelRequest, ListChannelsQuery, PaginatedResponse, UpdateChannelRequest,
-};
+pub use types::PaginatedResponse;
 
 pub use crud::{create, delete, get, list, update};
 pub use probe::test_endpoint;

@@ -181,6 +181,51 @@ impl ChannelInfo {
     }
 }
 
+/// 列表查询参数
+#[derive(Debug, Deserialize)]
+pub struct ListChannelsQuery {
+    pub search: Option<String>,
+    pub status: Option<String>,
+    pub sort_by: Option<String>,
+    pub sort_order: Option<String>,
+    pub page: Option<i32>,
+    pub page_size: Option<i32>,
+}
+
+/// 创建渠道请求
+#[derive(Debug, Deserialize)]
+pub struct CreateChannelRequest {
+    pub name: String,
+    pub api_keys: Vec<UpstreamApiKey>,
+    pub endpoints: Vec<EndpointConfig>,
+    pub models: Option<Vec<String>>,
+    pub rate_limit_rpm: Option<i32>,
+    pub rate_limit_tpm: Option<i32>,
+    pub failure_threshold: Option<i32>,
+    pub blacklist_minutes: Option<i32>,
+    pub concurrency: Option<i32>,
+    pub timeout_secs: Option<i32>,
+    pub max_concurrency: Option<i32>,
+    pub enabled: Option<bool>,
+}
+
+/// 更新渠道请求
+#[derive(Debug, Deserialize)]
+pub struct UpdateChannelRequest {
+    pub name: Option<String>,
+    pub api_keys: Option<Vec<UpstreamApiKey>>,
+    pub endpoints: Option<Vec<EndpointConfig>>,
+    pub models: Option<Vec<String>>,
+    pub rate_limit_rpm: Option<i32>,
+    pub rate_limit_tpm: Option<i32>,
+    pub failure_threshold: Option<i32>,
+    pub blacklist_minutes: Option<i32>,
+    pub concurrency: Option<i32>,
+    pub timeout_secs: Option<i32>,
+    pub max_concurrency: Option<i32>,
+    pub enabled: Option<bool>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

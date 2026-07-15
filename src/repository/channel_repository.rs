@@ -3,16 +3,14 @@
 //! SQL 隔离在此层，返回 `ChannelRow`（FromRow，B1-C4 归位本层）由 handler 调
 //! `row_to_channel`（B1-C4 同归位）转 `Channel`。
 //!
-//! **遗留妥协**：CreateChannelRequest/UpdateChannelRequest/ListChannelsQuery 请求 DTO
-//! 仍借 `channels::types`（api 层），待后续"完全解耦 repo↔api"专项处理。
+//! 请求 DTO（Create/Update/List）已归 `domain::channel`（A1 解耦），本层不再借 api 层类型。
 
 use async_trait::async_trait;
 use sqlx::{AssertSqlSafe, Row, SqlitePool};
 
-use crate::api::handlers::admin::channels::{
-    CreateChannelRequest, ListChannelsQuery, UpdateChannelRequest,
+use crate::domain::channel::{
+    Channel, CreateChannelRequest, ListChannelsQuery, UpdateChannelRequest,
 };
-use crate::domain::channel::Channel;
 use crate::util::timeutil::tz_modifier;
 
 /// channels 表行映射（B1-C4 从 channels/types.rs 归位本层）
