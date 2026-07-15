@@ -2,6 +2,7 @@ pub mod api;
 pub mod auth;
 pub mod config;
 pub mod db;
+pub mod infra;
 pub mod error;
 pub mod metrics;
 pub use crate::llm::protocol;

@@ -9,6 +9,7 @@ mod api;
 mod auth;
 mod config;
 mod db;
+mod infra;
 mod error;
 mod metrics;
 use crate::llm::protocol;
