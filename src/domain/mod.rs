@@ -12,6 +12,7 @@ pub mod auth;
 pub mod backup;
 pub mod budget;
 pub mod channel;
+pub mod pricing;
 pub mod route;
 pub mod setting;
 pub mod usage;

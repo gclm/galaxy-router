@@ -4,45 +4,8 @@ use std::path::Path;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
-type ModelInfoRow = (
-    String,
-    String,
-    String,
-    Option<f64>,
-    Option<f64>,
-    Option<f64>,
-    Option<f64>,
-    Option<i64>,
-    Option<i64>,
-    Option<bool>,
-    Option<bool>,
-    Option<bool>,
-    Option<bool>,
-    Option<bool>,
-    Option<bool>,
-    Option<bool>,
-);
-
-/// 模型信息（定价 + 元数据）
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ModelInfo {
-    pub model: String,
-    pub provider: String,
-    pub mode: String,
-    pub input_price: Option<f64>,
-    pub output_price: Option<f64>,
-    pub cache_read_price: Option<f64>,
-    pub cache_creation_price: Option<f64>,
-    pub max_input_tokens: Option<i64>,
-    pub max_output_tokens: Option<i64>,
-    pub supports_function_calling: Option<bool>,
-    pub supports_reasoning: Option<bool>,
-    pub supports_vision: Option<bool>,
-    pub supports_pdf_input: Option<bool>,
-    pub supports_prompt_caching: Option<bool>,
-    pub supports_system_messages: Option<bool>,
-    pub supports_tool_choice: Option<bool>,
-}
+use crate::domain::pricing::ModelInfo;
+use crate::repository::model_info_repository::{ModelInfoRepository, SqliteModelInfoRepository};
 
 /// models.dev API 响应
 #[derive(Debug, Serialize, Deserialize)]
@@ -100,7 +63,7 @@ struct ModelsDevModalities {
 /// 成本计算器（DB 为 source of truth，内存缓存加速读取）
 #[derive(Clone)]
 pub struct ModelRegistry {
-    pool: sqlx::SqlitePool,
+    model_info: Arc<dyn ModelInfoRepository>,
     pricing: Arc<RwLock<HashMap<String, ModelInfo>>>,
     http_client: reqwest::Client,
 }
@@ -108,7 +71,7 @@ pub struct ModelRegistry {
 impl ModelRegistry {
     pub fn new(pool: sqlx::SqlitePool) -> Self {
         Self {
-            pool,
+            model_info: Arc::new(SqliteModelInfoRepository::new(pool)),
             pricing: Arc::new(RwLock::new(HashMap::new())),
             http_client: reqwest::Client::new(),
         }
@@ -116,42 +79,11 @@ impl ModelRegistry {
 
     /// 从 DB 加载到内存
     pub async fn load_from_db(&self) -> Result<(), sqlx::Error> {
-        let rows = sqlx::query_as::<
-            _,
-            (
-                String,
-                String,
-                String,
-                Option<f64>,
-                Option<f64>,
-                Option<f64>,
-                Option<f64>,
-                Option<i64>,
-                Option<i64>,
-                Option<bool>,
-                Option<bool>,
-                Option<bool>,
-                Option<bool>,
-                Option<bool>,
-                Option<bool>,
-                Option<bool>,
-            ),
-        >(
-            "SELECT model, provider, mode,
-                    input_price, output_price, cache_read_price, cache_creation_price,
-                    max_input_tokens, max_output_tokens,
-                    supports_function_calling, supports_reasoning, supports_vision,
-                    supports_pdf_input, supports_prompt_caching,
-                    supports_system_messages, supports_tool_choice
-             FROM model_info",
-        )
-        .fetch_all(&self.pool)
-        .await?;
+        let rows = self.model_info.load_all().await?;
 
         let mut map = self.pricing.write().await;
         map.clear();
-        for row in rows {
-            let info = row_to_info(row);
+        for info in rows {
             map.insert(info.model.clone(), info);
         }
 
@@ -228,55 +160,11 @@ impl ModelRegistry {
     ) -> Result<(), String> {
         let mut count = 0u32;
         for info in models {
-            let id = crate::util::id::generate_id();
-            let result = sqlx::query(
-                r#"INSERT INTO model_info (
-                    id, model, provider, mode,
-                    input_price, output_price, cache_read_price, cache_creation_price,
-                    max_input_tokens, max_output_tokens,
-                    supports_function_calling, supports_reasoning, supports_vision,
-                    supports_pdf_input, supports_prompt_caching,
-                    supports_system_messages, supports_tool_choice,
-                    source
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'remote')
-                ON CONFLICT(model) DO UPDATE SET
-                    provider = excluded.provider, mode = excluded.mode,
-                    input_price = excluded.input_price, output_price = excluded.output_price,
-                    cache_read_price = excluded.cache_read_price, cache_creation_price = excluded.cache_creation_price,
-                    max_input_tokens = excluded.max_input_tokens, max_output_tokens = excluded.max_output_tokens,
-                    supports_function_calling = excluded.supports_function_calling,
-                    supports_reasoning = excluded.supports_reasoning,
-                    supports_vision = excluded.supports_vision,
-                    supports_pdf_input = excluded.supports_pdf_input,
-                    supports_prompt_caching = excluded.supports_prompt_caching,
-                    supports_system_messages = excluded.supports_system_messages,
-                    supports_tool_choice = excluded.supports_tool_choice,
-                    source = 'remote', updated_at = CURRENT_TIMESTAMP"#,
-            )
-            .bind(&id)
-            .bind(&info.model)
-            .bind(&info.provider)
-            .bind(&info.mode)
-            .bind(info.input_price)
-            .bind(info.output_price)
-            .bind(info.cache_read_price)
-            .bind(info.cache_creation_price)
-            .bind(info.max_input_tokens)
-            .bind(info.max_output_tokens)
-            .bind(info.supports_function_calling)
-            .bind(info.supports_reasoning)
-            .bind(info.supports_vision)
-            .bind(info.supports_pdf_input)
-            .bind(info.supports_prompt_caching)
-            .bind(info.supports_system_messages)
-            .bind(info.supports_tool_choice)
-            .execute(&self.pool)
-            .await
-            .map_err(|e| e.to_string())?;
-
-            if result.rows_affected() > 0 {
-                count += 1;
-            }
+            self.model_info
+                .upsert(info, "remote")
+                .await
+                .map_err(|e| e.to_string())?;
+            count += 1;
         }
 
         tracing::info!("upsert {} 条模型信息到数据库", count);
@@ -336,51 +224,10 @@ impl ModelRegistry {
 
     /// 手动设置模型信息
     pub async fn set_model_info(&self, info: ModelInfo) -> Result<(), String> {
-        let id = crate::util::id::generate_id();
-        sqlx::query(
-            r#"INSERT INTO model_info (
-                id, model, provider, mode,
-                input_price, output_price, cache_read_price, cache_creation_price,
-                max_input_tokens, max_output_tokens,
-                supports_function_calling, supports_reasoning, supports_vision,
-                supports_pdf_input, supports_prompt_caching,
-                supports_system_messages, supports_tool_choice,
-                source
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'manual')
-            ON CONFLICT(model) DO UPDATE SET
-                provider = excluded.provider, mode = excluded.mode,
-                input_price = excluded.input_price, output_price = excluded.output_price,
-                cache_read_price = excluded.cache_read_price, cache_creation_price = excluded.cache_creation_price,
-                max_input_tokens = excluded.max_input_tokens, max_output_tokens = excluded.max_output_tokens,
-                supports_function_calling = excluded.supports_function_calling,
-                supports_reasoning = excluded.supports_reasoning,
-                supports_vision = excluded.supports_vision,
-                supports_pdf_input = excluded.supports_pdf_input,
-                supports_prompt_caching = excluded.supports_prompt_caching,
-                supports_system_messages = excluded.supports_system_messages,
-                supports_tool_choice = excluded.supports_tool_choice,
-                source = 'manual', updated_at = CURRENT_TIMESTAMP"#,
-        )
-        .bind(&id)
-        .bind(&info.model)
-        .bind(&info.provider)
-        .bind(&info.mode)
-        .bind(info.input_price)
-        .bind(info.output_price)
-        .bind(info.cache_read_price)
-        .bind(info.cache_creation_price)
-        .bind(info.max_input_tokens)
-        .bind(info.max_output_tokens)
-        .bind(info.supports_function_calling)
-        .bind(info.supports_reasoning)
-        .bind(info.supports_vision)
-        .bind(info.supports_pdf_input)
-        .bind(info.supports_prompt_caching)
-        .bind(info.supports_system_messages)
-        .bind(info.supports_tool_choice)
-        .execute(&self.pool)
-        .await
-        .map_err(|e| e.to_string())?;
+        self.model_info
+            .upsert(&info, "manual")
+            .await
+            .map_err(|e| e.to_string())?;
 
         let mut pricing = self.pricing.write().await;
         pricing.insert(info.model.clone(), info);
@@ -439,46 +286,6 @@ fn flatten_and_filter(
         providers
     );
     result
-}
-
-fn row_to_info(
-    (
-        model,
-        provider,
-        mode,
-        input_price,
-        output_price,
-        cache_read_price,
-        cache_creation_price,
-        max_input_tokens,
-        max_output_tokens,
-        supports_function_calling,
-        supports_reasoning,
-        supports_vision,
-        supports_pdf_input,
-        supports_prompt_caching,
-        supports_system_messages,
-        supports_tool_choice,
-    ): ModelInfoRow,
-) -> ModelInfo {
-    ModelInfo {
-        model,
-        provider,
-        mode,
-        input_price,
-        output_price,
-        cache_read_price,
-        cache_creation_price,
-        max_input_tokens,
-        max_output_tokens,
-        supports_function_calling,
-        supports_reasoning,
-        supports_vision,
-        supports_pdf_input,
-        supports_prompt_caching,
-        supports_system_messages,
-        supports_tool_choice,
-    }
 }
 
 fn compute_cost(
@@ -654,7 +461,7 @@ mod tests {
     #[tokio::test]
     async fn load_from_db_reads_existing_rows() {
         let pool = make_pool().await;
-        let reg = ModelRegistry::new(pool);
+        let reg = ModelRegistry::new(pool.clone());
 
         // 直接 SQL 写一行（模拟 remote source 的预置数据）
         let id = crate::util::id::generate_id();
@@ -663,7 +470,7 @@ mod tests {
                VALUES (?, 'preloaded', 'openai', 'chat', 1.5, 6.0, 'remote')"#,
         )
         .bind(&id)
-        .execute(&reg.pool)
+        .execute(&pool)
         .await
         .unwrap();
 
@@ -676,7 +483,7 @@ mod tests {
     #[tokio::test]
     async fn set_model_info_upsert_updates_existing() {
         let pool = make_pool().await;
-        let reg = ModelRegistry::new(pool);
+        let reg = ModelRegistry::new(pool.clone());
 
         reg.set_model_info(info("dup", 1.0, 2.0)).await.unwrap();
         reg.set_model_info(info("dup", 5.0, 10.0)).await.unwrap();
@@ -686,7 +493,7 @@ mod tests {
         assert_eq!(got.output_price, Some(10.0));
         // 不应产生重复行
         let count: i32 = sqlx::query_scalar("SELECT COUNT(*) FROM model_info WHERE model = 'dup'")
-            .fetch_one(&reg.pool)
+            .fetch_one(&pool)
             .await
             .unwrap();
         assert_eq!(count, 1);

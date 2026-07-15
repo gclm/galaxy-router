@@ -13,6 +13,7 @@ pub mod auth_repository;
 pub mod backup_repository;
 pub mod budget_repository;
 pub mod channel_repository;
+pub mod model_info_repository;
 pub mod route_repository;
 pub mod settings_repository;
 pub mod system_info_repository;
