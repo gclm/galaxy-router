@@ -7,6 +7,7 @@
 //! v1.1.0 仅占位 Services 空壳。
 
 pub mod stats;
+pub mod pricing;
 
 /// 统一持有所有 service（v1.1.0 空壳）。
 #[derive(Debug, Clone)]
