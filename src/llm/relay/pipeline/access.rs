@@ -4,6 +4,8 @@ use sqlx::SqlitePool;
 
 use crate::error::proxy::ProxyError;
 use crate::repository::api_key_repository::{ApiKeyRepository, SqliteApiKeyRepository};
+use crate::repository::budget_repository::{BudgetRepository, SqliteBudgetRepository};
+use crate::repository::route_repository::{RouteRepository, SqliteRouteRepository};
 use crate::repository::usage_repository::{SqliteUsageRepository, UsageRepository};
 
 /// 验证字符串可作为 HTTP header value
@@ -17,13 +19,10 @@ pub(crate) fn validate_header_value(s: &str) -> Result<(), String> {
 
 /// 检查 API Key 的预算额度（月/日）
 pub(super) async fn check_budget(pool: &SqlitePool, key_id: &str) -> Result<(), String> {
-    let limit: Option<(f64, f64)> = sqlx::query_as(
-        "SELECT monthly_limit_usd, daily_limit_usd FROM budget_limits WHERE api_key_id = ? AND enabled = 1",
-    )
-    .bind(key_id)
-    .fetch_optional(pool)
-    .await
-    .map_err(|e| format!("查询预算失败: {}", e))?;
+    let limit = SqliteBudgetRepository::new(pool.clone(), 0)
+        .get_limits(key_id)
+        .await
+        .map_err(|e| format!("查询预算失败: {}", e))?;
 
     let Some((monthly_limit, daily_limit)) = limit else {
         return Ok(()); // 无预算限制
@@ -98,14 +97,11 @@ pub(super) async fn validate_model_access(
     // 仅在 allowed_routes 非空时严格检查（Octopus 策略：明确指定了分组才校验）
     // allowed_routes 为空时跳过，由后续 Relay candidate 构建检查渠道可用性
     if !allowed_routes.is_empty() {
-        let group_exists: bool = sqlx::query_scalar::<_, i32>(
-            "SELECT COUNT(*) FROM routes WHERE name = ? AND enabled = 1",
-        )
-        .bind(model)
-        .fetch_one(pool)
-        .await
-        .map(|c| c > 0)
-        .map_err(|e| ProxyError::DatabaseError(e.to_string()))?;
+        let group_exists = SqliteRouteRepository::new(pool.clone(), 0)
+            .find_enabled_by_name(model)
+            .await
+            .map(|opt| opt.is_some())
+            .map_err(|e| ProxyError::DatabaseError(e.to_string()))?;
 
         if !group_exists {
             return Err(ProxyError::ModelNotFound(format!("模型不存在: {}", model)));

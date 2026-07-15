@@ -26,6 +26,9 @@ pub trait BudgetRepository: Send + Sync {
     async fn list_budgets(&self) -> Result<Vec<BudgetLimit>, sqlx::Error>;
     /// 删除预算限制，返回是否实际删除。
     async fn delete_budget(&self, id: &str) -> Result<bool, sqlx::Error>;
+
+    /// proxy 预算门：按 api_key_id 取启用的 (月限额, 日限额)，无则 None。
+    async fn get_limits(&self, api_key_id: &str) -> Result<Option<(f64, f64)>, sqlx::Error>;
 }
 
 pub struct SqliteBudgetRepository {
@@ -108,5 +111,14 @@ impl BudgetRepository for SqliteBudgetRepository {
             .execute(&self.pool)
             .await?;
         Ok(result.rows_affected() > 0)
+    }
+
+    async fn get_limits(&self, api_key_id: &str) -> Result<Option<(f64, f64)>, sqlx::Error> {
+        sqlx::query_as::<_, (f64, f64)>(
+            "SELECT monthly_limit_usd, daily_limit_usd FROM budget_limits WHERE api_key_id = ? AND enabled = 1",
+        )
+        .bind(api_key_id)
+        .fetch_optional(&self.pool)
+        .await
     }
 }
