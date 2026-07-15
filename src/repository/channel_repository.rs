@@ -46,6 +46,11 @@ pub trait ChannelRepository: Send + Sync {
 
     /// proxy 热路径：按 id 取启用渠道（COALESCE 默认值 + enabled 过滤），返回 ChannelInfo。
     async fn get_enabled_for_proxy(&self, id: &str) -> Result<Option<ChannelInfo>, sqlx::Error>;
+
+    /// 健康探测：列出启用渠道的 (id, api_keys, endpoints, models)。
+    async fn list_enabled_minimal(
+        &self,
+    ) -> Result<Vec<(String, String, String, String)>, sqlx::Error>;
 }
 
 pub struct SqliteChannelRepository {
@@ -303,6 +308,16 @@ impl ChannelRepository for SqliteChannelRepository {
             failure_threshold: failure_threshold as u64,
             blacklist_minutes: blacklist_minutes as i64,
         }))
+    }
+
+    async fn list_enabled_minimal(
+        &self,
+    ) -> Result<Vec<(String, String, String, String)>, sqlx::Error> {
+        sqlx::query_as::<_, (String, String, String, String)>(
+            "SELECT id, api_keys, endpoints, models FROM channels WHERE enabled = 1",
+        )
+        .fetch_all(&self.pool)
+        .await
     }
 }
 

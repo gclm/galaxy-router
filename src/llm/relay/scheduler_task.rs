@@ -4,6 +4,7 @@ use tokio::time::interval;
 
 use crate::llm::relay::ratelimit::RateLimiter;
 use crate::llm::scheduler::state::LoadBalancerState;
+use crate::repository::channel_repository::{ChannelRepository, SqliteChannelRepository};
 use crate::repository::usage_repository::{SqliteUsageRepository, UsageRepository};
 
 /// 健康探测默认间隔（秒）
@@ -83,12 +84,10 @@ impl Scheduler {
     /// 探测所有启用的渠道
     async fn probe_all_channels(&self) -> Result<(), String> {
         // 查询所有启用的渠道（需要 api_keys 和 endpoints 来构造探测请求）
-        let channels = sqlx::query_as::<_, (String, String, String, String)>(
-            "SELECT id, api_keys, endpoints, models FROM channels WHERE enabled = 1",
-        )
-        .fetch_all(&self.pool)
-        .await
-        .map_err(|e| format!("查询渠道失败: {}", e))?;
+        let channels = SqliteChannelRepository::new(self.pool.clone(), 0)
+            .list_enabled_minimal()
+            .await
+            .map_err(|e| format!("查询渠道失败: {}", e))?;
 
         if channels.is_empty() {
             return Ok(());
