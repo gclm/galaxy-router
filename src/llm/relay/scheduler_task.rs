@@ -4,6 +4,7 @@ use tokio::time::interval;
 
 use crate::llm::relay::ratelimit::RateLimiter;
 use crate::llm::scheduler::state::LoadBalancerState;
+use crate::repository::usage_repository::{SqliteUsageRepository, UsageRepository};
 
 /// 健康探测默认间隔（秒）
 const DEFAULT_PROBE_INTERVAL_SECS: u64 = 300;
@@ -162,15 +163,12 @@ impl Scheduler {
         loop {
             interval.tick().await;
 
-            let result = sqlx::query(
-                "DELETE FROM usage_logs WHERE created_at < datetime('now', '-90 days')",
-            )
-            .execute(&self.pool)
-            .await;
+            let result = SqliteUsageRepository::new(self.pool.clone(), 0)
+                .delete_older_than(90)
+                .await;
 
             match result {
-                Ok(r) => {
-                    let deleted = r.rows_affected();
+                Ok(deleted) => {
                     if deleted > 0 {
                         tracing::info!("清理了 {} 条过期请求日志（>90天）", deleted);
                     }

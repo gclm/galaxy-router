@@ -126,6 +126,11 @@ pub trait UsageRepository: Send + Sync {
         request_content: Option<&str>,
         response_content: Option<&str>,
     ) -> Result<(), sqlx::Error>;
+
+    /// proxy 预算门：按 api_key_id 取 (月消费, 日消费)，均按 UTC（与 created_at 存储一致）。
+    async fn aggregate_cost(&self, api_key_id: &str) -> Result<(f64, f64), sqlx::Error>;
+    /// 保留清理：删除 N 天前的 usage_logs，返回删除行数。
+    async fn delete_older_than(&self, days: i64) -> Result<u64, sqlx::Error>;
 }
 
 pub struct SqliteUsageRepository {
@@ -760,6 +765,27 @@ impl UsageRepository for SqliteUsageRepository {
         .execute(&self.pool)
         .await?;
         Ok(())
+    }
+
+    async fn aggregate_cost(&self, api_key_id: &str) -> Result<(f64, f64), sqlx::Error> {
+        let (monthly, daily): (f64, f64) = sqlx::query_as(
+            r#"SELECT
+                CAST(COALESCE(SUM(CASE WHEN strftime('%Y-%m', created_at) = strftime('%Y-%m', 'now') THEN COALESCE(cost, 0) ELSE 0 END), 0) AS REAL),
+                CAST(COALESCE(SUM(CASE WHEN date(created_at) = date('now') THEN COALESCE(cost, 0) ELSE 0 END), 0) AS REAL)
+            FROM usage_logs WHERE api_key_id = ?"#,
+        )
+        .bind(api_key_id)
+        .fetch_one(&self.pool)
+        .await?;
+        Ok((monthly, daily))
+    }
+
+    async fn delete_older_than(&self, days: i64) -> Result<u64, sqlx::Error> {
+        let result = sqlx::query("DELETE FROM usage_logs WHERE created_at < datetime('now', ?)")
+            .bind(format!("-{} days", days))
+            .execute(&self.pool)
+            .await?;
+        Ok(result.rows_affected())
     }
 }
 

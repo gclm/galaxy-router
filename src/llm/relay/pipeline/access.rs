@@ -4,6 +4,7 @@ use sqlx::SqlitePool;
 
 use crate::error::proxy::ProxyError;
 use crate::repository::api_key_repository::{ApiKeyRepository, SqliteApiKeyRepository};
+use crate::repository::usage_repository::{SqliteUsageRepository, UsageRepository};
 
 /// 验证字符串可作为 HTTP header value
 /// 用于在保存上游 API Key 时一次性拦截含 CRLF / 控制字符的输入，
@@ -28,18 +29,11 @@ pub(super) async fn check_budget(pool: &SqlitePool, key_id: &str) -> Result<(), 
         return Ok(()); // 无预算限制
     };
 
-    // 查询累计消费（月消费只算当月,日消费只算当日,均按 UTC,与 created_at 存储一致）
-    // CAST AS REAL: 无消费时 SUM 返回 INTEGER 0,sqlx 按 f64 解码会失败(与 stats 查询一致)
-    let (monthly_cost, daily_cost): (f64, f64) = sqlx::query_as(
-        r#"SELECT
-            CAST(COALESCE(SUM(CASE WHEN strftime('%Y-%m', created_at) = strftime('%Y-%m', 'now') THEN COALESCE(cost, 0) ELSE 0 END), 0) AS REAL),
-            CAST(COALESCE(SUM(CASE WHEN date(created_at) = date('now') THEN COALESCE(cost, 0) ELSE 0 END), 0) AS REAL)
-        FROM usage_logs WHERE api_key_id = ?"#,
-    )
-    .bind(key_id)
-    .fetch_one(pool)
-    .await
-    .map_err(|e| format!("查询消费失败: {}", e))?;
+    // 累计消费（月/日，UTC）— tz 不影响（用 created_at + now）
+    let (monthly_cost, daily_cost) = SqliteUsageRepository::new(pool.clone(), 0)
+        .aggregate_cost(key_id)
+        .await
+        .map_err(|e| format!("查询消费失败: {}", e))?;
 
     if daily_limit > 0.0 && daily_cost >= daily_limit {
         return Err(format!(
