@@ -87,3 +87,42 @@ pub struct PagedResult<T> {
     pub items: Vec<T>,
     pub total: i64,
 }
+
+/// 单次渠道尝试记录（RequestRecord.attempts 元素）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChannelAttempt {
+    pub channel_id: String,
+    pub channel_name: Option<String>,
+    pub status: String,
+    pub duration_ms: i64,
+    pub error: Option<String>,
+    pub upstream_key_hint: Option<String>,
+}
+
+/// 请求记录（落 usage_logs 的持久化领域模型，B2-C0 从 metrics/recorder 归位）
+#[derive(Debug, Clone)]
+pub struct RequestRecord {
+    pub request_id: Option<String>,
+    pub api_key_id: Option<String>,
+    pub channel_id: Option<String>,
+    pub route_id: Option<String>,
+    pub requested_model: String,
+    pub actual_model: Option<String>,
+    pub input_tokens: i32,
+    pub output_tokens: i32,
+    pub cache_read_tokens: i32,
+    pub cache_creation_tokens: i32,
+    pub cost: Option<f64>,
+    pub latency_ms: Option<i32>,
+    pub ttft_ms: Option<i32>,
+    pub status_code: Option<i32>,
+    pub error_message: Option<String>,
+    pub endpoint_type: Option<String>,
+    pub request_type: String,
+    pub request_content: Option<String>,
+    pub response_content: Option<String>,
+    pub is_stream: bool,
+    pub upstream_key_hint: Option<String>,
+    pub attempts: Vec<ChannelAttempt>,
+    pub user_agent: Option<String>,
+}

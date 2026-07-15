@@ -11,44 +11,9 @@ pub struct StatsRecorder {
     pool: SqlitePool,
 }
 
-/// 单次渠道尝试记录
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct ChannelAttempt {
-    pub channel_id: String,
-    pub channel_name: Option<String>,
-    pub status: String,
-    pub duration_ms: i64,
-    pub error: Option<String>,
-    pub upstream_key_hint: Option<String>,
-}
-
-/// 记录请求
-#[derive(Debug, Clone)]
-pub struct RequestRecord {
-    pub request_id: Option<String>,
-    pub api_key_id: Option<String>,
-    pub channel_id: Option<String>,
-    pub route_id: Option<String>,
-    pub requested_model: String,
-    pub actual_model: Option<String>,
-    pub input_tokens: i32,
-    pub output_tokens: i32,
-    pub cache_read_tokens: i32,
-    pub cache_creation_tokens: i32,
-    pub cost: Option<f64>,
-    pub latency_ms: Option<i32>,
-    pub ttft_ms: Option<i32>,
-    pub status_code: Option<i32>,
-    pub error_message: Option<String>,
-    pub endpoint_type: Option<String>,
-    pub request_type: String,
-    pub request_content: Option<String>,
-    pub response_content: Option<String>,
-    pub is_stream: bool,
-    pub upstream_key_hint: Option<String>,
-    pub attempts: Vec<ChannelAttempt>,
-    pub user_agent: Option<String>,
-}
+// ChannelAttempt + RequestRecord 已归 domain/usage（B2-C0，持久化领域模型），此处 re-export
+// 保兼容；impl RequestRecord 块（from_last_attempt 等）留本模块（service 层 impl 本 crate 类型）。
+pub use crate::domain::usage::{ChannelAttempt, RequestRecord};
 
 impl StatsRecorder {
     pub fn new(pool: SqlitePool) -> Self {
