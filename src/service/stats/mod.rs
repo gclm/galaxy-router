@@ -3,3 +3,4 @@
 
 pub mod recorder;
 pub mod redaction;
+pub mod usage;
