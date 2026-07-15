@@ -3,6 +3,7 @@
 use sqlx::SqlitePool;
 
 use crate::error::proxy::ProxyError;
+use crate::repository::api_key_repository::{ApiKeyRepository, SqliteApiKeyRepository};
 
 /// 验证字符串可作为 HTTP header value
 /// 用于在保存上游 API Key 时一次性拦截含 CRLF / 控制字符的输入，
@@ -79,13 +80,11 @@ pub(super) async fn validate_model_access(
         }
     } else {
         // allowed_routes 为空时回退到 supported_models（兼容旧逻辑）
-        let supported = sqlx::query_scalar::<_, String>(
-            "SELECT supported_models FROM api_keys WHERE id = ? AND enabled = 1",
-        )
-        .bind(key_id)
-        .fetch_optional(pool)
-        .await
-        .map_err(|e| ProxyError::DatabaseError(e.to_string()))?;
+        // key 已鉴权（enabled 由 middleware 保证），tz 不影响此查询
+        let supported = SqliteApiKeyRepository::new(pool.clone(), 0)
+            .get_supported_models(key_id)
+            .await
+            .map_err(|e| ProxyError::DatabaseError(e.to_string()))?;
 
         if let Some(models_str) = supported
             && !models_str.is_empty()

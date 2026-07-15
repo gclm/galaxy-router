@@ -13,6 +13,8 @@ use axum::{
     middleware::Next,
     response::IntoResponse,
 };
+
+use crate::repository::api_key_repository::{ApiKeyRepository, SqliteApiKeyRepository};
 use axum_extra::{
     TypedHeader,
     headers::{Authorization, authorization::Bearer},
@@ -296,12 +298,9 @@ impl<S: Send + Sync> FromRequestParts<S> for ApiKeyAuth {
             }
         };
 
-        let query_result = sqlx::query_as::<_, (String, String, bool, i32, i32, String)>(
-            "SELECT id, name, enabled, COALESCE(rate_limit_rpm, 0), COALESCE(rate_limit_tpm, 0), COALESCE(allowed_routes, '') FROM api_keys WHERE api_key = ?",
-        )
-        .bind(&api_key)
-        .fetch_optional(pool)
-        .await;
+        // tz 不影响 find_for_auth（无 datetime 列），传 0
+        let query_result =
+            SqliteApiKeyRepository::new(pool.clone(), 0).find_for_auth(&api_key).await;
 
         let result = match query_result {
             Ok(r) => r,

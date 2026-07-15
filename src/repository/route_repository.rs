@@ -46,6 +46,9 @@ pub trait RouteRepository: Send + Sync {
         &self,
         route_id: &str,
     ) -> Result<Vec<RouteItemInfo>, sqlx::Error>;
+
+    /// 启用的路由名列表（/v1/models 列表用）。
+    async fn list_enabled_names(&self) -> Result<Vec<String>, sqlx::Error>;
 }
 
 pub struct SqliteRouteRepository {
@@ -435,6 +438,12 @@ impl RouteRepository for SqliteRouteRepository {
                 weight,
             })
             .collect())
+    }
+
+    async fn list_enabled_names(&self) -> Result<Vec<String>, sqlx::Error> {
+        sqlx::query_scalar::<_, String>("SELECT name FROM routes WHERE enabled = 1")
+            .fetch_all(&self.pool)
+            .await
     }
 }
 

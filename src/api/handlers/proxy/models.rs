@@ -3,12 +3,14 @@ use sqlx::SqlitePool;
 
 use crate::api::handlers::admin::api_keys::parse_supported_models;
 use crate::api::middleware::ApiKeyAuth;
+use crate::repository::api_key_repository::{ApiKeyRepository, SqliteApiKeyRepository};
+use crate::repository::route_repository::{RouteRepository, SqliteRouteRepository};
 
 /// 获取可用模型列表（支持 API Key 分组权限和模型过滤）
 pub async fn list(auth: ApiKeyAuth, State(pool): State<SqlitePool>) -> impl IntoResponse {
     // 获取所有启用的分组名
-    let all_groups = sqlx::query_scalar::<_, String>("SELECT name FROM routes WHERE enabled = 1")
-        .fetch_all(&pool)
+    let all_groups = SqliteRouteRepository::new(pool.clone(), 0)
+        .list_enabled_names()
         .await
         .unwrap_or_default();
 
@@ -53,12 +55,10 @@ pub async fn list(auth: ApiKeyAuth, State(pool): State<SqlitePool>) -> impl Into
 
 /// 获取 API Key 的支持模型列表（传统方式）
 async fn get_supported_models(pool: &SqlitePool, key_id: &str) -> Option<Vec<String>> {
-    let result =
-        sqlx::query_scalar::<_, String>("SELECT supported_models FROM api_keys WHERE id = ?")
-            .bind(key_id)
-            .fetch_optional(pool)
-            .await
-            .ok()??;
+    let result = SqliteApiKeyRepository::new(pool.clone(), 0)
+        .get_supported_models(key_id)
+        .await
+        .ok()??;
 
     if result.is_empty() {
         return None;

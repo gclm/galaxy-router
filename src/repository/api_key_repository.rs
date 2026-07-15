@@ -19,6 +19,14 @@ pub trait ApiKeyRepository: Send + Sync {
     async fn update(&self, id: &str, req: UpdateApiKeyRequest) -> Result<Option<ApiKey>, sqlx::Error>;
     /// 删除。返回 None=不存在；Some=被删的 api_key 值供 handler 失效缓存
     async fn delete(&self, id: &str) -> Result<Option<String>, sqlx::Error>;
+
+    /// proxy 鉴权：按 api_key 值查 (id, name, enabled, rate_limit_rpm, rate_limit_tpm, allowed_routes)。
+    async fn find_for_auth(
+        &self,
+        api_key: &str,
+    ) -> Result<Option<(String, String, bool, i32, i32, String)>, sqlx::Error>;
+    /// proxy 模型访问：按 id 取 supported_models 原始字符串。
+    async fn get_supported_models(&self, id: &str) -> Result<Option<String>, sqlx::Error>;
 }
 
 pub struct SqliteApiKeyRepository {
@@ -252,6 +260,25 @@ impl ApiKeyRepository for SqliteApiKeyRepository {
         }
 
         Ok(Some(api_key_value))
+    }
+
+    async fn find_for_auth(
+        &self,
+        api_key: &str,
+    ) -> Result<Option<(String, String, bool, i32, i32, String)>, sqlx::Error> {
+        sqlx::query_as::<_, (String, String, bool, i32, i32, String)>(
+            "SELECT id, name, enabled, COALESCE(rate_limit_rpm, 0), COALESCE(rate_limit_tpm, 0), COALESCE(allowed_routes, '') FROM api_keys WHERE api_key = ?",
+        )
+        .bind(api_key)
+        .fetch_optional(&self.pool)
+        .await
+    }
+
+    async fn get_supported_models(&self, id: &str) -> Result<Option<String>, sqlx::Error> {
+        sqlx::query_scalar::<_, String>("SELECT supported_models FROM api_keys WHERE id = ?")
+            .bind(id)
+            .fetch_optional(&self.pool)
+            .await
     }
 }
 
