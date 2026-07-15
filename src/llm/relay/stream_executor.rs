@@ -1051,7 +1051,7 @@ impl StreamKeyLoopOutcome {
 
 #[cfg(test)]
 mod tests {
-    use crate::db::Database;
+    use crate::infra::db::Database;
     use crate::llm::plugin::PluginChain;
     use crate::metrics::model::ModelRegistry;
     use crate::relay::pipeline::proxy_stream;

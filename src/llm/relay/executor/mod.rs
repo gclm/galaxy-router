@@ -448,7 +448,7 @@ mod tests {
     // 端到端：mock 本地 upstream + 真实 AppState 调 proxy_request
     // ============================================================
 
-    use crate::db::Database;
+    use crate::infra::db::Database;
     use crate::metrics::model::ModelRegistry;
     use crate::error::proxy::ProxyError;
     use crate::relay::pipeline::proxy_request;

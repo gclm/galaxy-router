@@ -792,7 +792,7 @@ fn compute_percentiles(sorted: &[i32]) -> (Option<f64>, Option<f64>, Option<f64>
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db::Database;
+    use crate::infra::db::Database;
     use crate::domain::usage::{DailyStats, LogsFilter};
 
     async fn make_pool() -> sqlx::SqlitePool {

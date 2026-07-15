@@ -475,7 +475,7 @@ mod tests {
             "stream": false
         });
         let selection = SelectionResult {
-            channel: crate::relay::channel::ChannelInfo {
+            channel: crate::domain::channel::ChannelInfo {
                 id: "ch-1".into(),
                 name: "anthropic".into(),
                 api_keys: vec![],

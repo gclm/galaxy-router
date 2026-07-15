@@ -67,7 +67,7 @@ mod tests {
         let db_path = format!("/tmp/galaxy_pricing_refresher_{}.db", uuid::Uuid::now_v7());
         let _ = std::fs::remove_file(&db_path);
         let db_url = format!("sqlite:{}?mode=rwc", db_path);
-        let pool = crate::db::Database::new(&db_url)
+        let pool = crate::infra::db::Database::new(&db_url)
             .await
             .unwrap()
             .pool()

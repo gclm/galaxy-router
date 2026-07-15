@@ -7,8 +7,6 @@ use tracing_subscriber::{EnvFilter, fmt};
 
 mod api;
 mod auth;
-mod config;
-mod db;
 mod infra;
 mod error;
 mod metrics;
@@ -23,8 +21,8 @@ mod repository;
 mod service;
 mod util;
 
-use config::AppConfig;
-use db::Database;
+use crate::infra::config::AppConfig;
+use crate::infra::db::Database;
 
 /// Galaxy Router - AI 协议互转代理网关
 #[derive(Parser, Debug)]
@@ -148,7 +146,7 @@ async fn main() -> Result<()> {
 
 fn init_logging(
     log_level: &str,
-    logging_config: &config::LoggingConfig,
+    logging_config: &crate::infra::config::LoggingConfig,
 ) -> Result<Option<tracing_appender::non_blocking::WorkerGuard>> {
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(log_level));
 
@@ -300,15 +298,15 @@ mod tests {
 
     fn make_config() -> AppConfig {
         AppConfig {
-            server: config::ServerConfig {
+            server: crate::infra::config::ServerConfig {
                 host: "127.0.0.1".into(),
                 port: 8080,
                 timezone_offset: 0,
             },
-            database: config::DatabaseConfig {
+            database: crate::infra::config::DatabaseConfig {
                 path: "/tmp/galaxy_test_main.db".into(),
             },
-            logging: config::LoggingConfig {
+            logging: crate::infra::config::LoggingConfig {
                 level: "info".into(),
                 format: "compact".into(),
                 file: false,
@@ -316,12 +314,12 @@ mod tests {
                 rotation: "daily".into(),
                 max_files: 30,
             },
-            auth: config::AuthConfig {
+            auth: crate::infra::config::AuthConfig {
                 jwt_secret: String::new(),
                 token_expiry_hours: 24,
             },
-            queuing: config::QueuingConfig::default(),
-            pricing: config::PricingTomlConfig {
+            queuing: crate::infra::config::QueuingConfig::default(),
+            pricing: crate::infra::config::PricingTomlConfig {
                 cache_path: "/tmp/galaxy_test_main_pricing.json".into(),
                 refresh_interval_hours: 24,
                 providers: vec![],

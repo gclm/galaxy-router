@@ -511,7 +511,7 @@ fn compute_cost(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db::Database;
+    use crate::infra::db::Database;
 
     async fn make_pool() -> sqlx::SqlitePool {
         let db_path = format!("/tmp/galaxy_stats_model_{}.db", uuid::Uuid::now_v7());

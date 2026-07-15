@@ -2,11 +2,11 @@ use axum::body::Body;
 use axum::http::{Method, Request};
 use galaxy_router::api::router::create_router;
 use galaxy_router::auth::{JwtService, PasswordService};
-use galaxy_router::config::{
+use galaxy_router::infra::config::{
     AppConfig, AuthConfig, DatabaseConfig, LoggingConfig, PricingTomlConfig, QueuingConfig,
     ServerConfig,
 };
-use galaxy_router::db::Database;
+use galaxy_router::infra::db::Database;
 use galaxy_router::metrics::model::ModelRegistry;
 use sqlx::SqlitePool;
 use tower::ServiceExt;

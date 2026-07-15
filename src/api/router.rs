@@ -26,9 +26,9 @@ use crate::api::handlers::admin::system_info;
 use crate::api::handlers::admin::update_check;
 use crate::api::handlers::proxy::{chat, embeddings, images, messages, models, responses};
 use crate::api::middleware::require_admin_auth;
-use crate::config::{AppConfig, QueuingConfig};
+use crate::infra::config::{AppConfig, QueuingConfig};
 use crate::app_state::AppState;
-use crate::relay::cache::ProxyCache;
+use crate::infra::cache::ProxyCache;
 use crate::static_assets;
 
 /// 创建应用路由

@@ -14,12 +14,12 @@ use crate::api::handlers::admin::channels::{EndpointConfig, UpstreamApiKey, pars
 use crate::api::handlers::admin::update_check::UpdateCheckContext;
 use crate::api::middleware::ApiKeyCache;
 use crate::auth::JwtService;
-use crate::config::AppConfig;
+use crate::infra::config::AppConfig;
 use crate::error::proxy::ProxyError;
 use crate::metrics::model::ModelRegistry;
 use crate::metrics::recorder::StatsRecorder;
-use crate::relay::cache::ProxyCache;
-use crate::relay::channel::ChannelInfo;
+use crate::infra::cache::ProxyCache;
+use crate::domain::channel::ChannelInfo;
 use crate::relay::queue::RequestQueue;
 use crate::relay::ratelimit::RateLimiter;
 use crate::repository::Repositories;
@@ -280,7 +280,7 @@ impl AppState {
     /// 转发链路测试只用 pool/lb_state/cache/model_registry/stats_recorder/proxy_http_client 等，
     /// 其余字段填合理默认。
     pub fn new_for_test(pool: SqlitePool, model_registry: ModelRegistry) -> Self {
-        use crate::config::{AuthConfig, DatabaseConfig, LoggingConfig, ServerConfig};
+        use crate::infra::config::{AuthConfig, DatabaseConfig, LoggingConfig, ServerConfig};
         let config = Arc::new(AppConfig {
             server: ServerConfig {
                 host: "127.0.0.1".into(),
@@ -300,8 +300,8 @@ impl AppState {
                 jwt_secret: "test".into(),
                 token_expiry_hours: 24,
             },
-            queuing: crate::config::QueuingConfig::default(),
-            pricing: crate::config::PricingTomlConfig::default(),
+            queuing: crate::infra::config::QueuingConfig::default(),
+            pricing: crate::infra::config::PricingTomlConfig::default(),
         });
         let repositories = Repositories::new(pool.clone(), 0);
         let stats_recorder = StatsRecorder::new(

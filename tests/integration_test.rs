@@ -34,7 +34,7 @@ providers = ["openai"]
     .unwrap();
     drop(f);
 
-    let config = galaxy_router::config::AppConfig::load(&config_path).unwrap();
+    let config = galaxy_router::infra::config::AppConfig::load(&config_path).unwrap();
 
     assert_eq!(config.server.host, "0.0.0.0");
     assert_eq!(config.server.port, 9090);
@@ -50,7 +50,7 @@ async fn test_database_init() {
     let _ = std::fs::remove_dir_all("/tmp/galaxy_test");
     std::fs::create_dir_all("/tmp/galaxy_test").unwrap();
 
-    let db = galaxy_router::db::Database::new(&db_url).await.unwrap();
+    let db = galaxy_router::infra::db::Database::new(&db_url).await.unwrap();
 
     let tables: Vec<String> =
         sqlx::query_scalar("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
@@ -101,7 +101,7 @@ async fn test_channel_multi_endpoint() {
     let _ = std::fs::remove_dir_all("/tmp/galaxy_test_channel_multi");
     std::fs::create_dir_all("/tmp/galaxy_test_channel_multi").unwrap();
 
-    let db = galaxy_router::db::Database::new(&db_url).await.unwrap();
+    let db = galaxy_router::infra::db::Database::new(&db_url).await.unwrap();
     let pool = db.pool().clone();
 
     // 创建多端点渠道（类似百炼 Coding Plan）
@@ -148,7 +148,7 @@ async fn test_channel_single_endpoint() {
     let _ = std::fs::remove_dir_all("/tmp/galaxy_test_channel_single");
     std::fs::create_dir_all("/tmp/galaxy_test_channel_single").unwrap();
 
-    let db = galaxy_router::db::Database::new(&db_url).await.unwrap();
+    let db = galaxy_router::infra::db::Database::new(&db_url).await.unwrap();
     let pool = db.pool().clone();
 
     // 创建单端点渠道
@@ -189,7 +189,7 @@ async fn test_group_with_channel() {
     let _ = std::fs::remove_dir_all("/tmp/galaxy_test_group_channel");
     std::fs::create_dir_all("/tmp/galaxy_test_group_channel").unwrap();
 
-    let db = galaxy_router::db::Database::new(&db_url).await.unwrap();
+    let db = galaxy_router::infra::db::Database::new(&db_url).await.unwrap();
     let pool = db.pool().clone();
 
     // 创建渠道
@@ -257,7 +257,7 @@ async fn test_api_key_crud() {
     let _ = std::fs::remove_dir_all("/tmp/galaxy_test_api_key");
     std::fs::create_dir_all("/tmp/galaxy_test_api_key").unwrap();
 
-    let db = galaxy_router::db::Database::new(&db_url).await.unwrap();
+    let db = galaxy_router::infra::db::Database::new(&db_url).await.unwrap();
     let pool = db.pool().clone();
 
     let key_id = uuid::Uuid::now_v7().to_string();

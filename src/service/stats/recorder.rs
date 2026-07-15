@@ -355,7 +355,7 @@ mod tests {
         let db_path = format!("/tmp/galaxy_stats_recorder_{}.db", uuid::Uuid::now_v7());
         let _ = std::fs::remove_file(&db_path);
         let db_url = format!("sqlite:{}?mode=rwc", db_path);
-        crate::db::Database::new(&db_url)
+        crate::infra::db::Database::new(&db_url)
             .await
             .unwrap()
             .pool()
