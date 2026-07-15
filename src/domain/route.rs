@@ -81,3 +81,22 @@ pub struct AddRouteItemRequest {
     pub priority: Option<i32>,
     pub weight: Option<i32>,
 }
+
+/// 路由运行时信息（scheduler 选择用；B3-C0 从 llm/scheduler/selector 归位）
+#[derive(Debug, Clone)]
+pub struct RouteInfo {
+    pub id: String,
+    pub name: String,
+    pub items: Vec<RouteItemInfo>,
+}
+
+/// 路由项运行时信息
+#[derive(Debug, Clone)]
+pub struct RouteItemInfo {
+    pub channel_id: String,
+    pub model_name: String,
+    pub priority: i32,
+    /// DB 字段：route_items.weight，保留供未来加权随机使用
+    #[allow(dead_code)]
+    pub weight: i32,
+}

@@ -1,25 +1,8 @@
 use crate::api::handlers::admin::channels::EndpointConfig;
 
-use crate::relay::channel::ChannelInfo;
-
-/// 分组信息
-#[derive(Debug, Clone)]
-pub struct RouteInfo {
-    pub id: String,
-    pub name: String,
-    pub items: Vec<RouteItemInfo>,
-}
-
-/// 分组项信息
-#[derive(Debug, Clone)]
-pub struct RouteItemInfo {
-    pub channel_id: String,
-    pub model_name: String,
-    pub priority: i32,
-    /// DB 字段：route_items.weight，保留供未来加权随机使用
-    #[allow(dead_code)]
-    pub weight: i32,
-}
+// RouteInfo + RouteItemInfo 已归 domain/route（B3-C0），此处 re-export 保兼容
+pub use crate::domain::route::{RouteInfo, RouteItemInfo};
+use crate::domain::channel::ChannelInfo;
 
 /// 选择结果
 #[derive(Debug)]
