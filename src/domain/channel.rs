@@ -70,6 +70,11 @@ pub struct UpstreamApiKey {
     pub enabled: bool,
 }
 
+/// 解析渠道的 api_keys JSON 字段为 Vec<UpstreamApiKey>（启动加载渠道 + 调度任务用）
+pub fn parse_api_keys(json_str: &str) -> Vec<UpstreamApiKey> {
+    serde_json::from_str(json_str).unwrap_or_default()
+}
+
 /// 自定义请求头
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct CustomHeader {

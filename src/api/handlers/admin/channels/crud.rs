@@ -6,7 +6,7 @@ use axum::{
 
 use super::types::{
     Channel, ChannelRow, CreateChannelRequest, ListChannelsQuery, PaginatedResponse,
-    UpdateChannelRequest, UpstreamApiKey,
+    UpdateChannelRequest,
 };
 use crate::app_state::AppState;
 use crate::error::app::{ApiError, ApiResponse};
@@ -144,9 +144,8 @@ pub async fn delete(
     Ok(Json(crate::error::app::success_empty()))
 }
 
-pub fn parse_api_keys(json_str: &str) -> Vec<UpstreamApiKey> {
-    serde_json::from_str(json_str).unwrap_or_default()
-}
+// parse_api_keys 已归 domain/channel（B1-C3），此处 re-export 保 channels.rs re-export 链兼容
+pub use crate::domain::channel::parse_api_keys;
 
 fn decode_json_field<T>(field_name: &str, value: &str) -> Result<T, String>
 where
