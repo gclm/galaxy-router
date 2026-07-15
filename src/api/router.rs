@@ -51,7 +51,7 @@ pub async fn create_router(
 
     let shared_cache = ProxyCache::new();
 
-    let update_check_context = update_check::UpdateCheckContext::from_pool(&pool).await;
+    let update_check_context = crate::service::update_check::UpdateCheckContext::from_pool(&pool).await;
 
     // 上游转发客户端（300s + 可选 proxy.url，原 ProxyState::new 构造逻辑）
     let proxy_http_client = build_proxy_http_client(&pool).await;

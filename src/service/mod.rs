@@ -6,3 +6,4 @@
 pub mod stats;
 pub mod pricing;
 pub mod backup;
+pub mod update_check;

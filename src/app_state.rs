@@ -10,7 +10,7 @@ use std::time::Instant;
 use axum::http::StatusCode;
 use sqlx::SqlitePool;
 
-use crate::api::handlers::admin::update_check::UpdateCheckContext;
+use crate::service::update_check::UpdateCheckContext;
 use crate::api::middleware::ApiKeyCache;
 use crate::auth::JwtService;
 use crate::infra::config::AppConfig;
