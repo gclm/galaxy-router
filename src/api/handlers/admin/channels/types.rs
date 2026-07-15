@@ -1,5 +1,10 @@
 use serde::{Deserialize, Serialize};
 
+// 跨层基础类型（EndpointType/EndpointConfig/UpstreamApiKey/CustomHeader）已归
+// `domain::channel`（B1-C1）。此处 re-export 保 import 兼容：channels.rs re-export hub
+// 透传这些名字，全下游（llm/、proxy/、repository/）零改动。
+pub use crate::domain::channel::{CustomHeader, EndpointConfig, EndpointType, UpstreamApiKey};
+
 #[derive(sqlx::FromRow)]
 pub struct ChannelRow {
     pub(crate) id: String,
@@ -35,81 +40,6 @@ pub struct ListChannelsQuery {
 pub struct PaginatedResponse<T: Serialize> {
     pub items: Vec<T>,
     pub total: i64,
-}
-
-/// 端点类型
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
-#[serde(rename_all = "snake_case")]
-pub enum EndpointType {
-    #[serde(rename = "openai_chat")]
-    OpenAiChat,
-    #[serde(rename = "openai_response")]
-    OpenAiResponse,
-    Anthropic,
-    Gemini,
-    #[serde(rename = "openai_embedding")]
-    OpenAiEmbedding,
-    #[serde(rename = "openai_images")]
-    OpenAiImages,
-}
-
-impl EndpointType {
-    /// 获取端点路径
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Self::OpenAiChat => "openai_chat",
-            Self::OpenAiResponse => "openai_response",
-            Self::Anthropic => "anthropic",
-            Self::Gemini => "gemini",
-            Self::OpenAiEmbedding => "openai_embedding",
-            Self::OpenAiImages => "openai_images",
-        }
-    }
-
-    pub fn path(&self) -> &'static str {
-        match self {
-            Self::OpenAiChat => "/chat/completions",
-            Self::OpenAiResponse => "/responses",
-            Self::Anthropic => "/messages",
-            Self::Gemini => "/models/{model}:generateContent",
-            Self::OpenAiEmbedding => "/embeddings",
-            Self::OpenAiImages => "/images/generations",
-        }
-    }
-}
-
-/// 端点配置
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct EndpointConfig {
-    #[serde(rename = "type")]
-    pub endpoint_type: EndpointType,
-    pub base_url: String,
-    #[serde(default = "default_true")]
-    pub enabled: bool,
-    /// 端点级自定义请求头（insert 覆盖客户端，用于按协议配不同 User-Agent 等）
-    #[serde(default)]
-    pub headers: Vec<CustomHeader>,
-}
-
-/// 上游 API Key
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct UpstreamApiKey {
-    pub key: String,
-    #[serde(default)]
-    pub note: String,
-    #[serde(default = "default_true")]
-    pub enabled: bool,
-}
-
-fn default_true() -> bool {
-    true
-}
-
-/// 自定义请求头
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct CustomHeader {
-    pub key: String,
-    pub value: String,
 }
 
 /// 渠道

@@ -1,0 +1,82 @@
+//! 渠道领域类型（跨层基础类型）。
+//!
+//! 从 `api/handlers/admin/channels/types.rs` 归位（B1-C1）。
+//! 被 `llm/`（relay/protocol/scheduler/plugin）、proxy handler、repository 共享，
+//! 是真正的跨层契约，故入 domain。
+
+use serde::{Deserialize, Serialize};
+
+/// 端点类型
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum EndpointType {
+    #[serde(rename = "openai_chat")]
+    OpenAiChat,
+    #[serde(rename = "openai_response")]
+    OpenAiResponse,
+    Anthropic,
+    Gemini,
+    #[serde(rename = "openai_embedding")]
+    OpenAiEmbedding,
+    #[serde(rename = "openai_images")]
+    OpenAiImages,
+}
+
+impl EndpointType {
+    /// 获取端点路径
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::OpenAiChat => "openai_chat",
+            Self::OpenAiResponse => "openai_response",
+            Self::Anthropic => "anthropic",
+            Self::Gemini => "gemini",
+            Self::OpenAiEmbedding => "openai_embedding",
+            Self::OpenAiImages => "openai_images",
+        }
+    }
+
+    pub fn path(&self) -> &'static str {
+        match self {
+            Self::OpenAiChat => "/chat/completions",
+            Self::OpenAiResponse => "/responses",
+            Self::Anthropic => "/messages",
+            Self::Gemini => "/models/{model}:generateContent",
+            Self::OpenAiEmbedding => "/embeddings",
+            Self::OpenAiImages => "/images/generations",
+        }
+    }
+}
+
+/// 端点配置
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct EndpointConfig {
+    #[serde(rename = "type")]
+    pub endpoint_type: EndpointType,
+    pub base_url: String,
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    /// 端点级自定义请求头（insert 覆盖客户端，用于按协议配不同 User-Agent 等）
+    #[serde(default)]
+    pub headers: Vec<CustomHeader>,
+}
+
+/// 上游 API Key
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct UpstreamApiKey {
+    pub key: String,
+    #[serde(default)]
+    pub note: String,
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+}
+
+/// 自定义请求头
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct CustomHeader {
+    pub key: String,
+    pub value: String,
+}
+
+fn default_true() -> bool {
+    true
+}
