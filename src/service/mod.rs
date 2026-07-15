@@ -5,3 +5,4 @@
 
 pub mod stats;
 pub mod pricing;
+pub mod backup;

@@ -9,6 +9,7 @@
 
 pub mod api_key;
 pub mod auth;
+pub mod backup;
 pub mod budget;
 pub mod channel;
 pub mod route;

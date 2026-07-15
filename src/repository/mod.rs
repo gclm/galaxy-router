@@ -10,6 +10,7 @@ use sqlx::SqlitePool;
 
 pub mod api_key_repository;
 pub mod auth_repository;
+pub mod backup_repository;
 pub mod budget_repository;
 pub mod channel_repository;
 pub mod route_repository;
