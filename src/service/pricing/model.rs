@@ -228,7 +228,7 @@ impl ModelRegistry {
     ) -> Result<(), String> {
         let mut count = 0u32;
         for info in models {
-            let id = crate::api::response::generate_id();
+            let id = crate::util::id::generate_id();
             let result = sqlx::query(
                 r#"INSERT INTO model_info (
                     id, model, provider, mode,
@@ -336,7 +336,7 @@ impl ModelRegistry {
 
     /// 手动设置模型信息
     pub async fn set_model_info(&self, info: ModelInfo) -> Result<(), String> {
-        let id = crate::api::response::generate_id();
+        let id = crate::util::id::generate_id();
         sqlx::query(
             r#"INSERT INTO model_info (
                 id, model, provider, mode,
@@ -657,7 +657,7 @@ mod tests {
         let reg = ModelRegistry::new(pool);
 
         // 直接 SQL 写一行（模拟 remote source 的预置数据）
-        let id = crate::api::response::generate_id();
+        let id = crate::util::id::generate_id();
         sqlx::query(
             r#"INSERT INTO model_info (id, model, provider, mode, input_price, output_price, source)
                VALUES (?, 'preloaded', 'openai', 'chat', 1.5, 6.0, 'remote')"#,

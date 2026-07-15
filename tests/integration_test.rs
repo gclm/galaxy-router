@@ -444,8 +444,8 @@ fn test_api_error_variants_have_distinct_codes() {
 
 #[test]
 fn test_generate_id_returns_unique_v7_strings() {
-    let id1 = galaxy_router::api::response::generate_id();
-    let id2 = galaxy_router::api::response::generate_id();
+    let id1 = galaxy_router::util::id::generate_id();
+    let id2 = galaxy_router::util::id::generate_id();
     // UUID v7 是时间有序的，纳秒间隔通常保证唯一
     assert_ne!(id1, id2);
     // UUID 标准格式：8-4-4-4-12

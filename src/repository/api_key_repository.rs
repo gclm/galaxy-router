@@ -118,8 +118,8 @@ impl ApiKeyRepository for SqliteApiKeyRepository {
     }
 
     async fn create(&self, req: CreateApiKeyRequest) -> Result<ApiKey, sqlx::Error> {
-        let id = crate::api::response::generate_id();
-        let api_key = format!("sk-gr-{}", crate::api::response::generate_id());
+        let id = crate::util::id::generate_id();
+        let api_key = format!("sk-gr-{}", crate::util::id::generate_id());
         let supported_models = req.supported_models.unwrap_or_default();
         let rate_limit_rpm = req.rate_limit_rpm.unwrap_or(0);
         let rate_limit_tpm = req.rate_limit_tpm.unwrap_or(0);

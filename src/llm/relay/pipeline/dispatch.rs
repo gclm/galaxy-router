@@ -22,7 +22,7 @@ pub async fn handle_proxy_request(
 ) -> axum::response::Response {
     use axum::response::IntoResponse;
 
-    let request_id = crate::api::response::generate_id();
+    let request_id = crate::util::id::generate_id();
     let model = body["model"].as_str().unwrap_or("unknown");
     let is_stream = body["stream"].as_bool().unwrap_or(false);
     let api_key_id = Some(auth.key_id.as_str());

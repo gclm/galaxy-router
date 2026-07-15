@@ -207,7 +207,7 @@ impl RouteRepository for SqliteRouteRepository {
     }
 
     async fn create(&self, req: CreateRouteRequest) -> Result<Route, sqlx::Error> {
-        let route_id = crate::api::response::generate_id();
+        let route_id = crate::util::id::generate_id();
         let mut tx = self.pool.begin().await?;
 
         sqlx::query(
@@ -225,7 +225,7 @@ impl RouteRepository for SqliteRouteRepository {
         .await?;
 
         for item in &req.items {
-            let item_id = crate::api::response::generate_id();
+            let item_id = crate::util::id::generate_id();
             sqlx::query(
                 r#"INSERT INTO route_items (id, route_id, channel_id, model_name, priority, weight)
                    VALUES (?, ?, ?, ?, ?, ?)"#,
@@ -299,7 +299,7 @@ impl RouteRepository for SqliteRouteRepository {
                 .execute(&mut *tx)
                 .await?;
             for item in items {
-                let item_id = crate::api::response::generate_id();
+                let item_id = crate::util::id::generate_id();
                 sqlx::query(
                     r#"INSERT INTO route_items (id, route_id, channel_id, model_name, priority, weight)
                        VALUES (?, ?, ?, ?, ?, ?)"#,
@@ -348,7 +348,7 @@ impl RouteRepository for SqliteRouteRepository {
             return Ok(None);
         }
 
-        let item_id = crate::api::response::generate_id();
+        let item_id = crate::util::id::generate_id();
         let priority = req.priority.unwrap_or(1);
         let weight = req.weight.unwrap_or(100);
 

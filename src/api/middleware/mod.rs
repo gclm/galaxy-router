@@ -157,7 +157,7 @@ async fn record_auth_failure(
         return; // 提取器未注入（不应发生），直接放弃，避免影响正常鉴权返回
     };
 
-    let request_id = crate::api::response::generate_id();
+    let request_id = crate::util::id::generate_id();
     let model = infer_model_from_uri(&parts.uri);
     let is_stream = false; // 鉴权阶段尚未解析 body，保守标记为非流式
     let user_agent = parts

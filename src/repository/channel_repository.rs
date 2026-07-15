@@ -138,7 +138,7 @@ impl ChannelRepository for SqliteChannelRepository {
     }
 
     async fn create(&self, req: CreateChannelRequest) -> Result<ChannelRow, sqlx::Error> {
-        let id = crate::api::response::generate_id();
+        let id = crate::util::id::generate_id();
         let api_keys_json = serde_json::to_string(&req.api_keys).unwrap_or_default();
         let endpoints_json = serde_json::to_string(&req.endpoints).unwrap_or_default();
         let models_json = serde_json::to_string(&req.models.unwrap_or_default()).unwrap_or_default();

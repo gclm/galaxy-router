@@ -21,7 +21,7 @@ pub async fn init(
     let password_hash = PasswordService::hash_password(&req.password)
         .map_err(|e| ApiError::internal_error(e.to_string()))?;
 
-    let user_id = crate::api::response::generate_id();
+    let user_id = crate::util::id::generate_id();
 
     let inserted = state
         .repositories

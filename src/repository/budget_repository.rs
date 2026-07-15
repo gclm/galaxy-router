@@ -62,7 +62,7 @@ impl BudgetRepository for SqliteBudgetRepository {
             return Ok(None);
         }
 
-        let id = crate::api::response::generate_id();
+        let id = crate::util::id::generate_id();
         sqlx::query(
             r#"INSERT INTO budget_limits (id, api_key_id, monthly_limit_usd, daily_limit_usd, enabled)
                VALUES (?, ?, ?, ?, ?)

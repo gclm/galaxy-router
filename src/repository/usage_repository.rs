@@ -817,7 +817,7 @@ mod tests {
         output: i32,
         cost: f64,
     ) {
-        let id = crate::api::response::generate_id();
+        let id = crate::util::id::generate_id();
         sqlx::query(
             r#"INSERT INTO usage_logs
                (id, requested_model, channel_id, api_key_id, status_code,
@@ -930,7 +930,7 @@ mod tests {
     async fn get_daily_stats_seven_days_aggregates_by_date() {
         let pool = make_pool().await;
         // 直接写一条 5 天前的日志
-        let id = crate::api::response::generate_id();
+        let id = crate::util::id::generate_id();
         sqlx::query(
             r#"INSERT INTO usage_logs
                (id, requested_model, status_code, input_tokens, output_tokens,
@@ -1003,7 +1003,7 @@ mod tests {
     async fn get_logs_paginated_and_parsed_attempts() {
         let pool = make_pool().await;
         // 写 attempts 字段以验证 JSON 解析路径（生产 SQL 用 `as raw_attempts` 重命名）
-        let id = crate::api::response::generate_id();
+        let id = crate::util::id::generate_id();
         let attempts = r#"[{"channel_id":"c1","status":"ok","duration_ms":12}]"#;
         sqlx::query(
             r#"INSERT INTO usage_logs
@@ -1120,7 +1120,7 @@ mod tests {
     #[tokio::test]
     async fn get_log_detail_returns_full_row() {
         let pool = make_pool().await;
-        let id = crate::api::response::generate_id();
+        let id = crate::util::id::generate_id();
         let attempts = r#"[{"channel_id":"c1","status":"ok","duration_ms":12}]"#;
         sqlx::query(
             r#"INSERT INTO usage_logs
@@ -1187,7 +1187,7 @@ mod tests {
         let pool = make_pool().await;
         // 插入 10 条不同延迟的日志
         for i in 1..=10 {
-            let id = crate::api::response::generate_id();
+            let id = crate::util::id::generate_id();
             sqlx::query(
                 r#"INSERT INTO usage_logs
                    (id, requested_model, status_code, input_tokens, output_tokens,

@@ -319,7 +319,7 @@ async fn fetch_settings(
 // ── 数据导入（返回 Ok(true)=已导入, Ok(false)=已存在跳过）──
 
 async fn import_channel(conn: &mut SqliteConnection, ch: &Channel) -> Result<bool, String> {
-    let id = crate::api::response::generate_id();
+    let id = crate::util::id::generate_id();
     let api_keys = serde_json::to_string(&ch.api_keys).map_err(|e| e.to_string())?;
     let endpoints = serde_json::to_string(&ch.endpoints).map_err(|e| e.to_string())?;
     let models = serde_json::to_string(&ch.models).map_err(|e| e.to_string())?;
@@ -347,7 +347,7 @@ async fn import_channel(conn: &mut SqliteConnection, ch: &Channel) -> Result<boo
 }
 
 async fn import_api_key(conn: &mut SqliteConnection, key: &ApiKeyExport) -> Result<bool, String> {
-    let id = crate::api::response::generate_id();
+    let id = crate::util::id::generate_id();
     let result = sqlx::query(
         r#"INSERT OR IGNORE INTO api_keys (id, name, api_key, enabled)
            VALUES (?, ?, ?, ?)"#,
@@ -376,7 +376,7 @@ async fn import_setting(conn: &mut SqliteConnection, s: &SettingExport) -> Resul
 }
 
 async fn import_group(conn: &mut SqliteConnection, g: &RouteExport) -> Result<bool, String> {
-    let id = crate::api::response::generate_id();
+    let id = crate::util::id::generate_id();
 
     let result = sqlx::query(
         r#"INSERT OR IGNORE INTO routes (id, name, match_regex, retry_enabled, first_token_timeout_secs, enabled)
@@ -408,7 +408,7 @@ async fn import_group(conn: &mut SqliteConnection, g: &RouteExport) -> Result<bo
             continue;
         };
 
-        let item_id = crate::api::response::generate_id();
+        let item_id = crate::util::id::generate_id();
         sqlx::query(
             r#"INSERT OR IGNORE INTO route_items (id, route_id, channel_id, model_name, priority, weight)
                VALUES (?, ?, ?, ?, ?, ?)"#,
