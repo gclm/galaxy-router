@@ -1,13 +1,13 @@
 use std::collections::{BTreeMap, HashSet};
 
-use crate::api::handlers::admin::channels::EndpointType;
+use crate::domain::channel::EndpointType;
 use crate::error::proxy::ProxyError;
 use crate::relay::run::RelayCandidate;
 use crate::app_state::AppState;
 use crate::scheduler::scoring::{
     CandidateScoreInput, SchedulerScoreWeights, ScoredCandidate, select_top_k_candidates,
 };
-use crate::scheduler::selector::RouteItemInfo;
+use crate::domain::route::RouteItemInfo;
 use crate::scheduler::state::LoadBalancerState;
 
 /// M3-S1: 将候选渠道转换为 CandidateScoreInput 并用 scheduler 多因子打分排序

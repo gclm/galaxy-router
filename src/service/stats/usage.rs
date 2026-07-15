@@ -1,4 +1,4 @@
-use crate::api::handlers::admin::channels::EndpointType;
+use crate::domain::channel::EndpointType;
 use crate::service::pricing::model::ModelRegistry;
 use crate::relay::prepare::{
     estimate_tokens, extract_request_text, extract_response_text, extract_usage,

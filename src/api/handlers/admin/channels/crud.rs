@@ -5,8 +5,9 @@ use axum::{
 };
 
 use super::types::{
-    Channel, CreateChannelRequest, ListChannelsQuery, PaginatedResponse, UpdateChannelRequest,
+    CreateChannelRequest, ListChannelsQuery, PaginatedResponse, UpdateChannelRequest,
 };
+use crate::domain::channel::Channel;
 use crate::repository::channel_repository::row_to_channel;
 use crate::app_state::AppState;
 use crate::error::app::{ApiError, ApiResponse};
@@ -143,6 +144,3 @@ pub async fn delete(
     }
     Ok(Json(crate::error::app::success_empty()))
 }
-
-// parse_api_keys 已归 domain/channel（B1-C3），此处 re-export 保 channels.rs re-export 链兼容
-pub use crate::domain::channel::parse_api_keys;

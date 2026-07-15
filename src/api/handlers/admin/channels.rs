@@ -9,20 +9,9 @@ mod crud;
 mod probe;
 mod types;
 
-// 公共类型（部分 re-export 当前未被本 crate 引用，但属于稳定公开 API）
-#[allow(unused_imports)]
 pub use types::{
-    Channel, CreateChannelRequest, CustomHeader, EndpointConfig, EndpointType,
-    ListChannelsQuery, PaginatedResponse, TestEndpointRequest, TestEndpointResponse,
-    UpdateChannelRequest, UpstreamApiKey,
+    CreateChannelRequest, ListChannelsQuery, PaginatedResponse, UpdateChannelRequest,
 };
 
-// crate 内可见的类型（供 backup 等模块使用）
-pub(crate) use types::ChannelRow;
-
-// CRUD handlers
-pub(crate) use crate::repository::channel_repository::row_to_channel;
-pub use crud::{create, delete, get, list, parse_api_keys, update};
-
-// Probe handler
+pub use crud::{create, delete, get, list, update};
 pub use probe::test_endpoint;

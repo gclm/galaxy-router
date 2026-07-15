@@ -349,7 +349,7 @@ fn test_anthropic_transform() {
 
 #[test]
 fn test_endpoint_type_paths() {
-    use galaxy_router::api::handlers::admin::channels::EndpointType;
+    use galaxy_router::domain::channel::EndpointType;
 
     assert_eq!(EndpointType::OpenAiChat.path(), "/chat/completions");
     assert_eq!(EndpointType::OpenAiResponse.path(), "/responses");
@@ -360,7 +360,7 @@ fn test_endpoint_type_paths() {
 
 #[test]
 fn test_endpoint_type_serialization() {
-    use galaxy_router::api::handlers::admin::channels::EndpointType;
+    use galaxy_router::domain::channel::EndpointType;
 
     // 序列化
     let json = serde_json::to_string(&EndpointType::OpenAiChat).unwrap();
@@ -459,7 +459,7 @@ fn test_generate_id_returns_unique_v7_strings() {
 
 #[tokio::test]
 async fn test_channel_rejects_crlf_in_api_key() {
-    use galaxy_router::api::handlers::admin::channels::{
+    use galaxy_router::domain::channel::{
         Channel, CustomHeader, EndpointConfig, EndpointType, UpstreamApiKey,
     };
 
@@ -471,7 +471,7 @@ async fn test_channel_rejects_crlf_in_api_key() {
     }];
     let json = serde_json::to_string(&api_keys).unwrap();
     let parsed: Vec<UpstreamApiKey> =
-        galaxy_router::api::handlers::admin::channels::parse_api_keys(&json);
+        galaxy_router::domain::channel::parse_api_keys(&json);
     // parse_api_keys 只做 JSON 反序列化，CRLF 字符在 JSON 字符串里合法，所以解析通过
     // 真正的安全校验在 validate_header_value（创建渠道时调用）
     assert_eq!(parsed.len(), 1);

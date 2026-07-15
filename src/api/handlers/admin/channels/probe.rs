@@ -1,10 +1,8 @@
 use axum::{Json, extract::State, http::StatusCode};
 use reqwest::Client;
 
-use super::types::{
-    CustomHeader, EndpointConfig, EndpointType, TestEndpointRequest,
-    TestEndpointResponse,
-};
+use super::types::{TestEndpointRequest, TestEndpointResponse};
+use crate::domain::channel::{CustomHeader, EndpointConfig, EndpointType};
 use crate::app_state::AppState;
 use crate::error::app::{ApiError, ApiResponse};
 

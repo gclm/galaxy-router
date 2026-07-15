@@ -6,7 +6,7 @@
 
 use axum::body::Bytes;
 
-use crate::api::handlers::admin::channels::EndpointType;
+use crate::domain::channel::EndpointType;
 use crate::app_state::AppState;
 use crate::service::stats::recorder::RequestRecord;
 use crate::relay::converter::RelayPipeline;

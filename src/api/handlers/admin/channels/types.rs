@@ -1,12 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-// 跨层基础类型（EndpointType/EndpointConfig/UpstreamApiKey/CustomHeader）已归
-// `domain::channel`（B1-C1）。此处 re-export 保 import 兼容：channels.rs re-export hub
-// 透传这些名字，全下游（llm/、proxy/、repository/）零改动。
-pub use crate::domain::channel::{Channel, CustomHeader, EndpointConfig, EndpointType, UpstreamApiKey};
-
-// ChannelRow（FromRow 行类型）已归 repository/channel_repository（B1-C4），此处 re-export 保兼容
-pub(crate) use crate::repository::channel_repository::ChannelRow;
+use crate::domain::channel::{CustomHeader, EndpointConfig, UpstreamApiKey};
 
 /// 列表查询参数
 #[derive(Debug, Deserialize)]

@@ -7,7 +7,7 @@ use async_trait::async_trait;
 use serde_json::{Value, json};
 
 use super::{PluginContext, PluginResult, RequestPlugin};
-use crate::api::handlers::admin::channels::EndpointType;
+use crate::domain::channel::EndpointType;
 
 pub struct CacheKeyInjector;
 

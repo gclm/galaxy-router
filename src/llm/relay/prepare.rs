@@ -1,6 +1,6 @@
 use axum::http::HeaderMap;
 
-use crate::api::handlers::admin::channels::{CustomHeader, EndpointType};
+use crate::domain::channel::{CustomHeader, EndpointType};
 use crate::service::stats::attempt::AttemptStats;
 use crate::util::estimator::TokenEstimator;
 use crate::relay::converter::{RelayPipeline, RelayPipelineRequest};
@@ -487,7 +487,7 @@ mod tests {
                 blacklist_minutes: 10,
             },
             target_model: "claude-3-5-sonnet".into(),
-            endpoint: crate::api::handlers::admin::channels::EndpointConfig {
+            endpoint: crate::domain::channel::EndpointConfig {
                 endpoint_type: EndpointType::Anthropic,
                 base_url: "https://api.anthropic.com".into(),
                 enabled: true,

@@ -2,7 +2,7 @@
 
 use axum::http::HeaderMap;
 
-use crate::api::handlers::admin::channels::EndpointType;
+use crate::domain::channel::EndpointType;
 use crate::error::proxy::{ErrorFormat, ProxyError};
 use crate::app_state::AppState;
 use crate::service::stats::recorder::save_request_record;

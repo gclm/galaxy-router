@@ -1,6 +1,6 @@
 use axum::http::HeaderMap;
 
-use crate::api::handlers::admin::channels::EndpointType;
+use crate::domain::channel::EndpointType;
 use crate::protocol::inbound::{Inbound, InboundError};
 use crate::protocol::outbound::{Outbound, OutboundError};
 use crate::protocol::stream_converter::StreamConverter;

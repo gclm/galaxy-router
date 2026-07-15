@@ -4,7 +4,7 @@ use std::convert::Infallible;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 
-use crate::api::handlers::admin::channels::EndpointType;
+use crate::domain::channel::EndpointType;
 use crate::service::stats::attempt::AttemptStats;
 use crate::service::stats::recorder::{
     channel_attempts_snapshot, record_stream_completion, RequestRecord,

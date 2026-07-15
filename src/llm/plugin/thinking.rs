@@ -253,7 +253,7 @@ fn strip_think_responses(body: &mut Value) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::api::handlers::admin::channels::EndpointType;
+    use crate::domain::channel::EndpointType;
     use crate::llm::protocol::model::{Message, Role, StreamChoice};
     use serde_json::json;
 

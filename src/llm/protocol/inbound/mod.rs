@@ -3,7 +3,7 @@ use axum::http::HeaderMap;
 
 use super::model::{LlmRequest, LlmResponse, LlmStreamResponse};
 use super::stream_converter::StreamConverter;
-use crate::api::handlers::admin::channels::EndpointType;
+use crate::domain::channel::EndpointType;
 
 pub mod anthropic;
 pub mod openai_chat;

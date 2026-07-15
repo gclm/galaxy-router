@@ -2,7 +2,7 @@ use axum::{Json, extract::State, http::StatusCode};
 use reqwest::Client;
 use serde::Deserialize;
 
-use crate::api::handlers::admin::channels::{EndpointConfig, EndpointType};
+use crate::domain::channel::{EndpointConfig, EndpointType};
 use crate::app_state::AppState;
 use crate::error::app::{ApiError, ApiResponse};
 

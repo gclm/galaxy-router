@@ -192,15 +192,15 @@ async fn probe_single_channel(
     models_str: &str,
 ) -> Result<f64, String> {
     // 解析 API keys
-    let api_keys: Vec<crate::api::handlers::admin::channels::UpstreamApiKey> =
-        crate::api::handlers::admin::channels::parse_api_keys(api_keys_str);
+    let api_keys: Vec<crate::domain::channel::UpstreamApiKey> =
+        crate::domain::channel::parse_api_keys(api_keys_str);
     let api_key = api_keys
         .iter()
         .find(|k| k.enabled)
         .ok_or_else(|| "无可用 API Key".to_string())?;
 
     // 解析 endpoints
-    let endpoints: Vec<crate::api::handlers::admin::channels::EndpointConfig> =
+    let endpoints: Vec<crate::domain::channel::EndpointConfig> =
         serde_json::from_str(endpoints_str).unwrap_or_default();
     let endpoint = endpoints
         .iter()
@@ -228,7 +228,7 @@ async fn probe_single_channel(
     // Anthropic 兼容
     if matches!(
         endpoint.endpoint_type,
-        crate::api::handlers::admin::channels::EndpointType::Anthropic
+        crate::domain::channel::EndpointType::Anthropic
     ) {
         req_builder = req_builder
             .header("x-api-key", api_key.key.as_str())
@@ -257,11 +257,11 @@ async fn probe_single_channel(
 /// 构造最小化探测请求（使用 max_tokens=1 降低成本）
 fn build_probe_request(
     base_url: &str,
-    endpoint_type: &crate::api::handlers::admin::channels::EndpointType,
+    endpoint_type: &crate::domain::channel::EndpointType,
     api_key: &str,
     model: &str,
 ) -> (String, serde_json::Value, String) {
-    use crate::api::handlers::admin::channels::EndpointType;
+    use crate::domain::channel::EndpointType;
 
     let (path, body) = match endpoint_type {
         EndpointType::OpenAiChat => (

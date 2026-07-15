@@ -1,8 +1,4 @@
-use crate::api::handlers::admin::channels::EndpointConfig;
-
-// RouteInfo + RouteItemInfo 已归 domain/route（B3-C0），此处 re-export 保兼容
-pub use crate::domain::route::{RouteInfo, RouteItemInfo};
-use crate::domain::channel::ChannelInfo;
+use crate::domain::channel::{ChannelInfo, EndpointConfig};
 
 /// 选择结果
 #[derive(Debug)]

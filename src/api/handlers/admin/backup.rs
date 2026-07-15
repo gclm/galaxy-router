@@ -7,8 +7,8 @@ use sqlx::{SqliteConnection, SqlitePool};
 type DbResult<T> = Result<T, (StatusCode, Json<ApiError>)>;
 type RouteRow = (String, String, Option<String>, bool, i32, bool);
 
-use crate::api::handlers::admin::channels::Channel;
-use crate::api::handlers::admin::channels::ChannelRow;
+use crate::domain::channel::Channel;
+use crate::repository::channel_repository::ChannelRow;
 use crate::app_state::AppState;
 use crate::error::app::{ApiError, ApiResponse};
 
@@ -233,7 +233,7 @@ async fn fetch_channels(pool: &SqlitePool) -> DbResult<Vec<Channel>> {
     .map_err(|e| ApiError::internal_error(e.to_string()))?;
 
     rows.into_iter()
-        .map(crate::api::handlers::admin::channels::row_to_channel)
+        .map(crate::repository::channel_repository::row_to_channel)
         .collect::<Result<Vec<_>, _>>()
         .map_err(ApiError::internal_error)
 }

@@ -1,6 +1,6 @@
 //! SSE usage 提取（完成检测：usage 随终止事件到达）。
 
-use crate::api::handlers::admin::channels::EndpointType;
+use crate::domain::channel::EndpointType;
 
 use super::parsing::sse_field;
 

@@ -1,6 +1,6 @@
 //! SSE 错误提取 + 归因。
 
-use crate::api::handlers::admin::channels::EndpointType;
+use crate::domain::channel::EndpointType;
 
 use super::parsing::sse_field;
 

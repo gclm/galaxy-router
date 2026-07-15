@@ -149,14 +149,14 @@ impl ProxyCache {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::api::handlers::admin::channels::EndpointType;
+    use crate::domain::channel::EndpointType;
 
     fn sample_channel(id: &str, models: Vec<&str>) -> ChannelInfo {
         ChannelInfo {
             id: id.into(),
             name: id.into(),
             api_keys: vec![],
-            endpoints: vec![crate::api::handlers::admin::channels::EndpointConfig {
+            endpoints: vec![crate::domain::channel::EndpointConfig {
                 base_url: "https://example.com".into(),
                 endpoint_type: EndpointType::OpenAiChat,
                 enabled: true,

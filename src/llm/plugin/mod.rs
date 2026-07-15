@@ -20,7 +20,7 @@ use async_trait::async_trait;
 use serde_json::Value;
 use tokio::sync::RwLock;
 
-use crate::api::handlers::admin::channels::EndpointType;
+use crate::domain::channel::EndpointType;
 use crate::error::proxy::ProxyError;
 use crate::llm::protocol::model::LlmStreamResponse;
 use crate::repository::settings_repository::SettingsRepository;

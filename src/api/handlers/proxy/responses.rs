@@ -1,7 +1,7 @@
 use axum::{Json, extract::State, http::HeaderMap, response::IntoResponse};
 use serde_json::Value;
 
-use crate::api::handlers::admin::channels::EndpointType;
+use crate::domain::channel::EndpointType;
 use crate::api::middleware::ApiKeyAuth;
 use crate::error::proxy::ErrorFormat;
 use crate::relay::pipeline::handle_proxy_request;

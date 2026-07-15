@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use std::sync::{Arc, Mutex};
 
-use crate::api::handlers::admin::channels::EndpointType;
+use crate::domain::channel::EndpointType;
 use crate::service::stats::attempt::AttemptStats;
 use crate::service::stats::usage::{calculate_cost, resolve_non_stream_usage};
 use crate::relay::converter::RelayPipeline;
@@ -548,7 +548,7 @@ mod tests {
 
     #[tokio::test]
     async fn proxy_request_passes_through_to_local_upstream() {
-        use crate::api::handlers::admin::channels::EndpointType;
+        use crate::domain::channel::EndpointType;
 
         let upstream = spawn_mock_upstream().await;
         let (state, pool) = make_state_with_channel(&upstream).await;
@@ -583,7 +583,7 @@ mod tests {
 
     #[tokio::test]
     async fn proxy_request_no_available_channel_returns_error() {
-        use crate::api::handlers::admin::channels::EndpointType;
+        use crate::domain::channel::EndpointType;
 
         let db_path = format!("/tmp/galaxy_execute_empty_{}.db", uuid::Uuid::now_v7());
         let _ = std::fs::remove_file(&db_path);

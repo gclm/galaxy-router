@@ -1,6 +1,6 @@
 //! SSE 事件解析原语 + 直通模式内容累积。
 
-use crate::api::handlers::admin::channels::EndpointType;
+use crate::domain::channel::EndpointType;
 
 /// 查找 SSE 事件边界（\n\n 或 \r\n\r\n）
 pub fn find_sse_boundary(buffer: &[u8]) -> Option<usize> {

@@ -442,7 +442,7 @@ mod tests {
         AttemptStats {
             channel_id: "ch-1".into(),
             target_model: "gpt-4o".into(),
-            upstream_endpoint: crate::api::handlers::admin::channels::EndpointType::OpenAiChat,
+            upstream_endpoint: crate::domain::channel::EndpointType::OpenAiChat,
             needs_conversion: false,
             latency_ms: 123,
             status_code,

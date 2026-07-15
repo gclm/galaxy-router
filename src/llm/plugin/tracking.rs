@@ -11,7 +11,7 @@ use regex::Regex;
 use serde_json::Value;
 
 use super::{PluginContext, PluginResult, RequestPlugin, clean_system};
-use crate::api::handlers::admin::channels::EndpointType;
+use crate::domain::channel::EndpointType;
 
 pub struct TrackingRemover;
 

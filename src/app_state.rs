@@ -10,7 +10,7 @@ use std::time::Instant;
 use axum::http::StatusCode;
 use sqlx::SqlitePool;
 
-use crate::api::handlers::admin::channels::{EndpointConfig, UpstreamApiKey, parse_api_keys};
+use crate::domain::channel::{EndpointConfig, UpstreamApiKey, parse_api_keys};
 use crate::api::handlers::admin::update_check::UpdateCheckContext;
 use crate::api::middleware::ApiKeyCache;
 use crate::auth::JwtService;
@@ -23,7 +23,7 @@ use crate::domain::channel::ChannelInfo;
 use crate::relay::queue::RequestQueue;
 use crate::relay::ratelimit::RateLimiter;
 use crate::repository::Repositories;
-use crate::scheduler::selector::{RouteInfo, RouteItemInfo};
+use crate::domain::route::{RouteInfo, RouteItemInfo};
 use crate::scheduler::state::LoadBalancerState;
 use crate::llm::plugin::PluginChain;
 use crate::service::Services;

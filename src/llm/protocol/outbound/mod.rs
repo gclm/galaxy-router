@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 
 use super::model::{LlmRequest, LlmResponse, LlmStreamResponse};
-use crate::api::handlers::admin::channels::EndpointType;
+use crate::domain::channel::EndpointType;
 
 pub mod anthropic;
 pub mod openai_chat;
