@@ -1,5 +1,5 @@
 use galaxy_router::domain::channel::EndpointType;
-use galaxy_router::relay::converter::{RelayPipeline, RelayPipelineRequest};
+use galaxy_router::llm::relay::converter::{RelayPipeline, RelayPipelineRequest};
 use serde_json::json;
 
 #[test]

@@ -9,7 +9,6 @@ mod api;
 mod auth;
 mod infra;
 mod error;
-use crate::llm::protocol;
 use crate::llm::relay;
 use crate::llm::scheduler;
 mod static_assets;

@@ -1,10 +1,10 @@
 use async_trait::async_trait;
 
 use super::{Outbound, OutboundError};
-use crate::protocol::inbound::openai_chat::{
+use crate::llm::protocol::inbound::openai_chat::{
     OpenAiFunctionCall, OpenAiFunctionDefinition, OpenAiMessage, OpenAiTool, OpenAiToolCall,
 };
-use crate::protocol::model::*;
+use crate::llm::protocol::model::*;
 
 /// OpenAI Chat Completions 出站转换器
 pub struct OpenAiChatOutbound;

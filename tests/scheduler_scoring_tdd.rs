@@ -1,4 +1,4 @@
-use galaxy_router::scheduler::scoring::{
+use galaxy_router::llm::scheduler::scoring::{
     CandidateScoreInput, SchedulerScoreWeights, calculate_candidate_score, select_top_k_candidates,
 };
 

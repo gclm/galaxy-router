@@ -9,7 +9,7 @@ use axum::body::Bytes;
 use crate::domain::channel::EndpointType;
 use crate::app_state::AppState;
 use crate::service::stats::recorder::RequestRecord;
-use crate::relay::converter::RelayPipeline;
+use crate::llm::relay::converter::RelayPipeline;
 
 /// 仅在未被 decrement 过时执行一次 decrement（用于流式请求的错误路径）
 pub(super) fn decrement_active_once(

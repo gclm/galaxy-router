@@ -47,8 +47,8 @@ impl TestApp {
             "127.0.0.1:0",
             config.clone(),
             registry,
-            galaxy_router::scheduler::state::LoadBalancerState::new(),
-            galaxy_router::relay::ratelimit::RateLimiter::new(),
+            galaxy_router::llm::scheduler::state::LoadBalancerState::new(),
+            galaxy_router::llm::relay::ratelimit::RateLimiter::new(),
         )
         .await;
 

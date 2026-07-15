@@ -3,8 +3,8 @@ use axum::http::HeaderMap;
 use serde::{Deserialize, Serialize};
 
 use super::{Inbound, InboundError};
-use crate::protocol::model::*;
-use crate::protocol::stream_converter::{SimpleStreamConverter, StreamConverter};
+use crate::llm::protocol::model::*;
+use crate::llm::protocol::stream_converter::{SimpleStreamConverter, StreamConverter};
 
 /// OpenAI Chat Completions 入站转换器
 pub struct OpenAiChatInbound;

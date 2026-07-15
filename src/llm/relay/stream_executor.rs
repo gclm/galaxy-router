@@ -10,20 +10,20 @@ use crate::service::stats::recorder::{
     channel_attempts_snapshot, record_stream_completion, RequestRecord,
 };
 use crate::service::stats::usage::{calculate_cost, resolve_stream_usage};
-use crate::protocol::sse::{
+use crate::llm::protocol::sse::{
     apply_sse_usage, collect_sse_content, extract_error_from_sse, extract_usage_from_sse,
     find_sse_boundary, format_stream_error_event, sanitize_upstream_error,
 };
-use crate::relay::converter::RelayPipeline;
-use crate::relay::prepare::{extract_request_text, failed_attempt_stats, prepare_proxy_request};
-use crate::relay::run::{
+use crate::llm::relay::converter::RelayPipeline;
+use crate::llm::relay::prepare::{extract_request_text, failed_attempt_stats, prepare_proxy_request};
+use crate::llm::relay::run::{
     RelayAttemptError, RelayCandidate, RelayRequest, RelayStreamAttemptExecutor,
     RelayStreamAttemptResult, RelayStreamSuccess,
 };
 use crate::error::proxy::{ProxyError, sse_stream_error_status};
 use crate::app_state::AppState;
 use crate::llm::plugin::PluginContext;
-use crate::scheduler::selector::SelectionResult;
+use crate::llm::scheduler::selector::SelectionResult;
 use axum::http::StatusCode;
 use futures::Stream;
 
@@ -443,7 +443,7 @@ impl ProxyStreamRelayExecutor {
                                     Ok(Some(mut llm_stream)) => {
                                         // 收集内容用于统计
                                         if let Some(choice) = llm_stream.first_choice() {
-                                            if let Some(crate::protocol::model::Content::Text(t)) =
+                                            if let Some(crate::llm::protocol::model::Content::Text(t)) =
                                                 &choice.delta.content
                                                 && !t.is_empty()
                                             {
@@ -1054,7 +1054,7 @@ mod tests {
     use crate::infra::db::Database;
     use crate::llm::plugin::PluginChain;
     use crate::service::pricing::model::ModelRegistry;
-    use crate::relay::pipeline::proxy_stream;
+    use crate::llm::relay::pipeline::proxy_stream;
     use axum::body::Body;
     use axum::{Router, routing::post};
     use futures::StreamExt;

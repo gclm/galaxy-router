@@ -40,8 +40,8 @@ pub async fn create_router(
     _server_addr: &str,
     config: AppConfig,
     model_registry: crate::service::pricing::model::ModelRegistry,
-    lb_state: crate::scheduler::state::LoadBalancerState,
-    rate_limiter: crate::relay::ratelimit::RateLimiter,
+    lb_state: crate::llm::scheduler::state::LoadBalancerState,
+    rate_limiter: crate::llm::relay::ratelimit::RateLimiter,
 ) -> Router {
     let config = Arc::new(config);
     let token_expiry_hours = config.auth.token_expiry_hours;

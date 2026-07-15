@@ -3,11 +3,11 @@ use axum::http::HeaderMap;
 use crate::domain::channel::{CustomHeader, EndpointType};
 use crate::service::stats::attempt::AttemptStats;
 use crate::util::estimator::TokenEstimator;
-use crate::relay::converter::{RelayPipeline, RelayPipelineRequest};
+use crate::llm::relay::converter::{RelayPipeline, RelayPipelineRequest};
 use crate::error::proxy::ProxyError;
 use crate::llm::plugin::{PluginChain, PluginContext};
-use crate::relay::converter::get_outbound;
-use crate::scheduler::selector::SelectionResult;
+use crate::llm::relay::converter::get_outbound;
+use crate::llm::scheduler::selector::SelectionResult;
 
 /// 准备好的代理请求
 pub(crate) struct PreparedProxyRequest {

@@ -4,7 +4,7 @@ use serde_json::Value;
 use crate::domain::channel::EndpointType;
 use crate::api::middleware::ApiKeyAuth;
 use crate::error::proxy::ErrorFormat;
-use crate::relay::pipeline::handle_proxy_request;
+use crate::llm::relay::pipeline::handle_proxy_request;
 use crate::app_state::AppState;
 
 /// OpenAI Responses 代理

@@ -1,6 +1,6 @@
 use axum::http::StatusCode;
 
-use crate::protocol::sse::sanitize_upstream_error;
+use crate::llm::protocol::sse::sanitize_upstream_error;
 
 /// 错误格式类型
 pub enum ErrorFormat {
@@ -71,7 +71,7 @@ impl ProxyError {
     }
 
     /// 从 RelayRunOutcome 构建错误
-    pub fn from_relay_outcome(outcome: &crate::relay::run::RelayRunOutcome) -> Self {
+    pub fn from_relay_outcome(outcome: &crate::llm::relay::run::RelayRunOutcome) -> Self {
         match outcome.status_code {
             404 => ProxyError::ModelNotFound(
                 outcome
@@ -98,7 +98,7 @@ impl ProxyError {
     }
 
     /// 从 RelayStreamRunOutcome 构建错误
-    pub fn from_relay_stream_outcome(outcome: &crate::relay::run::RelayStreamRunOutcome) -> Self {
+    pub fn from_relay_stream_outcome(outcome: &crate::llm::relay::run::RelayStreamRunOutcome) -> Self {
         match outcome.status_code {
             404 => ProxyError::ModelNotFound(
                 outcome

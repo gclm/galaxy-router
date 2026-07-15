@@ -4,8 +4,8 @@ use serde::Deserialize;
 use std::collections::HashMap;
 
 use super::{Inbound, InboundError};
-use crate::protocol::model::*;
-use crate::protocol::stream_converter::{StreamConvertError, StreamConverter};
+use crate::llm::protocol::model::*;
+use crate::llm::protocol::stream_converter::{StreamConvertError, StreamConverter};
 
 /// OpenAI Responses 入站转换器
 pub struct OpenAiResponsesInbound;

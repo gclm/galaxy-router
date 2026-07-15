@@ -20,11 +20,11 @@ use crate::service::pricing::model::ModelRegistry;
 use crate::service::stats::recorder::StatsRecorder;
 use crate::infra::cache::ProxyCache;
 use crate::domain::channel::ChannelInfo;
-use crate::relay::queue::RequestQueue;
-use crate::relay::ratelimit::RateLimiter;
+use crate::llm::relay::queue::RequestQueue;
+use crate::llm::relay::ratelimit::RateLimiter;
 use crate::repository::Repositories;
 use crate::domain::route::{RouteInfo, RouteItemInfo};
-use crate::scheduler::state::LoadBalancerState;
+use crate::llm::scheduler::state::LoadBalancerState;
 use crate::llm::plugin::PluginChain;
 
 /// 应用统一状态。

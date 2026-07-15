@@ -5,7 +5,7 @@ use std::pin::Pin;
 
 use crate::domain::channel::EndpointType;
 use crate::service::stats::recorder::save_request_record;
-use crate::relay::candidates::build_relay_candidates;
+use crate::llm::relay::candidates::build_relay_candidates;
 use crate::error::proxy::ProxyError;
 use crate::app_state::AppState;
 
@@ -94,7 +94,7 @@ pub async fn proxy_request(
         };
 
     // 2. 创建 executor + RelayRun
-    let executor = crate::relay::executor::ProxyRelayExecutor::new(
+    let executor = crate::llm::relay::executor::ProxyRelayExecutor::new(
         state.clone(),
         headers.clone(),
         body.clone(),
@@ -103,8 +103,8 @@ pub async fn proxy_request(
     );
 
     let capacity = state.lb_state.capacity_manager();
-    let run = crate::relay::run::RelayRun::new(capacity, executor.clone());
-    let relay_request = crate::relay::run::RelayRequest::new(&model);
+    let run = crate::llm::relay::run::RelayRun::new(capacity, executor.clone());
+    let relay_request = crate::llm::relay::run::RelayRequest::new(&model);
 
     // 3. 执行
     let candidate_snapshot = candidates.clone();
@@ -263,7 +263,7 @@ pub async fn proxy_stream(
             }
         };
 
-    let executor = crate::relay::stream_executor::ProxyStreamRelayExecutor::new(
+    let executor = crate::llm::relay::stream_executor::ProxyStreamRelayExecutor::new(
         state.clone(),
         request_id.to_string(),
         headers.clone(),
@@ -273,10 +273,10 @@ pub async fn proxy_stream(
         queue_permit,
     );
     let run =
-        crate::relay::run::RelayStreamRun::new(state.lb_state.capacity_manager(), executor.clone());
+        crate::llm::relay::run::RelayStreamRun::new(state.lb_state.capacity_manager(), executor.clone());
     let candidate_snapshot = candidates.clone();
     let outcome = run
-        .execute(crate::relay::run::RelayRequest::new(&model), candidates)
+        .execute(crate::llm::relay::run::RelayRequest::new(&model), candidates)
         .await;
 
     if let Some(success) = outcome.response {

@@ -1,9 +1,9 @@
 use axum::http::HeaderMap;
 
 use crate::domain::channel::EndpointType;
-use crate::protocol::inbound::{Inbound, InboundError};
-use crate::protocol::outbound::{Outbound, OutboundError};
-use crate::protocol::stream_converter::StreamConverter;
+use crate::llm::protocol::inbound::{Inbound, InboundError};
+use crate::llm::protocol::outbound::{Outbound, OutboundError};
+use crate::llm::protocol::stream_converter::StreamConverter;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct RelayPipelineRequest {
@@ -182,7 +182,7 @@ impl RelayPipeline {
     pub fn decode_stream_event(
         upstream_endpoint: &EndpointType,
         event_bytes: &[u8],
-    ) -> Result<Option<crate::protocol::model::LlmStreamResponse>, RelayPipelineError> {
+    ) -> Result<Option<crate::llm::protocol::model::LlmStreamResponse>, RelayPipelineError> {
         let result = outbound_for(upstream_endpoint)?
             .transform_stream_event(event_bytes)
             .map_err(|e| RelayPipelineError::Outbound(e.to_string()))?;
@@ -200,13 +200,13 @@ fn rewrite_model(body: &mut serde_json::Value, upstream_model: &str) {
 }
 
 fn inbound_for(endpoint: &EndpointType) -> Result<&'static dyn Inbound, RelayPipelineError> {
-    crate::protocol::inbound::inbound_for(endpoint).ok_or(RelayPipelineError::UnsupportedEndpoint {
+    crate::llm::protocol::inbound::inbound_for(endpoint).ok_or(RelayPipelineError::UnsupportedEndpoint {
         endpoint: endpoint.clone(),
     })
 }
 
 fn outbound_for(endpoint: &EndpointType) -> Result<&'static dyn Outbound, RelayPipelineError> {
-    crate::protocol::outbound::outbound_for(endpoint).ok_or(
+    crate::llm::protocol::outbound::outbound_for(endpoint).ok_or(
         RelayPipelineError::UnsupportedEndpoint {
             endpoint: endpoint.clone(),
         },
@@ -215,8 +215,8 @@ fn outbound_for(endpoint: &EndpointType) -> Result<&'static dyn Outbound, RelayP
 
 /// 获取出站转换器（静态引用，避免堆分配）
 pub fn get_outbound(endpoint_type: &EndpointType) -> &'static dyn Outbound {
-    crate::protocol::outbound::outbound_for(endpoint_type)
-        .unwrap_or(&crate::protocol::outbound::openai_chat::OpenAiChatOutbound)
+    crate::llm::protocol::outbound::outbound_for(endpoint_type)
+        .unwrap_or(&crate::llm::protocol::outbound::openai_chat::OpenAiChatOutbound)
 }
 
 #[cfg(test)]
@@ -377,7 +377,7 @@ mod tests {
             .expect("should produce LlmStreamResponse");
 
         if let Some(choice) = llm_event.first_choice() {
-            if let Some(crate::protocol::model::Content::Text(t)) = &choice.delta.content {
+            if let Some(crate::llm::protocol::model::Content::Text(t)) = &choice.delta.content {
                 assert_eq!(t, "Hi");
             } else {
                 panic!("expected text content in delta");

@@ -1,4 +1,4 @@
-use galaxy_router::scheduler::capacity::ChannelCapacityManager;
+use galaxy_router::llm::scheduler::capacity::ChannelCapacityManager;
 
 #[test]
 fn scheduler_capacity_unlimited_channels_always_acquire() {

@@ -1,11 +1,11 @@
 use async_trait::async_trait;
 use galaxy_router::error::proxy::ProxyError;
-use galaxy_router::relay::run::{
+use galaxy_router::llm::relay::run::{
     RelayAttemptError, RelayAttemptExecutor, RelayAttemptResult, RelayCandidate, RelayRequest,
     RelayRun,
 };
-use galaxy_router::scheduler::capacity::ChannelCapacityManager;
-use galaxy_router::scheduler::trace::AttemptStatus;
+use galaxy_router::llm::scheduler::capacity::ChannelCapacityManager;
+use galaxy_router::llm::scheduler::trace::AttemptStatus;
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 

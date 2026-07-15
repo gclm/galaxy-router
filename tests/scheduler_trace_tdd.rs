@@ -1,4 +1,4 @@
-use galaxy_router::scheduler::trace::{AttemptStatus, AttemptTraceBuilder};
+use galaxy_router::llm::scheduler::trace::{AttemptStatus, AttemptTraceBuilder};
 
 #[test]
 fn scheduler_trace_builder_records_skip_circuit_success_and_failure_sequence() {

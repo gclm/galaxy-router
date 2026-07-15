@@ -61,8 +61,8 @@ async fn build_test_app_with_pool() -> (axum::Router, sqlx::SqlitePool) {
         "127.0.0.1:0",
         config,
         registry,
-        galaxy_router::scheduler::state::LoadBalancerState::new(),
-        galaxy_router::relay::ratelimit::RateLimiter::new(),
+        galaxy_router::llm::scheduler::state::LoadBalancerState::new(),
+        galaxy_router::llm::relay::ratelimit::RateLimiter::new(),
     )
     .await;
     (router, pool)
@@ -300,8 +300,8 @@ async fn build_test_app_with_key(enabled: bool) -> axum::Router {
         "127.0.0.1:0",
         config,
         registry,
-        galaxy_router::scheduler::state::LoadBalancerState::new(),
-        galaxy_router::relay::ratelimit::RateLimiter::new(),
+        galaxy_router::llm::scheduler::state::LoadBalancerState::new(),
+        galaxy_router::llm::relay::ratelimit::RateLimiter::new(),
     )
     .await
 }
@@ -516,8 +516,8 @@ async fn build_test_app_with_admin() -> (axum::Router, String) {
         "127.0.0.1:0",
         config,
         registry,
-        galaxy_router::scheduler::state::LoadBalancerState::new(),
-        galaxy_router::relay::ratelimit::RateLimiter::new(),
+        galaxy_router::llm::scheduler::state::LoadBalancerState::new(),
+        galaxy_router::llm::relay::ratelimit::RateLimiter::new(),
     )
     .await;
 

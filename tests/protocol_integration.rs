@@ -3,17 +3,17 @@
 //! 覆盖 protocol/inbound、protocol/outbound 各种组合的请求/响应转换。
 
 use axum::http::HeaderMap;
-use galaxy_router::protocol::inbound::Inbound;
-use galaxy_router::protocol::inbound::anthropic::AnthropicInbound;
-use galaxy_router::protocol::inbound::openai_chat::OpenAiChatInbound;
-use galaxy_router::protocol::inbound::openai_responses::OpenAiResponsesInbound;
-use galaxy_router::protocol::model::{
+use galaxy_router::llm::protocol::inbound::Inbound;
+use galaxy_router::llm::protocol::inbound::anthropic::AnthropicInbound;
+use galaxy_router::llm::protocol::inbound::openai_chat::OpenAiChatInbound;
+use galaxy_router::llm::protocol::inbound::openai_responses::OpenAiResponsesInbound;
+use galaxy_router::llm::protocol::model::{
     Content, ContentPart, LlmRequest, LlmResponse, Message, Role,
 };
-use galaxy_router::protocol::outbound::Outbound;
-use galaxy_router::protocol::outbound::anthropic::AnthropicOutbound;
-use galaxy_router::protocol::outbound::openai_chat::OpenAiChatOutbound;
-use galaxy_router::protocol::outbound::openai_responses::OpenAiResponsesOutbound;
+use galaxy_router::llm::protocol::outbound::Outbound;
+use galaxy_router::llm::protocol::outbound::anthropic::AnthropicOutbound;
+use galaxy_router::llm::protocol::outbound::openai_chat::OpenAiChatOutbound;
+use galaxy_router::llm::protocol::outbound::openai_responses::OpenAiResponsesOutbound;
 
 #[allow(unused_imports)]
 use serde_json::json;
@@ -210,7 +210,7 @@ fn sample_llm_response() -> LlmResponse {
         object: "chat.completion".into(),
         created: 1_700_000_000,
         model: "gpt-4o".into(),
-        choices: vec![galaxy_router::protocol::model::Choice {
+        choices: vec![galaxy_router::llm::protocol::model::Choice {
             index: 0,
             message: Message {
                 role: Role::Assistant,
@@ -221,9 +221,9 @@ fn sample_llm_response() -> LlmResponse {
                 reasoning_content: None,
                 cache_control: None,
             },
-            finish_reason: Some(galaxy_router::protocol::model::FinishReason::Stop),
+            finish_reason: Some(galaxy_router::llm::protocol::model::FinishReason::Stop),
         }],
-        usage: Some(galaxy_router::protocol::model::Usage {
+        usage: Some(galaxy_router::llm::protocol::model::Usage {
             prompt_tokens: 5,
             completion_tokens: 7,
             total_tokens: 12,
@@ -502,7 +502,7 @@ fn test_anthropic_inbound_response_with_reasoning_and_tool_use() {
 #[test]
 fn test_anthropic_inbound_response_with_tool_use_part() {
     let resp = LlmResponse {
-        choices: vec![galaxy_router::protocol::model::Choice {
+        choices: vec![galaxy_router::llm::protocol::model::Choice {
             index: 0,
             message: Message {
                 role: Role::Assistant,
@@ -513,7 +513,7 @@ fn test_anthropic_inbound_response_with_tool_use_part() {
                 }])),
                 ..sample_llm_response().choices[0].message.clone()
             },
-            finish_reason: Some(galaxy_router::protocol::model::FinishReason::ToolCalls),
+            finish_reason: Some(galaxy_router::llm::protocol::model::FinishReason::ToolCalls),
         }],
         ..sample_llm_response()
     };
@@ -542,7 +542,7 @@ fn test_anthropic_inbound_response_with_empty_choices() {
 
 #[test]
 fn test_anthropic_inbound_stream_event_emits_text_delta_and_stop() {
-    use galaxy_router::protocol::model::{FinishReason, LlmStreamResponse, Message, StreamChoice};
+    use galaxy_router::llm::protocol::model::{FinishReason, LlmStreamResponse, Message, StreamChoice};
     let event = LlmStreamResponse {
         id: String::new(),
         object: "chunk".into(),
@@ -660,9 +660,9 @@ fn test_anthropic_outbound_stream_event_empty_text_returns_none() {
 #[test]
 fn test_anthropic_outbound_request_includes_tools_and_stream() {
     let mut req = sample_llm_request();
-    req.tools = Some(vec![galaxy_router::protocol::model::Tool {
+    req.tools = Some(vec![galaxy_router::llm::protocol::model::Tool {
         tool_type: "function".into(),
-        function: galaxy_router::protocol::model::FunctionDefinition {
+        function: galaxy_router::llm::protocol::model::FunctionDefinition {
             name: "search".into(),
             description: Some("search docs".into()),
             parameters: Some(serde_json::json!({"type": "object"})),
@@ -715,7 +715,7 @@ async fn test_openai_chat_inbound_with_tool_calls() {
     assert_eq!(tools[0].function.name, "get_weather");
     assert!(matches!(
         req.tool_choice,
-        Some(galaxy_router::protocol::model::ToolChoice::Auto)
+        Some(galaxy_router::llm::protocol::model::ToolChoice::Auto)
     ));
 }
 
@@ -732,7 +732,7 @@ async fn test_openai_chat_inbound_tool_choice_required_and_function() {
         .unwrap();
     assert!(matches!(
         req.tool_choice,
-        Some(galaxy_router::protocol::model::ToolChoice::Required)
+        Some(galaxy_router::llm::protocol::model::ToolChoice::Required)
     ));
 
     let body_func = r#"{
@@ -745,7 +745,7 @@ async fn test_openai_chat_inbound_tool_choice_required_and_function() {
         .await
         .unwrap();
     match req.tool_choice {
-        Some(galaxy_router::protocol::model::ToolChoice::Function { function }) => {
+        Some(galaxy_router::llm::protocol::model::ToolChoice::Function { function }) => {
             assert_eq!(function.name, "get_weather");
         }
         other => panic!("expected Function variant, got {:?}", other),
@@ -754,7 +754,7 @@ async fn test_openai_chat_inbound_tool_choice_required_and_function() {
 
 #[test]
 fn test_openai_chat_inbound_stream_event_serializes() {
-    use galaxy_router::protocol::model::{FinishReason, LlmStreamResponse, Message, StreamChoice};
+    use galaxy_router::llm::protocol::model::{FinishReason, LlmStreamResponse, Message, StreamChoice};
     let event = LlmStreamResponse {
         id: "x".into(),
         object: "chunk".into(),
@@ -919,7 +919,7 @@ async fn test_openai_responses_inbound_with_tools_and_previous_response_id() {
 
 #[test]
 fn test_openai_responses_inbound_stream_event_serializes() {
-    use galaxy_router::protocol::model::{FinishReason, LlmStreamResponse, Message, StreamChoice};
+    use galaxy_router::llm::protocol::model::{FinishReason, LlmStreamResponse, Message, StreamChoice};
     let event = LlmStreamResponse {
         id: String::new(),
         object: "chunk".into(),
@@ -975,8 +975,8 @@ async fn test_openai_responses_outbound_response_parses() {
 
 #[test]
 fn test_openai_responses_inbound_stream_event_reasoning() {
-    use galaxy_router::protocol::model::{Message, StreamChoice};
-    let event = galaxy_router::protocol::model::LlmStreamResponse {
+    use galaxy_router::llm::protocol::model::{Message, StreamChoice};
+    let event = galaxy_router::llm::protocol::model::LlmStreamResponse {
         id: String::new(),
         object: "chunk".into(),
         created: 0,
@@ -1007,8 +1007,8 @@ fn test_openai_responses_inbound_stream_event_reasoning() {
 
 #[test]
 fn test_openai_responses_inbound_stream_event_finish_emits_completed() {
-    use galaxy_router::protocol::model::{FinishReason, Message, StreamChoice};
-    let event = galaxy_router::protocol::model::LlmStreamResponse {
+    use galaxy_router::llm::protocol::model::{FinishReason, Message, StreamChoice};
+    let event = galaxy_router::llm::protocol::model::LlmStreamResponse {
         id: "resp_42".into(),
         object: "chunk".into(),
         created: 0,
@@ -1026,7 +1026,7 @@ fn test_openai_responses_inbound_stream_event_finish_emits_completed() {
             },
             finish_reason: Some(FinishReason::Stop),
         }],
-        usage: Some(galaxy_router::protocol::model::Usage {
+        usage: Some(galaxy_router::llm::protocol::model::Usage {
             prompt_tokens: 5,
             completion_tokens: 8,
             total_tokens: 13,
@@ -1046,8 +1046,8 @@ fn test_openai_responses_inbound_stream_event_finish_emits_completed() {
 
 #[test]
 fn test_openai_responses_inbound_stream_event_tool_calls() {
-    use galaxy_router::protocol::model::{FunctionCall, Message, StreamChoice, ToolCall};
-    let event = galaxy_router::protocol::model::LlmStreamResponse {
+    use galaxy_router::llm::protocol::model::{FunctionCall, Message, StreamChoice, ToolCall};
+    let event = galaxy_router::llm::protocol::model::LlmStreamResponse {
         id: String::new(),
         object: "chunk".into(),
         created: 0,

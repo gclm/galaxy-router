@@ -12,9 +12,9 @@ use tokio::sync::RwLock;
 
 use super::circuit::{CircuitBreaker, CircuitConfig};
 use super::sticky::StickySessionManager;
-use crate::scheduler::capacity::ChannelCapacityManager;
-use crate::scheduler::metrics::SchedulerMetrics;
-use crate::scheduler::runtime::{ChannelRuntimeManager, ChannelRuntimeStats};
+use crate::llm::scheduler::capacity::ChannelCapacityManager;
+use crate::llm::scheduler::metrics::SchedulerMetrics;
+use crate::llm::scheduler::runtime::{ChannelRuntimeManager, ChannelRuntimeStats};
 
 /// 负载均衡状态
 #[derive(Clone)]

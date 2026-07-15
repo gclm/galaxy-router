@@ -1,7 +1,7 @@
 //! run_key_loop 的返回结果（成功 / 非 key-retryable 失败 / 所有 key 已尝试）。
 //! 把三种情况显式区分，方便上层决策是否做 503 同渠道退避重试。
 
-use crate::relay::run::{RelayAttemptError, RelayAttemptResult};
+use crate::llm::relay::run::{RelayAttemptError, RelayAttemptResult};
 
 /// run_key_loop 的返回结果。把"成功 / 非 key-retryable 失败 / 所有 key 已尝试"
 /// 三种情况显式区分开，方便上层决策是否做 503 同渠道退避重试。

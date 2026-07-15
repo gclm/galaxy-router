@@ -2,8 +2,8 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::time::interval;
 
-use crate::relay::ratelimit::RateLimiter;
-use crate::scheduler::state::LoadBalancerState;
+use crate::llm::relay::ratelimit::RateLimiter;
+use crate::llm::scheduler::state::LoadBalancerState;
 
 /// 健康探测默认间隔（秒）
 const DEFAULT_PROBE_INTERVAL_SECS: u64 = 300;

@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 
 use super::{Outbound, OutboundError};
-use crate::protocol::model::*;
+use crate::llm::protocol::model::*;
 
 /// Anthropic Messages 出站转换器
 pub struct AnthropicOutbound;

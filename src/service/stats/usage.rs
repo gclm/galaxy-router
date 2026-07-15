@@ -1,6 +1,6 @@
 use crate::domain::channel::EndpointType;
 use crate::service::pricing::model::ModelRegistry;
-use crate::relay::prepare::{
+use crate::llm::relay::prepare::{
     estimate_tokens, extract_request_text, extract_response_text, extract_usage,
 };
 

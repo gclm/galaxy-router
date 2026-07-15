@@ -4,15 +4,15 @@ use std::sync::{Arc, Mutex};
 use crate::domain::channel::EndpointType;
 use crate::service::stats::attempt::AttemptStats;
 use crate::service::stats::usage::{calculate_cost, resolve_non_stream_usage};
-use crate::relay::converter::RelayPipeline;
-use crate::relay::prepare::{estimate_request_input_tokens, failed_attempt_stats, prepare_proxy_request};
-use crate::relay::run::{
+use crate::llm::relay::converter::RelayPipeline;
+use crate::llm::relay::prepare::{estimate_request_input_tokens, failed_attempt_stats, prepare_proxy_request};
+use crate::llm::relay::run::{
     RelayAttemptError, RelayAttemptExecutor, RelayAttemptResult, RelayCandidate, RelayRequest,
 };
 use crate::error::proxy::ProxyError;
 use crate::app_state::{AppState, ProxySuccess};
 use crate::llm::plugin::PluginContext;
-use crate::scheduler::selector::SelectionResult;
+use crate::llm::scheduler::selector::SelectionResult;
 
 mod outcome;
 use outcome::KeyLoopOutcome;
@@ -451,7 +451,7 @@ mod tests {
     use crate::infra::db::Database;
     use crate::service::pricing::model::ModelRegistry;
     use crate::error::proxy::ProxyError;
-    use crate::relay::pipeline::proxy_request;
+    use crate::llm::relay::pipeline::proxy_request;
     use crate::app_state::AppState;
     use axum::{Router, routing::post};
 

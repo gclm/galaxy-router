@@ -3,8 +3,8 @@ use axum::http::HeaderMap;
 use serde::{Deserialize, Serialize};
 
 use super::{Inbound, InboundError};
-use crate::protocol::model::*;
-use crate::protocol::stream_converter::{StreamConvertError, StreamConverter};
+use crate::llm::protocol::model::*;
+use crate::llm::protocol::stream_converter::{StreamConvertError, StreamConverter};
 use std::collections::HashMap;
 
 /// Anthropic Messages 入站转换器

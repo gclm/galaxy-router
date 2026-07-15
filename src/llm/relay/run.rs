@@ -3,8 +3,8 @@ use futures::StreamExt;
 use std::time::Instant;
 
 use crate::error::proxy::ProxyError;
-use crate::scheduler::capacity::{ChannelCapacityManager, ChannelCapacityPermit};
-use crate::scheduler::trace::{AttemptTrace, AttemptTraceBuilder};
+use crate::llm::scheduler::capacity::{ChannelCapacityManager, ChannelCapacityPermit};
+use crate::llm::scheduler::trace::{AttemptTrace, AttemptTraceBuilder};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RelayRequest {
