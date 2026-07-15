@@ -55,3 +55,34 @@ impl Repositories {
         }
     }
 }
+
+/// SQLite 约束冲突分类（供 service 层 map_err 用；§6：repository 不定义错误类型）。
+///
+/// SQLite primary code 19（SQLITE_CONSTRAINT）无法区分 UNIQUE / FOREIGN KEY，
+/// 故优先看 extended code，回落 message 嗅探（与原 handler 嗅探文本一致）。
+pub enum ConstraintKind {
+    UniqueViolation,
+    ForeignKeyViolation,
+}
+
+pub fn classify_constraint(e: &sqlx::Error) -> Option<ConstraintKind> {
+    let sqlx::Error::Database(db) = e else {
+        return None;
+    };
+    match db.code().as_deref() {
+        // SQLITE_CONSTRAINT_UNIQUE(2067) / PRIMARY_KEY(1555) extended codes
+        Some("2067") | Some("1555") => return Some(ConstraintKind::UniqueViolation),
+        // SQLITE_CONSTRAINT_FOREIGNKEY(787)
+        Some("787") => return Some(ConstraintKind::ForeignKeyViolation),
+        _ => {}
+    }
+    // primary code（"19"）无法细分，回落 message
+    let msg = db.message();
+    if msg.contains("UNIQUE constraint failed") {
+        Some(ConstraintKind::UniqueViolation)
+    } else if msg.contains("FOREIGN KEY constraint failed") {
+        Some(ConstraintKind::ForeignKeyViolation)
+    } else {
+        None
+    }
+}
