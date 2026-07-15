@@ -5,9 +5,9 @@ use axum::{
 };
 
 use super::types::{
-    Channel, ChannelRow, CreateChannelRequest, ListChannelsQuery, PaginatedResponse,
-    UpdateChannelRequest,
+    Channel, CreateChannelRequest, ListChannelsQuery, PaginatedResponse, UpdateChannelRequest,
 };
+use crate::repository::channel_repository::row_to_channel;
 use crate::app_state::AppState;
 use crate::error::app::{ApiError, ApiResponse};
 
@@ -146,30 +146,3 @@ pub async fn delete(
 
 // parse_api_keys 已归 domain/channel（B1-C3），此处 re-export 保 channels.rs re-export 链兼容
 pub use crate::domain::channel::parse_api_keys;
-
-fn decode_json_field<T>(field_name: &str, value: &str) -> Result<T, String>
-where
-    T: serde::de::DeserializeOwned,
-{
-    serde_json::from_str(value).map_err(|e| format!("解析 {} 失败: {}", field_name, e))
-}
-
-pub(crate) fn row_to_channel(row: ChannelRow) -> Result<Channel, String> {
-    Ok(Channel {
-        id: row.id,
-        name: row.name,
-        api_keys: decode_json_field("channels.api_keys", &row.api_keys)?,
-        endpoints: decode_json_field("channels.endpoints", &row.endpoints)?,
-        models: decode_json_field("channels.models", &row.models)?,
-        rate_limit_rpm: row.rate_limit_rpm,
-        rate_limit_tpm: row.rate_limit_tpm,
-        failure_threshold: row.failure_threshold,
-        blacklist_minutes: row.blacklist_minutes,
-        concurrency: row.concurrency,
-        timeout_secs: row.timeout_secs,
-        max_concurrency: row.max_concurrency,
-        enabled: row.enabled,
-        created_at: row.created_at,
-        updated_at: row.updated_at,
-    })
-}

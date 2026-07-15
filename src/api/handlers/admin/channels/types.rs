@@ -5,24 +5,8 @@ use serde::{Deserialize, Serialize};
 // 透传这些名字，全下游（llm/、proxy/、repository/）零改动。
 pub use crate::domain::channel::{Channel, CustomHeader, EndpointConfig, EndpointType, UpstreamApiKey};
 
-#[derive(sqlx::FromRow)]
-pub struct ChannelRow {
-    pub(crate) id: String,
-    pub(crate) name: String,
-    pub(crate) api_keys: String,
-    pub(crate) endpoints: String,
-    pub(crate) models: String,
-    pub(crate) rate_limit_rpm: Option<i32>,
-    pub(crate) rate_limit_tpm: Option<i32>,
-    pub(crate) failure_threshold: i32,
-    pub(crate) blacklist_minutes: i32,
-    pub(crate) concurrency: i32,
-    pub(crate) timeout_secs: i32,
-    pub(crate) max_concurrency: i32,
-    pub(crate) enabled: bool,
-    pub(crate) created_at: String,
-    pub(crate) updated_at: String,
-}
+// ChannelRow（FromRow 行类型）已归 repository/channel_repository（B1-C4），此处 re-export 保兼容
+pub(crate) use crate::repository::channel_repository::ChannelRow;
 
 /// 列表查询参数
 #[derive(Debug, Deserialize)]

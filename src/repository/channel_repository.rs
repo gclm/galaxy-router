@@ -1,18 +1,39 @@
 //! Channel 数据访问层（v1.1.2 从 channels/crud.rs 迁入）。
 //!
-//! SQL 隔离在此层，返回 `ChannelRow`（FromRow）由 handler 调 `row_to_channel` 转 `Channel`。
+//! SQL 隔离在此层，返回 `ChannelRow`（FromRow，B1-C4 归位本层）由 handler 调
+//! `row_to_channel`（B1-C4 同归位）转 `Channel`。
 //!
-//! **分层妥协**：`ChannelRow` + 请求 DTO 暂借 `channels::types`——`EndpointType`/`EndpointConfig`
-//! 被 relay/proxy/metrics 深度依赖（9+ 处），移 domain 会连锁改 relay import，超 v1.1.2 范围。
-//! 待 relay 重构（v1.1.4/5）后这些类型可整体归位 domain。
+//! **遗留妥协**：CreateChannelRequest/UpdateChannelRequest/ListChannelsQuery 请求 DTO
+//! 仍借 `channels::types`（api 层），待后续"完全解耦 repo↔api"专项处理。
 
 use async_trait::async_trait;
 use sqlx::{AssertSqlSafe, Row, SqlitePool};
 
 use crate::api::handlers::admin::channels::{
-    ChannelRow, CreateChannelRequest, ListChannelsQuery, UpdateChannelRequest,
+    CreateChannelRequest, ListChannelsQuery, UpdateChannelRequest,
 };
+use crate::domain::channel::Channel;
 use crate::util::timeutil::tz_modifier;
+
+/// channels 表行映射（B1-C4 从 channels/types.rs 归位本层）
+#[derive(sqlx::FromRow)]
+pub struct ChannelRow {
+    pub(crate) id: String,
+    pub(crate) name: String,
+    pub(crate) api_keys: String,
+    pub(crate) endpoints: String,
+    pub(crate) models: String,
+    pub(crate) rate_limit_rpm: Option<i32>,
+    pub(crate) rate_limit_tpm: Option<i32>,
+    pub(crate) failure_threshold: i32,
+    pub(crate) blacklist_minutes: i32,
+    pub(crate) concurrency: i32,
+    pub(crate) timeout_secs: i32,
+    pub(crate) max_concurrency: i32,
+    pub(crate) enabled: bool,
+    pub(crate) created_at: String,
+    pub(crate) updated_at: String,
+}
 
 #[async_trait]
 pub trait ChannelRepository: Send + Sync {
@@ -255,4 +276,33 @@ impl ChannelRepository for SqliteChannelRepository {
         tx.commit().await?;
         Ok(Some(affected_route_ids))
     }
+}
+
+/// JSON 字段反序列化（row_to_channel 内部用，B1-C4 从 channels/crud.rs 归位）
+fn decode_json_field<T>(field_name: &str, value: &str) -> Result<T, String>
+where
+    T: serde::de::DeserializeOwned,
+{
+    serde_json::from_str(value).map_err(|e| format!("解析 {} 失败: {}", field_name, e))
+}
+
+/// ChannelRow → Channel 领域转换（B1-C4 从 channels/crud.rs 归位本层）
+pub(crate) fn row_to_channel(row: ChannelRow) -> Result<Channel, String> {
+    Ok(Channel {
+        id: row.id,
+        name: row.name,
+        api_keys: decode_json_field("channels.api_keys", &row.api_keys)?,
+        endpoints: decode_json_field("channels.endpoints", &row.endpoints)?,
+        models: decode_json_field("channels.models", &row.models)?,
+        rate_limit_rpm: row.rate_limit_rpm,
+        rate_limit_tpm: row.rate_limit_tpm,
+        failure_threshold: row.failure_threshold,
+        blacklist_minutes: row.blacklist_minutes,
+        concurrency: row.concurrency,
+        timeout_secs: row.timeout_secs,
+        max_concurrency: row.max_concurrency,
+        enabled: row.enabled,
+        created_at: row.created_at,
+        updated_at: row.updated_at,
+    })
 }

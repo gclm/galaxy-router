@@ -21,7 +21,7 @@ pub use types::{
 pub(crate) use types::ChannelRow;
 
 // CRUD handlers
-pub(crate) use crud::row_to_channel;
+pub(crate) use crate::repository::channel_repository::row_to_channel;
 pub use crud::{create, delete, get, list, parse_api_keys, update};
 
 // Probe handler
