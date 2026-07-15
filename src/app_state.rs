@@ -1,9 +1,8 @@
 //! 应用统一状态。
 //!
 //! v1.1.2：11 个 admin `*State` 全部合并到 `State<AppState>`。
-//! v1.1.3 待办：service 层填充（services 字段）、`new` 参数重构为 builder。
+//! D8：proxy 热路径路由/渠道查询（含缓存）下沉 service/routing，AppState 留薄委托。
 
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -16,6 +15,7 @@ use crate::auth::JwtService;
 use crate::infra::config::AppConfig;
 use crate::error::proxy::ProxyError;
 use crate::service::pricing::model::ModelRegistry;
+use crate::service::routing::RoutingService;
 use crate::service::stats::recorder::StatsRecorder;
 use crate::infra::cache::ProxyCache;
 use crate::domain::channel::ChannelInfo;
@@ -49,7 +49,8 @@ pub struct AppState {
     pub stats_recorder: StatsRecorder,
     pub rate_limiter: RateLimiter,
     pub queue: Option<RequestQueue>,
-    key_counter: Arc<AtomicU64>,
+    /// proxy 热路径：路由/渠道查询（含缓存协调），薄委托暴露给转发链路
+    pub routing: RoutingService,
     /// 上游转发客户端（300s + 可选 proxy.url，原 ProxyState.http_client）
     pub proxy_http_client: reqwest::Client,
     // --- Step C：请求插件链 ---
@@ -80,6 +81,11 @@ impl AppState {
             repositories.usage.clone(),
             repositories.settings.clone(),
         );
+        let routing = RoutingService::new(
+            repositories.route.clone(),
+            repositories.channel.clone(),
+            cache.clone(),
+        );
         Self {
             pool: pool.clone(),
             config,
@@ -96,7 +102,7 @@ impl AppState {
             stats_recorder,
             rate_limiter,
             queue: None,
-            key_counter: Arc::new(AtomicU64::new(0)),
+            routing,
             proxy_http_client,
             plugin_chain,
         }
@@ -115,110 +121,28 @@ pub struct ProxySuccess {
     pub body: Vec<u8>,
 }
 
-/// 路由与渠道查询（带缓存，原 ProxyState impl，Step B 迁入）
+/// 路由与渠道查询（D8：薄委托到 service/routing，proxy 调用方零改动）
 impl AppState {
-    /// 根据名称查找路由（带缓存）
     pub(crate) async fn find_route_by_name(
         &self,
         name: &str,
     ) -> Result<Option<RouteInfo>, ProxyError> {
-        // 1. 检查缓存
-        if let Some(group) = self.cache.get_group(name).await {
-            return Ok(Some(group));
-        }
-
-        // 2. 缓存未命中，查 repository
-        let Some((id, route_name)) = self
-            .repositories
-            .route
-            .find_enabled_by_name(name)
-            .await
-            .map_err(|e| ProxyError::DatabaseError(e.to_string()))?
-        else {
-            return Ok(None);
-        };
-        let items = self
-            .repositories
-            .route
-            .list_route_items_for_proxy(&id)
-            .await
-            .map_err(|e| ProxyError::DatabaseError(e.to_string()))?;
-        let group = RouteInfo {
-            id,
-            name: route_name,
-            items,
-        };
-        // 3. 写入缓存
-        self.cache.set_group(group.clone()).await;
-        Ok(Some(group))
+        self.routing.find_route_by_name(name).await
     }
 
-    /// 根据正则查找路由
     pub(crate) async fn find_route_by_regex(
         &self,
         model: &str,
     ) -> Result<Option<RouteInfo>, ProxyError> {
-        let routes = self
-            .repositories
-            .route
-            .list_enabled_with_regex()
-            .await
-            .map_err(|e| ProxyError::DatabaseError(e.to_string()))?;
-
-        for (id, name, match_regex) in routes {
-            if let Some(pattern) = match_regex
-                && let Some(re) = self.cache.get_compiled_regex(&pattern).await
-                && re.is_match(model)
-            {
-                let items = self
-                    .repositories
-                    .route
-                    .list_route_items_for_proxy(&id)
-                    .await
-                    .map_err(|e| ProxyError::DatabaseError(e.to_string()))?;
-                return Ok(Some(RouteInfo { id, name, items }));
-            }
-        }
-
-        Ok(None)
+        self.routing.find_route_by_regex(model).await
     }
 
-    /// 获取渠道信息（带缓存）
     pub(crate) async fn get_channel(&self, channel_id: &str) -> Result<ChannelInfo, ProxyError> {
-        // 1. 检查缓存
-        if let Some(channel) = self.cache.get_channel(channel_id).await {
-            return Ok(channel);
-        }
-
-        // 2. 缓存未命中，查 repository
-        let Some(channel) = self
-            .repositories
-            .channel
-            .get_enabled_for_proxy(channel_id)
-            .await
-            .map_err(|e| ProxyError::DatabaseError(e.to_string()))?
-        else {
-            return Err(ProxyError::ChannelNotFound("渠道不存在或已禁用".to_string()));
-        };
-
-        // 3. 写入缓存
-        self.cache.set_channel(channel.clone()).await;
-
-        Ok(channel)
+        self.routing.get_channel(channel_id).await
     }
 
-    /// 生成一次请求内的同渠道 Key 尝试序列（跳过禁用 Key）。
-    pub fn api_key_attempts(&self, channel: &ChannelInfo) -> Vec<String> {
-        let enabled_keys = channel.enabled_api_keys();
-        if enabled_keys.is_empty() {
-            return vec![String::new()];
-        }
-
-        let start = self.key_counter.fetch_add(1, Ordering::Relaxed) as usize % enabled_keys.len();
-
-        (0..enabled_keys.len())
-            .map(|offset| enabled_keys[(start + offset) % enabled_keys.len()].key.clone())
-            .collect()
+    pub(crate) fn api_key_attempts(&self, channel: &ChannelInfo) -> Vec<String> {
+        self.routing.api_key_attempts(channel)
     }
 }
 
@@ -256,13 +180,19 @@ impl AppState {
             repositories.usage.clone(),
             repositories.settings.clone(),
         );
+        let cache = ProxyCache::new();
+        let routing = RoutingService::new(
+            repositories.route.clone(),
+            repositories.channel.clone(),
+            cache.clone(),
+        );
         Self {
             pool: pool.clone(),
             config,
             repositories,
             start_time: Arc::new(Instant::now()),
             jwt_service: JwtService::new("test", 24),
-            cache: ProxyCache::new(),
+            cache,
             api_key_cache: ApiKeyCache::new(),
             channel_http_client: reqwest::Client::new(),
             model_registry,
@@ -277,7 +207,7 @@ impl AppState {
             stats_recorder,
             rate_limiter: RateLimiter::new(),
             queue: None,
-            key_counter: Arc::new(AtomicU64::new(0)),
+            routing,
             proxy_http_client: reqwest::Client::new(),
             plugin_chain: PluginChain::new_empty(),
         }
