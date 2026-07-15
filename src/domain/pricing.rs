@@ -25,3 +25,24 @@ pub struct ModelInfo {
     pub supports_system_messages: Option<bool>,
     pub supports_tool_choice: Option<bool>,
 }
+
+/// 更新模型信息请求（部分字段，缺失保留现值）
+#[derive(Debug, Deserialize)]
+pub struct UpdateModelRequest {
+    pub model: String,
+    pub provider: Option<String>,
+    pub mode: Option<String>,
+    pub input_price: Option<f64>,
+    pub output_price: Option<f64>,
+    pub cache_read_price: Option<f64>,
+    pub cache_creation_price: Option<f64>,
+    pub max_input_tokens: Option<i64>,
+    pub max_output_tokens: Option<i64>,
+    pub supports_function_calling: Option<bool>,
+    pub supports_reasoning: Option<bool>,
+    pub supports_vision: Option<bool>,
+    pub supports_pdf_input: Option<bool>,
+    pub supports_prompt_caching: Option<bool>,
+    pub supports_system_messages: Option<bool>,
+    pub supports_tool_choice: Option<bool>,
+}

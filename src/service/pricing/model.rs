@@ -4,7 +4,7 @@ use std::path::Path;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
-use crate::domain::pricing::ModelInfo;
+use crate::domain::pricing::{ModelInfo, UpdateModelRequest};
 use crate::repository::model_info_repository::{ModelInfoRepository, SqliteModelInfoRepository};
 
 /// models.dev API 响应
@@ -233,6 +233,48 @@ impl ModelRegistry {
         pricing.insert(info.model.clone(), info);
 
         Ok(())
+    }
+
+    /// 更新模型信息（部分字段合并：缺失字段保留现值，无现值用默认）
+    pub async fn update_model_info(&self, req: UpdateModelRequest) -> Result<ModelInfo, String> {
+        let existing = self.get_model_info(&req.model).await.unwrap_or_else(|| ModelInfo {
+            model: req.model.clone(),
+            provider: String::new(),
+            mode: "chat".to_string(),
+            input_price: None,
+            output_price: None,
+            cache_read_price: None,
+            cache_creation_price: None,
+            max_input_tokens: None,
+            max_output_tokens: None,
+            supports_function_calling: None,
+            supports_reasoning: None,
+            supports_vision: None,
+            supports_pdf_input: None,
+            supports_prompt_caching: None,
+            supports_system_messages: None,
+            supports_tool_choice: None,
+        });
+        let info = ModelInfo {
+            model: req.model,
+            provider: req.provider.unwrap_or(existing.provider),
+            mode: req.mode.unwrap_or(existing.mode),
+            input_price: req.input_price.or(existing.input_price),
+            output_price: req.output_price.or(existing.output_price),
+            cache_read_price: req.cache_read_price.or(existing.cache_read_price),
+            cache_creation_price: req.cache_creation_price.or(existing.cache_creation_price),
+            max_input_tokens: req.max_input_tokens.or(existing.max_input_tokens),
+            max_output_tokens: req.max_output_tokens.or(existing.max_output_tokens),
+            supports_function_calling: req.supports_function_calling.or(existing.supports_function_calling),
+            supports_reasoning: req.supports_reasoning.or(existing.supports_reasoning),
+            supports_vision: req.supports_vision.or(existing.supports_vision),
+            supports_pdf_input: req.supports_pdf_input.or(existing.supports_pdf_input),
+            supports_prompt_caching: req.supports_prompt_caching.or(existing.supports_prompt_caching),
+            supports_system_messages: req.supports_system_messages.or(existing.supports_system_messages),
+            supports_tool_choice: req.supports_tool_choice.or(existing.supports_tool_choice),
+        };
+        self.set_model_info(info.clone()).await?;
+        Ok(info)
     }
 }
 
