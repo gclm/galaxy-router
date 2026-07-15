@@ -9,7 +9,8 @@ use async_trait::async_trait;
 use sqlx::{AssertSqlSafe, Row, SqlitePool};
 
 use crate::domain::route::{
-    AddRouteItemRequest, CreateRouteRequest, ListRoutesQuery, Route, RouteItem, UpdateRouteRequest,
+    AddRouteItemRequest, CreateRouteRequest, ListRoutesQuery, Route, RouteItem, RouteItemInfo,
+    UpdateRouteRequest,
 };
 use crate::util::timeutil::tz_modifier;
 
@@ -32,6 +33,19 @@ pub trait RouteRepository: Send + Sync {
     ) -> Result<Option<RouteItem>, sqlx::Error>;
     /// 删除分组项。返回是否实际删除
     async fn delete_item(&self, route_id: &str, item_id: &str) -> Result<bool, sqlx::Error>;
+
+    // ── proxy 热路径查询（轻量，不含 provider 解析；priority ASC 匹配 proxy 语义）──
+    /// 按名称查启用的路由，返回 (id, name)。
+    async fn find_enabled_by_name(&self, name: &str) -> Result<Option<(String, String)>, sqlx::Error>;
+    /// 列出启用且带正则的路由 (id, name, match_regex)。
+    async fn list_enabled_with_regex(
+        &self,
+    ) -> Result<Vec<(String, String, Option<String>)>, sqlx::Error>;
+    /// 路由项（proxy 形状，priority ASC, weight DESC）。
+    async fn list_route_items_for_proxy(
+        &self,
+        route_id: &str,
+    ) -> Result<Vec<RouteItemInfo>, sqlx::Error>;
 }
 
 pub struct SqliteRouteRepository {
@@ -381,6 +395,46 @@ impl RouteRepository for SqliteRouteRepository {
             .execute(&self.pool)
             .await?;
         Ok(result.rows_affected() > 0)
+    }
+
+    async fn find_enabled_by_name(&self, name: &str) -> Result<Option<(String, String)>, sqlx::Error> {
+        sqlx::query_as::<_, (String, String)>(
+            "SELECT id, name FROM routes WHERE name = ? AND enabled = 1",
+        )
+        .bind(name)
+        .fetch_optional(&self.pool)
+        .await
+    }
+
+    async fn list_enabled_with_regex(
+        &self,
+    ) -> Result<Vec<(String, String, Option<String>)>, sqlx::Error> {
+        sqlx::query_as::<_, (String, String, Option<String>)>(
+            "SELECT id, name, match_regex FROM routes WHERE enabled = 1 AND match_regex IS NOT NULL",
+        )
+        .fetch_all(&self.pool)
+        .await
+    }
+
+    async fn list_route_items_for_proxy(
+        &self,
+        route_id: &str,
+    ) -> Result<Vec<RouteItemInfo>, sqlx::Error> {
+        let items = sqlx::query_as::<_, (String, String, i32, i32)>(
+            "SELECT channel_id, model_name, priority, weight FROM route_items WHERE route_id = ? ORDER BY priority ASC, weight DESC",
+        )
+        .bind(route_id)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(items
+            .into_iter()
+            .map(|(channel_id, model_name, priority, weight)| RouteItemInfo {
+                channel_id,
+                model_name,
+                priority,
+                weight,
+            })
+            .collect())
     }
 }
 

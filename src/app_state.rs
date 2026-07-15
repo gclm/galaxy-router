@@ -23,7 +23,7 @@ use crate::domain::channel::ChannelInfo;
 use crate::llm::relay::queue::RequestQueue;
 use crate::llm::relay::ratelimit::RateLimiter;
 use crate::repository::Repositories;
-use crate::domain::route::{RouteInfo, RouteItemInfo};
+use crate::domain::route::RouteInfo;
 use crate::llm::scheduler::state::LoadBalancerState;
 use crate::llm::plugin::PluginChain;
 
@@ -128,29 +128,30 @@ impl AppState {
             return Ok(Some(group));
         }
 
-        // 2. 缓存未命中，查询数据库
-        let result = sqlx::query_as::<_, (String, String)>(
-            "SELECT id, name FROM routes WHERE name = ? AND enabled = 1",
-        )
-        .bind(name)
-        .fetch_optional(&self.pool)
-        .await
-        .map_err(|e| ProxyError::DatabaseError(e.to_string()))?;
-
-        match result {
-            Some((id, name)) => {
-                let items = self.get_route_items(&id).await?;
-                let group = RouteInfo {
-                    id,
-                    name: name.clone(),
-                    items,
-                };
-                // 3. 写入缓存
-                self.cache.set_group(group.clone()).await;
-                Ok(Some(group))
-            }
-            None => Ok(None),
-        }
+        // 2. 缓存未命中，查 repository
+        let Some((id, route_name)) = self
+            .repositories
+            .route
+            .find_enabled_by_name(name)
+            .await
+            .map_err(|e| ProxyError::DatabaseError(e.to_string()))?
+        else {
+            return Ok(None);
+        };
+        let items = self
+            .repositories
+            .route
+            .list_route_items_for_proxy(&id)
+            .await
+            .map_err(|e| ProxyError::DatabaseError(e.to_string()))?;
+        let group = RouteInfo {
+            id,
+            name: route_name,
+            items,
+        };
+        // 3. 写入缓存
+        self.cache.set_group(group.clone()).await;
+        Ok(Some(group))
     }
 
     /// 根据正则查找路由
@@ -158,45 +159,29 @@ impl AppState {
         &self,
         model: &str,
     ) -> Result<Option<RouteInfo>, ProxyError> {
-        let routes = sqlx::query_as::<_, (String, String, Option<String>)>(
-            "SELECT id, name, match_regex FROM routes WHERE enabled = 1 AND match_regex IS NOT NULL",
-        )
-        .fetch_all(&self.pool)
-        .await
-        .map_err(|e| ProxyError::DatabaseError(e.to_string()))?;
+        let routes = self
+            .repositories
+            .route
+            .list_enabled_with_regex()
+            .await
+            .map_err(|e| ProxyError::DatabaseError(e.to_string()))?;
 
         for (id, name, match_regex) in routes {
             if let Some(pattern) = match_regex
                 && let Some(re) = self.cache.get_compiled_regex(&pattern).await
                 && re.is_match(model)
             {
-                let items = self.get_route_items(&id).await?;
+                let items = self
+                    .repositories
+                    .route
+                    .list_route_items_for_proxy(&id)
+                    .await
+                    .map_err(|e| ProxyError::DatabaseError(e.to_string()))?;
                 return Ok(Some(RouteInfo { id, name, items }));
             }
         }
 
         Ok(None)
-    }
-
-    /// 获取路由项
-    async fn get_route_items(&self, route_id: &str) -> Result<Vec<RouteItemInfo>, ProxyError> {
-        let items = sqlx::query_as::<_, (String, String, i32, i32)>(
-            "SELECT channel_id, model_name, priority, weight FROM route_items WHERE route_id = ? ORDER BY priority ASC, weight DESC",
-        )
-        .bind(route_id)
-        .fetch_all(&self.pool)
-        .await
-        .map_err(|e| ProxyError::DatabaseError(e.to_string()))?;
-
-        Ok(items
-            .into_iter()
-            .map(|(channel_id, model_name, priority, weight)| RouteItemInfo {
-                channel_id,
-                model_name,
-                priority,
-                weight,
-            })
-            .collect())
     }
 
     /// 获取渠道信息（带缓存）
