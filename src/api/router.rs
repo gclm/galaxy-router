@@ -30,6 +30,7 @@ use crate::infra::config::{AppConfig, QueuingConfig};
 use crate::app_state::AppState;
 use crate::infra::cache::ProxyCache;
 use crate::static_assets;
+use crate::repository::auth_repository::{AuthRepository, SqliteAuthRepository};
 use crate::repository::settings_repository::{SettingsRepository, SqliteSettingsRepository};
 
 /// 创建应用路由
@@ -251,8 +252,8 @@ async fn health_check(
     axum::Extension(pool): axum::Extension<SqlitePool>,
     axum::Extension(start_time): axum::Extension<Arc<Instant>>,
 ) -> Json<Value> {
-    let needs_setup = sqlx::query_scalar::<_, i32>("SELECT COUNT(*) FROM users")
-        .fetch_one(&pool)
+    let needs_setup = SqliteAuthRepository::new(pool.clone())
+        .count_users()
         .await
         .map(|count| count == 0)
         .unwrap_or(true);

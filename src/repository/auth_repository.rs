@@ -30,6 +30,9 @@ pub trait AuthRepository: Send + Sync {
         user_id: &str,
         password_hash: &str,
     ) -> Result<bool, sqlx::Error>;
+
+    /// 用户总数（健康检查 needs_setup 判定）。
+    async fn count_users(&self) -> Result<i64, sqlx::Error>;
 }
 
 pub struct SqliteAuthRepository {
@@ -115,5 +118,12 @@ impl AuthRepository for SqliteAuthRepository {
         .execute(&self.pool)
         .await?;
         Ok(result.rows_affected() > 0)
+    }
+
+    async fn count_users(&self) -> Result<i64, sqlx::Error> {
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM users")
+            .fetch_one(&self.pool)
+            .await?;
+        Ok(count)
     }
 }
