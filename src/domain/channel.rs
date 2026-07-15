@@ -77,6 +77,26 @@ pub struct CustomHeader {
     pub value: String,
 }
 
+/// 渠道聚合根
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct Channel {
+    pub id: String,
+    pub name: String,
+    pub api_keys: Vec<UpstreamApiKey>,
+    pub endpoints: Vec<EndpointConfig>,
+    pub models: Vec<String>,
+    pub rate_limit_rpm: Option<i32>,
+    pub rate_limit_tpm: Option<i32>,
+    pub failure_threshold: i32,
+    pub blacklist_minutes: i32,
+    pub concurrency: i32,
+    pub timeout_secs: i32,
+    pub max_concurrency: i32,
+    pub enabled: bool,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
 fn default_true() -> bool {
     true
 }

@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 // 跨层基础类型（EndpointType/EndpointConfig/UpstreamApiKey/CustomHeader）已归
 // `domain::channel`（B1-C1）。此处 re-export 保 import 兼容：channels.rs re-export hub
 // 透传这些名字，全下游（llm/、proxy/、repository/）零改动。
-pub use crate::domain::channel::{CustomHeader, EndpointConfig, EndpointType, UpstreamApiKey};
+pub use crate::domain::channel::{Channel, CustomHeader, EndpointConfig, EndpointType, UpstreamApiKey};
 
 #[derive(sqlx::FromRow)]
 pub struct ChannelRow {
@@ -40,26 +40,6 @@ pub struct ListChannelsQuery {
 pub struct PaginatedResponse<T: Serialize> {
     pub items: Vec<T>,
     pub total: i64,
-}
-
-/// 渠道
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct Channel {
-    pub id: String,
-    pub name: String,
-    pub api_keys: Vec<UpstreamApiKey>,
-    pub endpoints: Vec<EndpointConfig>,
-    pub models: Vec<String>,
-    pub rate_limit_rpm: Option<i32>,
-    pub rate_limit_tpm: Option<i32>,
-    pub failure_threshold: i32,
-    pub blacklist_minutes: i32,
-    pub concurrency: i32,
-    pub timeout_secs: i32,
-    pub max_concurrency: i32,
-    pub enabled: bool,
-    pub created_at: String,
-    pub updated_at: String,
 }
 
 /// 创建渠道请求
