@@ -26,7 +26,6 @@ use crate::repository::Repositories;
 use crate::domain::route::{RouteInfo, RouteItemInfo};
 use crate::scheduler::state::LoadBalancerState;
 use crate::llm::plugin::PluginChain;
-use crate::service::Services;
 
 /// 应用统一状态。
 ///
@@ -38,8 +37,6 @@ pub struct AppState {
     pub pool: SqlitePool,
     pub config: Arc<AppConfig>,
     pub repositories: Repositories,
-    #[allow(dead_code)] // v1.1.0 骨架，待 service 层填充
-    pub services: Services,
     pub start_time: Arc<Instant>,
     pub jwt_service: JwtService,
     pub cache: ProxyCache,
@@ -88,7 +85,6 @@ impl AppState {
             pool: pool.clone(),
             config,
             repositories,
-            services: Services::new(),
             start_time,
             jwt_service,
             cache,
@@ -312,7 +308,6 @@ impl AppState {
             pool: pool.clone(),
             config,
             repositories,
-            services: Services::new(),
             start_time: Arc::new(Instant::now()),
             jwt_service: JwtService::new("test", 24),
             cache: ProxyCache::new(),
