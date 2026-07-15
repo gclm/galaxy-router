@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::app_state::AppState;
 use crate::error::app::{ApiError, ApiResponse};
+use crate::service::settings::{SettingsError, SettingsService};
 
 // SettingResponse 已移至 domain::setting（v1.1.2），re-export 保兼容
 pub use crate::domain::setting::SettingResponse;
@@ -49,68 +50,29 @@ pub struct AuthInfo {
 pub async fn list(
     State(state): State<AppState>,
 ) -> Result<Json<ApiResponse<Vec<SettingResponse>>>, (StatusCode, Json<ApiError>)> {
-    let items = state
-        .repositories
-        .settings
+    let svc = SettingsService::new(state.repositories.settings.clone(), state.plugin_chain.clone());
+    let items = svc
         .list()
         .await
         .map_err(|e| ApiError::internal_error(e.to_string()))?;
     Ok(Json(ApiResponse::success(items)))
 }
 
-/// 允许通过 API 更新的设置项白名单
-const ALLOWED_SETTING_KEYS: &[&str] = &[
-    "scheduler.top_k",
-    "scheduler.score_weights",
-    "sticky_session.enabled",
-    "sticky_session.ttl_seconds",
-    "proxy.enabled",
-    "proxy.url",
-    "cors.allow_origins",
-    "github.repo",
-    "update.mirror",
-    // 插件开关（Step C）
-    "plugin.cch_rewrite",
-    "plugin.tracking_removal",
-    "plugin.cache_key_injection",
-    "plugin.thinking_fix",
-    "plugin.master_switch",
-    // Step E：响应内容记录开关
-    "usage.record_content",
-];
-
 pub async fn update(
     State(state): State<AppState>,
     Path(key): Path<String>,
     Json(body): Json<UpdateSettingRequest>,
 ) -> Result<Json<ApiResponse<()>>, (StatusCode, Json<ApiError>)> {
-    if !ALLOWED_SETTING_KEYS.contains(&key.as_str()) {
-        return Err(ApiError::bad_request(format!(
-            "不允许更新的设置项: {}",
-            key
-        )));
-    }
-
-    let updated = state
-        .repositories
-        .settings
-        .update(&key, &body.value)
+    let svc = SettingsService::new(state.repositories.settings.clone(), state.plugin_chain.clone());
+    svc.update(&key, &body.value)
         .await
-        .map_err(|e| ApiError::internal_error(e.to_string()))?;
-
-    if !updated {
-        return Err(ApiError::not_found(format!("设置项 {} 不存在", key)));
-    }
-
-    // 插件开关变更：重建 PluginChain 内存缓存（Step C）
-    if key.starts_with("plugin.") {
-        state
-            .plugin_chain
-            .refresh(&*state.repositories.settings)
-            .await
-            .map_err(|e| ApiError::internal_error(e.to_string()))?;
-    }
-
+        .map_err(|e| match e {
+            SettingsError::KeyNotAllowed(k) => {
+                ApiError::bad_request(format!("不允许更新的设置项: {}", k))
+            }
+            SettingsError::NotFound(k) => ApiError::not_found(format!("设置项 {} 不存在", k)),
+            SettingsError::Internal(msg) => ApiError::internal_error(msg),
+        })?;
     Ok(Json(ApiResponse::success(())))
 }
 

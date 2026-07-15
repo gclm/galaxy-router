@@ -8,3 +8,4 @@ pub mod pricing;
 pub mod backup;
 pub mod update_check;
 pub mod discovery;
+pub mod settings;
