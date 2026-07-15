@@ -21,7 +21,7 @@ use sqlx::SqlitePool;
 
 use crate::error::app::ApiError;
 use crate::auth::decode_jwt;
-use crate::metrics::recorder::{RequestRecord, StatsRecorder};
+use crate::service::stats::recorder::{RequestRecord, StatsRecorder};
 
 /// 缓存条目 TTL（秒）
 const CACHE_TTL_SECS: u64 = 300;

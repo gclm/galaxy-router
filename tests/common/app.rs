@@ -7,7 +7,7 @@ use galaxy_router::infra::config::{
     ServerConfig,
 };
 use galaxy_router::infra::db::Database;
-use galaxy_router::metrics::model::ModelRegistry;
+use galaxy_router::service::pricing::model::ModelRegistry;
 use sqlx::SqlitePool;
 use tower::ServiceExt;
 

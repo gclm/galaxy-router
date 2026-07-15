@@ -5,7 +5,7 @@ use axum::http::HeaderMap;
 use crate::api::handlers::admin::channels::EndpointType;
 use crate::error::proxy::{ErrorFormat, ProxyError};
 use crate::app_state::AppState;
-use crate::metrics::recorder::save_request_record;
+use crate::service::stats::recorder::save_request_record;
 
 use super::access::{check_budget, validate_model_access};
 // 经 mod.rs 重导出路径引用（保持 proxy_request/proxy_stream 的重导出被消费，避免 bin unused warning）

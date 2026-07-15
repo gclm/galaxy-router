@@ -6,10 +6,10 @@ use std::sync::{Arc, Mutex};
 
 use crate::api::handlers::admin::channels::EndpointType;
 use crate::metrics::attempt::AttemptStats;
-use crate::metrics::recorder::{
+use crate::service::stats::recorder::{
     channel_attempts_snapshot, record_stream_completion, RequestRecord,
 };
-use crate::metrics::usage::{calculate_cost, resolve_stream_usage};
+use crate::service::stats::usage::{calculate_cost, resolve_stream_usage};
 use crate::protocol::sse::{
     apply_sse_usage, collect_sse_content, extract_error_from_sse, extract_usage_from_sse,
     find_sse_boundary, format_stream_error_event, sanitize_upstream_error,
@@ -1053,7 +1053,7 @@ impl StreamKeyLoopOutcome {
 mod tests {
     use crate::infra::db::Database;
     use crate::llm::plugin::PluginChain;
-    use crate::metrics::model::ModelRegistry;
+    use crate::service::pricing::model::ModelRegistry;
     use crate::relay::pipeline::proxy_stream;
     use axum::body::Body;
     use axum::{Router, routing::post};

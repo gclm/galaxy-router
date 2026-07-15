@@ -66,7 +66,7 @@ async fn main() -> Result<()> {
     // 初始化模型注册表：从 DB 加载，空则回退缓存文件
     let cache_path = PathBuf::from(&config.pricing.cache_path);
     let providers = config.pricing.providers.clone();
-    let model_registry = metrics::model::ModelRegistry::new(database.pool().clone());
+    let model_registry = crate::service::pricing::model::ModelRegistry::new(database.pool().clone());
 
     model_registry
         .load_from_db()
@@ -109,7 +109,7 @@ async fn main() -> Result<()> {
     info!("Scheduler started");
 
     // 模型信息定时刷新
-    let pricing_refresher = Arc::new(metrics::pricing::PricingRefresher::new(
+    let pricing_refresher = Arc::new(crate::service::pricing::refresher::PricingRefresher::new(
         model_registry.clone(),
         PathBuf::from(&config.pricing.cache_path),
         config.pricing.providers.clone(),

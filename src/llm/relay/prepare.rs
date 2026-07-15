@@ -2,7 +2,7 @@ use axum::http::HeaderMap;
 
 use crate::api::handlers::admin::channels::{CustomHeader, EndpointType};
 use crate::metrics::attempt::AttemptStats;
-use crate::metrics::usage::estimator::TokenEstimator;
+use crate::util::estimator::TokenEstimator;
 use crate::relay::converter::{RelayPipeline, RelayPipelineRequest};
 use crate::error::proxy::ProxyError;
 use crate::llm::plugin::{PluginChain, PluginContext};
@@ -116,7 +116,7 @@ pub(crate) fn estimate_tokens(text: &str) -> i32 {
     }
     // 默认使用 OpenAI 权重
     let estimator = TokenEstimator::new();
-    estimator.estimate(text, &crate::metrics::usage::estimator::Provider::OpenAI)
+    estimator.estimate(text, &crate::util::estimator::Provider::OpenAI)
 }
 
 /// 估算 token 数（指定模型）

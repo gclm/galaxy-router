@@ -8,7 +8,7 @@ use axum::body::Bytes;
 
 use crate::api::handlers::admin::channels::EndpointType;
 use crate::app_state::AppState;
-use crate::metrics::recorder::RequestRecord;
+use crate::service::stats::recorder::RequestRecord;
 use crate::relay::converter::RelayPipeline;
 
 /// 仅在未被 decrement 过时执行一次 decrement（用于流式请求的错误路径）

@@ -4,7 +4,7 @@ use axum::http::{HeaderMap, StatusCode};
 use std::pin::Pin;
 
 use crate::api::handlers::admin::channels::EndpointType;
-use crate::metrics::recorder::save_request_record;
+use crate::service::stats::recorder::save_request_record;
 use crate::relay::candidates::build_relay_candidates;
 use crate::error::proxy::ProxyError;
 use crate::app_state::AppState;

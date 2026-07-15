@@ -11,7 +11,7 @@ use crate::error::app::{ApiError, ApiResponse};
 /// 获取所有模型信息
 pub async fn list(
     State(state): State<AppState>,
-) -> Result<Json<ApiResponse<Vec<crate::metrics::model::ModelInfo>>>, (StatusCode, Json<ApiError>)>
+) -> Result<Json<ApiResponse<Vec<crate::service::pricing::model::ModelInfo>>>, (StatusCode, Json<ApiError>)>
 {
     let models = state.model_registry.get_all_models().await;
     Ok(Json(ApiResponse::success(models)))
@@ -21,7 +21,7 @@ pub async fn list(
 pub async fn get(
     State(state): State<AppState>,
     Path(model): Path<String>,
-) -> Result<Json<ApiResponse<crate::metrics::model::ModelInfo>>, (StatusCode, Json<ApiError>)> {
+) -> Result<Json<ApiResponse<crate::service::pricing::model::ModelInfo>>, (StatusCode, Json<ApiError>)> {
     match state.model_registry.get_model_info(&model).await {
         Some(info) => Ok(Json(ApiResponse::success(info))),
         None => Err(ApiError::not_found(format!("模型 {} 不存在", model))),
@@ -53,10 +53,10 @@ pub struct UpdateModelRequest {
 pub async fn update(
     State(state): State<AppState>,
     Json(req): Json<UpdateModelRequest>,
-) -> Result<Json<ApiResponse<crate::metrics::model::ModelInfo>>, (StatusCode, Json<ApiError>)> {
+) -> Result<Json<ApiResponse<crate::service::pricing::model::ModelInfo>>, (StatusCode, Json<ApiError>)> {
     // 先获取现有信息用于合并
     let existing = state.model_registry.get_model_info(&req.model).await;
-    let existing = existing.unwrap_or_else(|| crate::metrics::model::ModelInfo {
+    let existing = existing.unwrap_or_else(|| crate::service::pricing::model::ModelInfo {
         model: req.model.clone(),
         provider: String::new(),
         mode: "chat".to_string(),
@@ -75,7 +75,7 @@ pub async fn update(
         supports_tool_choice: None,
     });
 
-    let info = crate::metrics::model::ModelInfo {
+    let info = crate::service::pricing::model::ModelInfo {
         model: req.model,
         provider: req.provider.unwrap_or(existing.provider),
         mode: req.mode.unwrap_or(existing.mode),

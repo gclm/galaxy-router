@@ -39,7 +39,7 @@ pub async fn create_router(
     queuing: &QueuingConfig,
     _server_addr: &str,
     config: AppConfig,
-    model_registry: crate::metrics::model::ModelRegistry,
+    model_registry: crate::service::pricing::model::ModelRegistry,
     lb_state: crate::scheduler::state::LoadBalancerState,
     rate_limiter: crate::relay::ratelimit::RateLimiter,
 ) -> Router {
