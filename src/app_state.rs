@@ -10,7 +10,6 @@ use std::time::Instant;
 use axum::http::StatusCode;
 use sqlx::SqlitePool;
 
-use crate::domain::channel::{EndpointConfig, UpstreamApiKey, parse_api_keys};
 use crate::api::handlers::admin::update_check::UpdateCheckContext;
 use crate::api::middleware::ApiKeyCache;
 use crate::auth::JwtService;
@@ -191,42 +190,15 @@ impl AppState {
             return Ok(channel);
         }
 
-        // 2. 缓存未命中，查询数据库
-        let result = sqlx::query_as::<_, (String, String, String, String, String, i32, i32, i32, i32)>(
-            "SELECT id, name, api_keys, endpoints, models, COALESCE(timeout_secs, 300), COALESCE(max_concurrency, 0), COALESCE(failure_threshold, 3), COALESCE(blacklist_minutes, 10) FROM channels WHERE id = ? AND enabled = 1",
-        )
-        .bind(channel_id)
-        .fetch_optional(&self.pool)
-        .await
-        .map_err(|e| ProxyError::DatabaseError(e.to_string()))?;
-
-        let (
-            id,
-            name,
-            api_keys_str,
-            endpoints_str,
-            models_str,
-            timeout_secs,
-            max_concurrency,
-            failure_threshold,
-            blacklist_minutes,
-        ) = result.ok_or_else(|| ProxyError::ChannelNotFound("渠道不存在或已禁用".to_string()))?;
-
-        let api_keys: Vec<UpstreamApiKey> = parse_api_keys(&api_keys_str);
-        let endpoints: Vec<EndpointConfig> =
-            serde_json::from_str(&endpoints_str).unwrap_or_default();
-        let models = parse_models(&models_str);
-
-        let channel = ChannelInfo {
-            id,
-            name,
-            api_keys,
-            endpoints,
-            models,
-            timeout_secs: timeout_secs as u64,
-            max_concurrency: max_concurrency as u32,
-            failure_threshold: failure_threshold as u64,
-            blacklist_minutes: blacklist_minutes as i64,
+        // 2. 缓存未命中，查 repository
+        let Some(channel) = self
+            .repositories
+            .channel
+            .get_enabled_for_proxy(channel_id)
+            .await
+            .map_err(|e| ProxyError::DatabaseError(e.to_string()))?
+        else {
+            return Err(ProxyError::ChannelNotFound("渠道不存在或已禁用".to_string()));
         };
 
         // 3. 写入缓存
@@ -248,11 +220,6 @@ impl AppState {
             .map(|offset| enabled_keys[(start + offset) % enabled_keys.len()].key.clone())
             .collect()
     }
-}
-
-/// 解析 models 字段（原 state.rs 私有 fn）
-fn parse_models(models_str: &str) -> Vec<String> {
-    serde_json::from_str(models_str).unwrap_or_default()
 }
 
 #[cfg(test)]
@@ -314,28 +281,5 @@ impl AppState {
             proxy_http_client: reqwest::Client::new(),
             plugin_chain: PluginChain::new_empty(),
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn parse_models_handles_valid_json() {
-        assert_eq!(
-            parse_models(r#"["gpt-4", "gpt-3.5"]"#),
-            vec!["gpt-4", "gpt-3.5"]
-        );
-    }
-
-    #[test]
-    fn parse_models_falls_back_on_invalid_json() {
-        assert!(parse_models("not json").is_empty());
-    }
-
-    #[test]
-    fn parse_models_falls_back_on_empty_string() {
-        assert!(parse_models("").is_empty());
     }
 }

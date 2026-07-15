@@ -9,7 +9,8 @@ use async_trait::async_trait;
 use sqlx::{AssertSqlSafe, Row, SqlitePool};
 
 use crate::domain::channel::{
-    Channel, CreateChannelRequest, ListChannelsQuery, UpdateChannelRequest,
+    Channel, ChannelInfo, CreateChannelRequest, ListChannelsQuery, UpdateChannelRequest,
+    parse_api_keys,
 };
 use crate::util::timeutil::tz_modifier;
 
@@ -42,6 +43,9 @@ pub trait ChannelRepository: Send + Sync {
     async fn update(&self, id: &str, req: UpdateChannelRequest) -> Result<Option<ChannelRow>, sqlx::Error>;
     /// 删除（事务：route_items + channel）。返回 None=不存在；Some=受影响 route_ids（供 handler 缓存失效）
     async fn delete(&self, id: &str) -> Result<Option<Vec<String>>, sqlx::Error>;
+
+    /// proxy 热路径：按 id 取启用渠道（COALESCE 默认值 + enabled 过滤），返回 ChannelInfo。
+    async fn get_enabled_for_proxy(&self, id: &str) -> Result<Option<ChannelInfo>, sqlx::Error>;
 }
 
 pub struct SqliteChannelRepository {
@@ -273,6 +277,32 @@ impl ChannelRepository for SqliteChannelRepository {
 
         tx.commit().await?;
         Ok(Some(affected_route_ids))
+    }
+
+    async fn get_enabled_for_proxy(&self, id: &str) -> Result<Option<ChannelInfo>, sqlx::Error> {
+        let row: Option<(String, String, String, String, String, i32, i32, i32, i32)> =
+            sqlx::query_as(
+                "SELECT id, name, api_keys, endpoints, models, COALESCE(timeout_secs, 300), COALESCE(max_concurrency, 0), COALESCE(failure_threshold, 3), COALESCE(blacklist_minutes, 10) FROM channels WHERE id = ? AND enabled = 1",
+            )
+            .bind(id)
+            .fetch_optional(&self.pool)
+            .await?;
+
+        let Some((id, name, api_keys_str, endpoints_str, models_str, timeout_secs, max_concurrency, failure_threshold, blacklist_minutes)) = row else {
+            return Ok(None);
+        };
+
+        Ok(Some(ChannelInfo {
+            id,
+            name,
+            api_keys: parse_api_keys(&api_keys_str),
+            endpoints: serde_json::from_str(&endpoints_str).unwrap_or_default(),
+            models: serde_json::from_str(&models_str).unwrap_or_default(),
+            timeout_secs: timeout_secs as u64,
+            max_concurrency: max_concurrency as u32,
+            failure_threshold: failure_threshold as u64,
+            blacklist_minutes: blacklist_minutes as i64,
+        }))
     }
 }
 
