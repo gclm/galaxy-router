@@ -2,7 +2,6 @@ pub mod api;
 pub mod auth;
 pub mod infra;
 pub mod error;
-pub mod metrics;
 pub use crate::llm::protocol;
 pub use crate::llm::relay;
 pub use crate::llm::scheduler;

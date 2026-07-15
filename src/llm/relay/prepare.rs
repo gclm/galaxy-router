@@ -1,7 +1,7 @@
 use axum::http::HeaderMap;
 
 use crate::api::handlers::admin::channels::{CustomHeader, EndpointType};
-use crate::metrics::attempt::AttemptStats;
+use crate::service::stats::attempt::AttemptStats;
 use crate::util::estimator::TokenEstimator;
 use crate::relay::converter::{RelayPipeline, RelayPipelineRequest};
 use crate::error::proxy::ProxyError;

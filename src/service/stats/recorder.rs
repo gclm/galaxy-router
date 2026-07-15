@@ -3,7 +3,7 @@ use std::sync::Arc;
 use super::redaction;
 use crate::error::proxy::ProxyError;
 use crate::app_state::AppState;
-use crate::metrics::attempt::AttemptStats;
+use crate::service::stats::attempt::AttemptStats;
 use crate::relay::ratelimit::RateLimiter;
 use crate::repository::settings_repository::SettingsRepository;
 use crate::repository::usage_repository::UsageRepository;
