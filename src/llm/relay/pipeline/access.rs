@@ -134,7 +134,7 @@ mod tests {
             .connect("sqlite::memory:")
             .await
             .unwrap();
-        sqlx::migrate!("src/db/migrations").run(&pool).await.unwrap();
+        sqlx::migrate!("src/infra/db/migrations").run(&pool).await.unwrap();
         let key_id = "019ecf15-0000-7000-8000-000000000001";
 
         sqlx::query("INSERT INTO api_keys (id, name, api_key) VALUES (?, 't', 'sk-t')")
@@ -180,7 +180,7 @@ mod tests {
             .connect("sqlite::memory:")
             .await
             .unwrap();
-        sqlx::migrate!("src/db/migrations").run(&pool).await.unwrap();
+        sqlx::migrate!("src/infra/db/migrations").run(&pool).await.unwrap();
         let key_id = "019ecf15-0000-7000-8000-000000000002";
 
         sqlx::query("INSERT INTO api_keys (id, name, api_key) VALUES (?, 't', 'sk-t2')")
@@ -215,7 +215,7 @@ mod tests {
             .connect("sqlite::memory:")
             .await
             .unwrap();
-        sqlx::migrate!("src/db/migrations").run(&pool).await.unwrap();
+        sqlx::migrate!("src/infra/db/migrations").run(&pool).await.unwrap();
         let key_id = "019ecf15-0000-7000-8000-000000000003";
 
         sqlx::query("INSERT INTO api_keys (id, name, api_key) VALUES (?, 't', 'sk-t3')")

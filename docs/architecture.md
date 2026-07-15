@@ -75,6 +75,7 @@ api  ───────┤
 | `domain/` | 领域层 | 实体 + 纯数据形状 + 不依赖框架的业务规则 |
 | `infra/` | 基础设施层 | 技术设施：db 连接池/迁移、cache、config、外部客户端 |
 | `llm/` | 转发引擎层 | relay/protocol/scheduler/plugin 聚合，请求转发管道 |
+| `error/` | 横切错误层 | 两类错误：`proxy.rs`（ProxyError，`/v1/*` 透传）+ `app.rs`（ApiError，`/api/v1/admin/*` 统一包装） |
 
 ---
 
@@ -92,8 +93,9 @@ src/
 ├── service/                 # 业务逻辑层（按业务能力组织，非按实体）
 │   ├── pricing/             #   定价：ModelRegistry + 远程刷新 + 价格计算
 │   ├── stats/               #   统计：recorder（记录）+ query（聚合查询）
-│   ├── channel/             #   渠道：CRUD 业务规则 + 带缓存的渠道查询
-│   ├── route/               #   路由：CRUD + 带缓存的路由匹配
+│   ├── channel/             #   渠道：CRUD 业务规则 + 端点探测（probe）
+│   ├── route/               #   路由（管理面）：分组 CRUD + 校验 + 缓存失效
+│   ├── routing/             #   路由（转发面）：proxy 热路径路由匹配 + 渠道查询（带缓存）
 │   ├── api_key/             #   Key + 鉴权 + 预算业务规则
 │   ├── settings/            #   设置管理
 │   ├── backup/              #   导入/导出/重置事务编排
@@ -117,7 +119,8 @@ src/
 │   └── ...
 │
 ├── infra/                   # 基础设施层（纯技术设施，不认业务实体）
-│   ├── db/                  #   连接池、迁移执行器（SQL 文件留 src/db/migrations）
+│   ├── db/                  #   连接池、迁移执行器
+│   │   └── migrations/      #   迁移 SQL（sqlx::migrate! 编译期管理，约束 #5）
 │   ├── cache.rs             #   ProxyCache（通用缓存机制）
 │   └── config.rs            #   配置加载
 │
@@ -251,7 +254,7 @@ src/
 | 2 | 管理 API（`/api/v1/admin/*`）统一 JSON：`{code,message,data}` | 与代理 API 分离 |
 | 3 | 代理 API（`/v1/*`）保持原生协议格式，不统一包装 | 透传上游，SDK 兼容 |
 | 4 | 渠道 `models` 字段固定为 JSON 字符串数组 | 多处代码依赖此结构 |
-| 5 | 迁移 SQL 放 `src/db/migrations/`，文件名 `{version}_{name}.sql`，version>0，不可回滚/改已发布版本 | `sqlx::migrate!()` 编译期管理 |
+| 5 | 迁移 SQL 放 `src/infra/db/migrations/`，文件名 `{version}_{name}.sql`，version>0，不可回滚/改已发布版本 | `sqlx::migrate!()` 编译期管理 |
 | 6 | 业务配置变更后必须失效对应 `ProxyCache` | 缓存与数据库一致性 |
 
 ---

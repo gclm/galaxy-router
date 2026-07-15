@@ -14,7 +14,7 @@
 | 2 | 管理 API (`/api/v1/admin/*`) 使用统一 JSON 格式：`{code, message, data}` | 与代理 API 分离，客户端 SDK 不受影响 |
 | 3 | 代理 API (`/v1/*`) **保持原生协议格式**，不用统一响应包装 | 透传上游响应，确保 SDK 兼容 |
 | 4 | 渠道 `models` 字段固定为 JSON 字符串数组：`["gpt-4o", "claude-3-5-sonnet"]` | 多处代码依赖此结构（`parse_models` / `Channel.models: Vec<String>`） |
-| 5 | 数据库迁移：SQL 文件放在 `src/db/migrations/`，文件名 `{version}_{name}.sql` 且 version > 0；不可回滚、不可修改已发布版本 | 由 `sqlx::migrate!()` 在编译期管理，版本号即文件名 |
+| 5 | 数据库迁移：SQL 文件放在 `src/infra/db/migrations/`，文件名 `{version}_{name}.sql` 且 version > 0；不可回滚、不可修改已发布版本 | 由 `sqlx::migrate!()` 在编译期管理，版本号即文件名 |
 | 6 | 业务配置变更后，必须同步失效对应 `ProxyCache` | 缓存与数据库一致性 |
 
 **踩坑警告**：

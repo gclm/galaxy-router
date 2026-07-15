@@ -44,7 +44,7 @@ impl Database {
 
     /// 运行数据库迁移
     async fn run_migrations(&self) -> Result<()> {
-        sqlx::migrate!("src/db/migrations")
+        sqlx::migrate!("src/infra/db/migrations")
             .run(&self.pool)
             .await
             .map_err(|e| anyhow::anyhow!("数据库迁移失败: {e}"))?;
