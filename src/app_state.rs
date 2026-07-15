@@ -79,10 +79,15 @@ impl AppState {
         plugin_chain: PluginChain,
     ) -> Self {
         let timezone_offset = config.server.timezone_offset;
+        let repositories = Repositories::new(pool.clone(), timezone_offset);
+        let stats_recorder = StatsRecorder::new(
+            repositories.usage.clone(),
+            repositories.settings.clone(),
+        );
         Self {
             pool: pool.clone(),
             config,
-            repositories: Repositories::new(pool.clone(), timezone_offset),
+            repositories,
             services: Services::new(),
             start_time,
             jwt_service,
@@ -93,7 +98,7 @@ impl AppState {
             models_http_client,
             update_check,
             lb_state,
-            stats_recorder: StatsRecorder::new(pool),
+            stats_recorder,
             rate_limiter,
             queue: None,
             key_counter: Arc::new(AtomicU64::new(0)),
@@ -298,10 +303,15 @@ impl AppState {
             queuing: crate::config::QueuingConfig::default(),
             pricing: crate::config::PricingTomlConfig::default(),
         });
+        let repositories = Repositories::new(pool.clone(), 0);
+        let stats_recorder = StatsRecorder::new(
+            repositories.usage.clone(),
+            repositories.settings.clone(),
+        );
         Self {
             pool: pool.clone(),
             config,
-            repositories: Repositories::new(pool.clone(), 0),
+            repositories,
             services: Services::new(),
             start_time: Arc::new(Instant::now()),
             jwt_service: JwtService::new("test", 24),
@@ -317,7 +327,7 @@ impl AppState {
                 None,
             ),
             lb_state: LoadBalancerState::new(),
-            stats_recorder: StatsRecorder::new(pool),
+            stats_recorder,
             rate_limiter: RateLimiter::new(),
             queue: None,
             key_counter: Arc::new(AtomicU64::new(0)),

@@ -1,14 +1,18 @@
-use crate::api::response::generate_id;
-use crate::metrics::attempt::AttemptStats;
-use crate::relay::ratelimit::RateLimiter;
+use std::sync::Arc;
+
 use crate::error::proxy::ProxyError;
 use crate::app_state::AppState;
-use sqlx::SqlitePool;
+use crate::metrics::attempt::AttemptStats;
+use crate::relay::ratelimit::RateLimiter;
+use crate::repository::settings_repository::SettingsRepository;
+use crate::repository::usage_repository::UsageRepository;
 
-/// 统计记录器
+/// 统计记录器（service 层）：持 usage + settings repository，编排 redaction + 落库。
+/// 落库 SQL 下沉 repository（insert_usage_log/insert_usage_payload，B2-C1），本层只做 redaction + 开关。
 #[derive(Clone)]
 pub struct StatsRecorder {
-    pool: SqlitePool,
+    pub usage: Arc<dyn UsageRepository>,
+    pub settings: Arc<dyn SettingsRepository>,
 }
 
 // ChannelAttempt + RequestRecord 已归 domain/usage（B2-C0，持久化领域模型），此处 re-export
@@ -16,83 +20,37 @@ pub struct StatsRecorder {
 pub use crate::domain::usage::{ChannelAttempt, RequestRecord};
 
 impl StatsRecorder {
-    pub fn new(pool: SqlitePool) -> Self {
-        Self { pool }
+    pub fn new(usage: Arc<dyn UsageRepository>, settings: Arc<dyn SettingsRepository>) -> Self {
+        Self { usage, settings }
     }
 
-    /// 记录请求日志：usage_logs 写统计字段，usage_payloads 写请求/响应原文（过 redaction，
-    /// 受 `usage.record_content` 开关控制）。拆表避免大 TEXT 拖慢 usage_logs 的分页/聚合查询。
+    /// 记录请求日志：redaction（service）→ insert_usage_log（repo）→ settings 开关
+    /// （repo）→ 条件 insert_usage_payload（repo）。落库 SQL 下沉 repository（B2-C1）。
     pub async fn record_request(&self, record: RequestRecord) -> Result<(), sqlx::Error> {
-        let id = generate_id();
-        let attempts_json = if record.attempts.is_empty() {
-            None
-        } else {
-            Some(serde_json::to_string(&record.attempts).unwrap_or_default())
-        };
-
-        // redaction 统一（落库前，承接所有 8 处调用点）
+        // redaction 统一（service 层职责，承接所有 9 处调用点）
         let req_sanitized = record
             .request_content
-            .map(|c| redaction::sanitize_json_content(&c));
+            .as_deref()
+            .map(redaction::sanitize_json_content);
         let resp_sanitized = record
             .response_content
-            .map(|c| redaction::sanitize_json_content(&c));
+            .as_deref()
+            .map(redaction::sanitize_json_content);
 
-        sqlx::query(
-            r#"
-            INSERT INTO usage_logs (
-                id, request_id, api_key_id, channel_id, route_id,
-                requested_model, actual_model,
-                input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens,
-                cost, latency_ms, ttft_ms, status_code, error_message,
-                endpoint_type, request_type, is_stream,
-                upstream_key_hint, attempts, user_agent
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            "#,
-        )
-        .bind(&id)
-        .bind(&record.request_id)
-        .bind(&record.api_key_id)
-        .bind(&record.channel_id)
-        .bind(&record.route_id)
-        .bind(&record.requested_model)
-        .bind(&record.actual_model)
-        .bind(record.input_tokens)
-        .bind(record.output_tokens)
-        .bind(record.cache_read_tokens)
-        .bind(record.cache_creation_tokens)
-        .bind(record.cost)
-        .bind(record.latency_ms)
-        .bind(record.ttft_ms)
-        .bind(record.status_code)
-        .bind(&record.error_message)
-        .bind(&record.endpoint_type)
-        .bind(&record.request_type)
-        .bind(record.is_stream)
-        .bind(&record.upstream_key_hint)
-        .bind(&attempts_json)
-        .bind(&record.user_agent)
-        .execute(&self.pool)
-        .await?;
+        // usage_logs 统计字段（repository 生成 PK + 序列化 attempts + INSERT）
+        let id = self.usage.insert_usage_log(&record).await?;
 
-        // usage_payloads：受开关控制（默认 true），仅在有原文时写
-        let record_content: bool = sqlx::query_scalar::<_, String>(
-            "SELECT value FROM settings WHERE key = 'usage.record_content'",
-        )
-        .fetch_optional(&self.pool)
-        .await?
-        .and_then(|v| v.parse::<bool>().ok())
-        .unwrap_or(true);
-
+        // usage_payloads：受 usage.record_content 开关控制（默认 true），仅在有原文时写
+        let record_content = self
+            .settings
+            .get("usage.record_content")
+            .await?
+            .and_then(|v| v.parse::<bool>().ok())
+            .unwrap_or(true);
         if record_content && (req_sanitized.is_some() || resp_sanitized.is_some()) {
-            sqlx::query(
-                "INSERT OR IGNORE INTO usage_payloads (log_id, request_content, response_content) VALUES (?, ?, ?)",
-            )
-            .bind(&id)
-            .bind(req_sanitized)
-            .bind(resp_sanitized)
-            .execute(&self.pool)
-            .await?;
+            self.usage
+                .insert_usage_payload(&id, req_sanitized.as_deref(), resp_sanitized.as_deref())
+                .await?;
         }
 
         Ok(())
@@ -385,6 +343,15 @@ pub(crate) async fn record_stream_completion(
 mod tests {
     use super::*;
 
+    fn test_recorder(pool: &sqlx::SqlitePool) -> StatsRecorder {
+        use crate::repository::settings_repository::SqliteSettingsRepository;
+        use crate::repository::usage_repository::SqliteUsageRepository;
+        StatsRecorder::new(
+            Arc::new(SqliteUsageRepository::new(pool.clone(), 0)),
+            Arc::new(SqliteSettingsRepository::new(pool.clone())),
+        )
+    }
+
     async fn make_pool() -> sqlx::SqlitePool {
         let db_path = format!("/tmp/galaxy_stats_recorder_{}.db", uuid::Uuid::now_v7());
         let _ = std::fs::remove_file(&db_path);
@@ -427,7 +394,7 @@ mod tests {
     #[tokio::test]
     async fn record_request_with_no_attempts_inserts_null() {
         let pool = make_pool().await;
-        let rec = StatsRecorder::new(pool.clone());
+        let rec = test_recorder(&pool);
         rec.record_request(base_record(vec![])).await.unwrap();
 
         let attempts: Option<String> =
@@ -441,7 +408,7 @@ mod tests {
     #[tokio::test]
     async fn record_request_with_attempts_serializes_json() {
         let pool = make_pool().await;
-        let rec = StatsRecorder::new(pool.clone());
+        let rec = test_recorder(&pool);
         let attempts = vec![
             ChannelAttempt {
                 channel_id: "c1".into(),
@@ -632,7 +599,7 @@ mod tests {
     #[tokio::test]
     async fn record_request_writes_payload_and_redacts() {
         let pool = make_pool().await;
-        let rec = StatsRecorder::new(pool.clone());
+        let rec = test_recorder(&pool);
         let mut record = base_record(vec![]);
         record.request_content =
             Some(r#"{"authorization":"sk-secret123","prompt":"hi"}"#.into());
@@ -669,7 +636,7 @@ mod tests {
             .execute(&pool)
             .await
             .unwrap();
-        let rec = StatsRecorder::new(pool.clone());
+        let rec = test_recorder(&pool);
         rec.record_request(base_record(vec![])).await.unwrap();
 
         // usage_logs 仍写
