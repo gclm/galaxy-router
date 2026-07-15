@@ -4,11 +4,13 @@ use axum::middleware::Next;
 use axum::response::Response;
 use sqlx::SqlitePool;
 
+use crate::repository::settings_repository::{SettingsRepository, SqliteSettingsRepository};
+
 /// 从数据库读取 CORS 允许的 origins
 /// 返回值：空=禁止跨域，"*"=允许所有，其他=逗号分隔的白名单
 async fn load_cors_origins(pool: &SqlitePool) -> String {
-    sqlx::query_scalar::<_, String>("SELECT value FROM settings WHERE key = 'cors.allow_origins'")
-        .fetch_optional(pool)
+    SqliteSettingsRepository::new(pool.clone())
+        .get("cors.allow_origins")
         .await
         .ok()
         .flatten()

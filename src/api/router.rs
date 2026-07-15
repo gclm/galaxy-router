@@ -30,6 +30,7 @@ use crate::infra::config::{AppConfig, QueuingConfig};
 use crate::app_state::AppState;
 use crate::infra::cache::ProxyCache;
 use crate::static_assets;
+use crate::repository::settings_repository::{SettingsRepository, SqliteSettingsRepository};
 
 /// 创建应用路由
 #[allow(clippy::too_many_arguments)]
@@ -295,22 +296,20 @@ fn proxy_routes(app_state: AppState, pool: SqlitePool) -> Router {
         ))
 }
 
-/// 构建上游转发客户端（300s 超时 + 可选 proxy.url，原 ProxyState::new 内联逻辑）。
-/// 行为原样搬迁，settings 的 SQL 下沉留后续。
+/// 构建上游转发客户端（300s 超时 + 可选 proxy.url，settings 经 SettingsRepository 读取）。
 async fn build_proxy_http_client(pool: &SqlitePool) -> reqwest::Client {
-    let proxy_enabled: bool = sqlx::query_scalar::<_, String>(
-        "SELECT value FROM settings WHERE key = 'proxy.enabled'",
-    )
-    .fetch_optional(pool)
-    .await
-    .ok()
-    .flatten()
-    .and_then(|v| v.parse().ok())
-    .unwrap_or(false);
+    let settings = SqliteSettingsRepository::new(pool.clone());
+    let proxy_enabled: bool = settings
+        .get("proxy.enabled")
+        .await
+        .ok()
+        .flatten()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(false);
 
     let proxy_url = if proxy_enabled {
-        sqlx::query_scalar::<_, String>("SELECT value FROM settings WHERE key = 'proxy.url'")
-            .fetch_optional(pool)
+        settings
+            .get("proxy.url")
             .await
             .ok()
             .flatten()
