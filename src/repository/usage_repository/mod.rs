@@ -140,6 +140,8 @@ pub trait UsageRepository: Send + Sync {
     async fn aggregate_cost(&self, api_key_id: &str) -> Result<(f64, f64), sqlx::Error>;
     /// 保留清理：删除 N 天前的 usage_logs，返回删除行数。
     async fn delete_older_than(&self, days: i64) -> Result<u64, sqlx::Error>;
+    /// 分层清理：删除 N 天前的 usage_payloads（content），保留 usage_logs 统计。
+    async fn delete_payloads_older_than(&self, days: i64) -> Result<u64, sqlx::Error>;
 }
 
 pub struct SqliteUsageRepository {
@@ -308,6 +310,9 @@ impl UsageRepository for SqliteUsageRepository {
     }
     async fn delete_older_than(&self, days: i64) -> Result<u64, sqlx::Error> {
         maintenance::delete_older_than(self, days).await
+    }
+    async fn delete_payloads_older_than(&self, days: i64) -> Result<u64, sqlx::Error> {
+        maintenance::delete_payloads_older_than(self, days).await
     }
 }
 
@@ -731,5 +736,70 @@ mod tests {
         assert!(p50.unwrap() > 0.0);
         assert!(p95.unwrap() >= p50.unwrap());
         assert!(p99.unwrap() >= p95.unwrap());
+    }
+
+    /// 分层 retention：delete_payloads_older_than 清旧 payload，保留 usage_logs 统计行
+    #[tokio::test]
+    async fn delete_payloads_older_than_keeps_usage_logs() {
+        let pool = make_pool().await;
+        // 10 天前的日志 + payload
+        let log_id = crate::util::id::generate_id();
+        sqlx::query(
+            r#"INSERT INTO usage_logs
+               (id, requested_model, status_code, input_tokens, output_tokens,
+                cost, request_type, is_stream, created_at)
+               VALUES (?, 'm', 200, 1, 1, 0.0, 'passthrough', 0, datetime('now','-10 days'))"#,
+        )
+        .bind(&log_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO usage_payloads (log_id, request_content, response_content, created_at) \
+             VALUES (?, 'req', 'resp', datetime('now','-10 days'))",
+        )
+        .bind(&log_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+        // 今天的 payload（不应被删）
+        let today_id = crate::util::id::generate_id();
+        sqlx::query(
+            r#"INSERT INTO usage_logs
+               (id, requested_model, status_code, input_tokens, output_tokens,
+                cost, request_type, is_stream)
+               VALUES (?, 'm', 200, 1, 1, 0.0, 'passthrough', 0)"#,
+        )
+        .bind(&today_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO usage_payloads (log_id, request_content, response_content) \
+             VALUES (?, 'req2', 'resp2')",
+        )
+        .bind(&today_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let state = new_state(pool.clone());
+        // 删 >7 天 payload
+        let deleted = state.delete_payloads_older_than(7).await.unwrap();
+        assert_eq!(deleted, 1, "应只删 1 条 >7 天的 payload");
+
+        // usage_logs 统计行全保留（分层 retention 核心：保统计）
+        let logs: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM usage_logs")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(logs, 2, "usage_logs 统计行应全保留");
+
+        // payload 只剩今天的
+        let payloads: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM usage_payloads")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(payloads, 1, "只应剩 1 条今天的 payload");
     }
 }

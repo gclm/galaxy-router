@@ -50,6 +50,11 @@ impl Scheduler {
         tokio::spawn(async move {
             scheduler.run_log_cleanup().await;
         });
+
+        let scheduler = self.clone();
+        tokio::spawn(async move {
+            scheduler.run_payload_cleanup().await;
+        });
     }
 
     /// 清理任务
@@ -183,6 +188,42 @@ impl Scheduler {
                 }
                 Err(e) => {
                     tracing::warn!("清理请求日志失败: {}", e);
+                }
+            }
+        }
+    }
+
+    /// 定期清理过期 usage_payloads（请求/响应原文），保留 usage_logs 统计行（分层 retention）
+    async fn run_payload_cleanup(&self) {
+        let mut interval = interval(Duration::from_secs(86400));
+
+        loop {
+            interval.tick().await;
+
+            // content 保留天数可配（settings usage.payload_retention_days，默认 7 天）
+            let days = SqliteSettingsRepository::new(self.pool.clone())
+                .get("usage.payload_retention_days")
+                .await
+                .ok()
+                .flatten()
+                .and_then(|v| v.parse::<i64>().ok())
+                .unwrap_or(7);
+            let result = SqliteUsageRepository::new(self.pool.clone(), 0)
+                .delete_payloads_older_than(days)
+                .await;
+
+            match result {
+                Ok(deleted) => {
+                    if deleted > 0 {
+                        tracing::info!(
+                            "清理了 {} 条过期 payload（>{}天，保留 usage_logs 统计）",
+                            deleted,
+                            days
+                        );
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!("清理 payload 失败: {}", e);
                 }
             }
         }

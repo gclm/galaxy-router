@@ -26,6 +26,7 @@ const ALLOWED_SETTING_KEYS: &[&str] = &[
     "plugin.master_switch",
     "usage.record_content",
     "usage.retention_days",
+    "usage.payload_retention_days",
 ];
 
 #[derive(Clone)]

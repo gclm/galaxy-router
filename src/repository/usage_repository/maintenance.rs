@@ -25,3 +25,16 @@ pub(super) async fn delete_older_than(repo: &SqliteUsageRepository, days: i64) -
         .await?;
     Ok(result.rows_affected())
 }
+
+/// 清理过期 usage_payloads（请求/响应原文），**保留 usage_logs 统计行**。
+/// 分层 retention：content 短期清（释放空间），统计长期保。
+pub(super) async fn delete_payloads_older_than(
+    repo: &SqliteUsageRepository,
+    days: i64,
+) -> Result<u64, sqlx::Error> {
+    let result = sqlx::query("DELETE FROM usage_payloads WHERE created_at < datetime('now', ?)")
+        .bind(format!("-{} days", days))
+        .execute(&repo.pool)
+        .await?;
+    Ok(result.rows_affected())
+}
