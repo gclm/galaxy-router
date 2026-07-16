@@ -451,26 +451,35 @@ impl ProxyStreamRelayExecutor {
                                             }
                                             if let Some(tcs) = &choice.delta.tool_calls {
                                                 for tc in tcs {
-                                                    if !tc.id.is_empty() {
+                                                    let id = tc.id.as_deref().unwrap_or("");
+                                                    let name = tc
+                                                        .function
+                                                        .as_ref()
+                                                        .and_then(|f| f.name.as_deref())
+                                                        .unwrap_or("");
+                                                    let args = tc
+                                                        .function
+                                                        .as_ref()
+                                                        .and_then(|f| f.arguments.as_deref())
+                                                        .unwrap_or("");
+                                                    if !id.is_empty() {
                                                         // 新 tool call
                                                         collected_tool_calls.push(
                                                             serde_json::json!({
-                                                                "id": tc.id,
-                                                                "name": tc.function.name,
-                                                                "arguments": tc.function.arguments,
+                                                                "id": id,
+                                                                "name": name,
+                                                                "arguments": args,
                                                             }),
                                                         );
                                                     } else if let Some(last) =
                                                         collected_tool_calls.last_mut()
                                                     {
                                                         // 续传 chunk — 追加 arguments
-                                                        if let Some(args) =
+                                                        if let Some(prev) =
                                                             last["arguments"].as_str()
                                                         {
-                                                            let combined = format!(
-                                                                "{}{}",
-                                                                args, tc.function.arguments
-                                                            );
+                                                            let combined =
+                                                                format!("{}{}", prev, args);
                                                             last["arguments"] =
                                                                 serde_json::Value::String(combined);
                                                         }
@@ -1304,5 +1313,127 @@ mod tests {
         );
         assert_eq!(content, "final answer");
         assert_eq!(reasoning, "plan");
+    }
+
+    /// mock upstream 返回 OpenAI Chat SSE 流：content 混 `<think>`（触发 thinking rewrite）+
+    /// 一个 tool_calls delta。`with_index` 控制 tool_calls 项是否带 OpenAI 标准 `index`。
+    async fn spawn_mock_upstream_sse_tool_calls(with_index: bool) -> String {
+        let tc = if with_index {
+            r#"{"index":0,"id":"call_1","type":"function","function":{"name":"search","arguments":"{\"q\":\"rust\"}"}}"#
+        } else {
+            r#"{"id":"call_1","type":"function","function":{"name":"search","arguments":"{\"q\":\"rust\"}"}}"#
+        };
+        let body = format!(
+            "data: {{\"id\":\"1\",\"object\":\"chat.completion.chunk\",\"created\":0,\"model\":\"gpt-4o\",\"choices\":[{{\"index\":0,\"delta\":{{\"content\":\"<think>plan</think>final\"}},\"finish_reason\":null}}]}}\n\ndata: {{\"id\":\"1\",\"object\":\"chat.completion.chunk\",\"created\":0,\"model\":\"gpt-4o\",\"choices\":[{{\"index\":0,\"delta\":{{\"tool_calls\":[{tc}]}},\"finish_reason\":null}}]}}\n\ndata: {{\"id\":\"1\",\"object\":\"chat.completion.chunk\",\"created\":0,\"model\":\"gpt-4o\",\"choices\":[{{\"index\":0,\"delta\":{{}},\"finish_reason\":\"stop\"}}]}}\n\ndata: [DONE]\n\n"
+        );
+        let body = std::sync::Arc::new(body);
+        let app = Router::new().route("/v1/chat/completions", post({
+            let body = body.clone();
+            move || {
+                let body = body.clone();
+                async move {
+                    axum::response::Response::builder()
+                        .header("content-type", "text/event-stream")
+                        .body(Body::from(body.as_bytes().to_vec()))
+                        .unwrap()
+                }
+            }
+        }));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let _ = axum::serve(listener, app).await;
+        });
+        let url = format!("http://{}/v1/chat/completions", addr);
+        for _ in 0..20 {
+            if reqwest::Client::new()
+                .request(reqwest::Method::POST, &url)
+                .body("{}")
+                .send()
+                .await
+                .is_ok()
+            {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+        url
+    }
+
+    /// passthrough + thinking rewrite 下，tool_calls delta 经 decode→observe→reencode 后
+    /// index 必须保留/补全（gclm-agent 等 OpenAI 客户端 index 必填），且 reencode 后
+    /// delta.role 不应是 default 的 "user"。
+    async fn run_tool_call_index_case(with_index: bool) {
+        let upstream = spawn_mock_upstream_sse_tool_calls(with_index).await;
+        let (state, _pool) = make_state_with_channel(&upstream).await;
+
+        let body = serde_json::json!({
+            "model": "gpt-4o",
+            "messages": [{"role": "user", "content": "hi"}],
+            "stream": true
+        });
+        let headers = axum::http::HeaderMap::new();
+        let (status, stream, _ct) = proxy_stream(
+            &state,
+            "test-tc",
+            Some("key-1"),
+            &headers,
+            &body,
+            &EndpointType::OpenAiChat, // client==upstream → passthrough + thinking rewrite
+        )
+        .await
+        .expect("proxy_stream should succeed");
+        assert_eq!(status, 200);
+
+        let mut found_index = None;
+        let mut found_role_user = false;
+        let items: Vec<_> = stream.collect().await;
+        for item in items {
+            let bytes = item.unwrap();
+            let Ok(text) = std::str::from_utf8(&bytes[..]) else {
+                continue;
+            };
+            for line in text.lines() {
+                let Some(data) = line.strip_prefix("data: ") else {
+                    continue;
+                };
+                if data == "[DONE]" {
+                    continue;
+                }
+                let Ok(v) = serde_json::from_str::<serde_json::Value>(data) else {
+                    continue;
+                };
+                if v["choices"][0]["delta"]["role"].as_str() == Some("user") {
+                    found_role_user = true;
+                }
+                if let Some(arr) = v["choices"][0]["delta"]["tool_calls"].as_array()
+                    && let Some(idx) = arr[0].get("index").and_then(|i| i.as_u64())
+                {
+                    found_index = Some(idx);
+                }
+            }
+        }
+        assert_eq!(
+            found_index,
+            Some(0),
+            "tool_calls delta 必须带 index（OpenAI 流式协议 + gclm-agent index 必填）"
+        );
+        assert!(
+            !found_role_user,
+            "thinking rewrite reencode 后 delta.role 不应是 default 的 user"
+        );
+    }
+
+    #[tokio::test]
+    async fn proxy_stream_passthrough_tool_calls_keeps_index() {
+        // 上游带 index：reencode 后保留
+        run_tool_call_index_case(true).await;
+    }
+
+    #[tokio::test]
+    async fn proxy_stream_passthrough_tool_calls_defaults_index_when_missing() {
+        // 上游（智谱 GLM 等）tool_calls delta 不带 index：serde default 0，
+        // gclm-agent 的 RawToolCallDelta.index 必填仍能满足。
+        run_tool_call_index_case(false).await;
     }
 }

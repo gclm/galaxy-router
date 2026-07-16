@@ -254,7 +254,7 @@ fn strip_think_responses(body: &mut Value) {
 mod tests {
     use super::*;
     use crate::domain::channel::EndpointType;
-    use crate::llm::protocol::model::{Message, Role, StreamChoice};
+    use crate::llm::protocol::model::{Role, StreamChoice, StreamDelta};
     use serde_json::json;
 
     fn ctx() -> PluginContext {
@@ -274,14 +274,11 @@ mod tests {
             model: "m".into(),
             choices: vec![StreamChoice {
                 index: 0,
-                delta: Message {
-                    role: Role::User,
+                delta: StreamDelta {
+                    role: Some(Role::User),
                     content: Some(Content::Text(text.into())),
-                    name: None,
-                    tool_calls: None,
-                    tool_call_id: None,
                     reasoning_content: None,
-                    cache_control: None,
+                    tool_calls: None,
                 },
                 finish_reason: None,
             }],

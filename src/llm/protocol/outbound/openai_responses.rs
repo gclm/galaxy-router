@@ -181,14 +181,11 @@ impl Outbound for OpenAiResponsesOutbound {
                     model: String::new(),
                     choices: vec![StreamChoice {
                         index: 0,
-                        delta: Message {
-                            role: Role::Assistant,
+                        delta: StreamDelta {
+                            role: Some(Role::Assistant),
                             content: Some(Content::Text(delta.to_string())),
-                            name: None,
-                            tool_calls: None,
-                            tool_call_id: None,
                             reasoning_content: None,
-                            cache_control: None,
+                            tool_calls: None,
                         },
                         finish_reason: None,
                     }],
@@ -205,14 +202,11 @@ impl Outbound for OpenAiResponsesOutbound {
                     model: String::new(),
                     choices: vec![StreamChoice {
                         index: 0,
-                        delta: Message {
-                            role: Role::Assistant,
+                        delta: StreamDelta {
+                            role: Some(Role::Assistant),
                             content: None,
-                            name: None,
-                            tool_calls: None,
-                            tool_call_id: None,
                             reasoning_content: Some(delta.to_string()),
-                            cache_control: None,
+                            tool_calls: None,
                         },
                         finish_reason: None,
                     }],
@@ -231,21 +225,19 @@ impl Outbound for OpenAiResponsesOutbound {
                     model: String::new(),
                     choices: vec![StreamChoice {
                         index: 0,
-                        delta: Message {
-                            role: Role::Assistant,
+                        delta: StreamDelta {
+                            role: Some(Role::Assistant),
                             content: None,
-                            name: None,
-                            tool_calls: Some(vec![ToolCall {
-                                id: call_id,
-                                call_type: "function".to_string(),
-                                function: FunctionCall {
-                                    name,
-                                    arguments: delta.to_string(),
-                                },
-                            }]),
-                            tool_call_id: None,
                             reasoning_content: None,
-                            cache_control: None,
+                            tool_calls: Some(vec![StreamToolCallDelta {
+                                index: 0,
+                                id: Some(call_id),
+                                call_type: Some("function".to_string()),
+                                function: Some(StreamFunctionDelta {
+                                    name: Some(name),
+                                    arguments: Some(delta.to_string()),
+                                }),
+                            }]),
                         },
                         finish_reason: None,
                     }],
@@ -275,14 +267,11 @@ impl Outbound for OpenAiResponsesOutbound {
                     model: String::new(),
                     choices: vec![StreamChoice {
                         index: 0,
-                        delta: Message {
-                            role: Role::Assistant,
+                        delta: StreamDelta {
+                            role: Some(Role::Assistant),
                             content: None,
-                            name: None,
-                            tool_calls: None,
-                            tool_call_id: None,
                             reasoning_content: None,
-                            cache_control: None,
+                            tool_calls: None,
                         },
                         finish_reason: Some(FinishReason::Stop),
                     }],

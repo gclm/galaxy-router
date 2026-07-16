@@ -542,7 +542,9 @@ fn test_anthropic_inbound_response_with_empty_choices() {
 
 #[test]
 fn test_anthropic_inbound_stream_event_emits_text_delta_and_stop() {
-    use galaxy_router::llm::protocol::model::{FinishReason, LlmStreamResponse, Message, StreamChoice};
+    use galaxy_router::llm::protocol::model::{
+        FinishReason, LlmStreamResponse, StreamChoice, StreamDelta,
+    };
     let event = LlmStreamResponse {
         id: String::new(),
         object: "chunk".into(),
@@ -550,14 +552,11 @@ fn test_anthropic_inbound_stream_event_emits_text_delta_and_stop() {
         model: String::new(),
         choices: vec![StreamChoice {
             index: 0,
-            delta: Message {
-                role: Role::Assistant,
+            delta: StreamDelta {
+                role: Some(Role::Assistant),
                 content: Some(Content::Text("hello".into())),
-                name: None,
-                tool_calls: None,
-                tool_call_id: None,
                 reasoning_content: None,
-                cache_control: None,
+                tool_calls: None,
             },
             finish_reason: Some(FinishReason::Stop),
         }],
@@ -754,7 +753,9 @@ async fn test_openai_chat_inbound_tool_choice_required_and_function() {
 
 #[test]
 fn test_openai_chat_inbound_stream_event_serializes() {
-    use galaxy_router::llm::protocol::model::{FinishReason, LlmStreamResponse, Message, StreamChoice};
+    use galaxy_router::llm::protocol::model::{
+        FinishReason, LlmStreamResponse, StreamChoice, StreamDelta,
+    };
     let event = LlmStreamResponse {
         id: "x".into(),
         object: "chunk".into(),
@@ -762,14 +763,11 @@ fn test_openai_chat_inbound_stream_event_serializes() {
         model: "gpt-4o".into(),
         choices: vec![StreamChoice {
             index: 0,
-            delta: Message {
-                role: Role::Assistant,
+            delta: StreamDelta {
+                role: Some(Role::Assistant),
                 content: Some(Content::Text("hi".into())),
-                name: None,
-                tool_calls: None,
-                tool_call_id: None,
                 reasoning_content: None,
-                cache_control: None,
+                tool_calls: None,
             },
             finish_reason: Some(FinishReason::Stop),
         }],
@@ -919,7 +917,9 @@ async fn test_openai_responses_inbound_with_tools_and_previous_response_id() {
 
 #[test]
 fn test_openai_responses_inbound_stream_event_serializes() {
-    use galaxy_router::llm::protocol::model::{FinishReason, LlmStreamResponse, Message, StreamChoice};
+    use galaxy_router::llm::protocol::model::{
+        FinishReason, LlmStreamResponse, StreamChoice, StreamDelta,
+    };
     let event = LlmStreamResponse {
         id: String::new(),
         object: "chunk".into(),
@@ -927,14 +927,11 @@ fn test_openai_responses_inbound_stream_event_serializes() {
         model: "o1".into(),
         choices: vec![StreamChoice {
             index: 0,
-            delta: Message {
-                role: Role::Assistant,
+            delta: StreamDelta {
+                role: Some(Role::Assistant),
                 content: Some(Content::Text("ok".into())),
-                name: None,
-                tool_calls: None,
-                tool_call_id: None,
                 reasoning_content: None,
-                cache_control: None,
+                tool_calls: None,
             },
             finish_reason: Some(FinishReason::Stop),
         }],
@@ -975,7 +972,7 @@ async fn test_openai_responses_outbound_response_parses() {
 
 #[test]
 fn test_openai_responses_inbound_stream_event_reasoning() {
-    use galaxy_router::llm::protocol::model::{Message, StreamChoice};
+    use galaxy_router::llm::protocol::model::{StreamChoice, StreamDelta};
     let event = galaxy_router::llm::protocol::model::LlmStreamResponse {
         id: String::new(),
         object: "chunk".into(),
@@ -983,14 +980,11 @@ fn test_openai_responses_inbound_stream_event_reasoning() {
         model: "o1".into(),
         choices: vec![StreamChoice {
             index: 0,
-            delta: Message {
-                role: Role::Assistant,
+            delta: StreamDelta {
+                role: Some(Role::Assistant),
                 content: None,
-                name: None,
-                tool_calls: None,
-                tool_call_id: None,
                 reasoning_content: Some("thinking...".into()),
-                cache_control: None,
+                tool_calls: None,
             },
             finish_reason: None,
         }],
@@ -1007,7 +1001,7 @@ fn test_openai_responses_inbound_stream_event_reasoning() {
 
 #[test]
 fn test_openai_responses_inbound_stream_event_finish_emits_completed() {
-    use galaxy_router::llm::protocol::model::{FinishReason, Message, StreamChoice};
+    use galaxy_router::llm::protocol::model::{FinishReason, StreamChoice, StreamDelta};
     let event = galaxy_router::llm::protocol::model::LlmStreamResponse {
         id: "resp_42".into(),
         object: "chunk".into(),
@@ -1015,14 +1009,11 @@ fn test_openai_responses_inbound_stream_event_finish_emits_completed() {
         model: "o1".into(),
         choices: vec![StreamChoice {
             index: 0,
-            delta: Message {
-                role: Role::Assistant,
+            delta: StreamDelta {
+                role: Some(Role::Assistant),
                 content: None,
-                name: None,
-                tool_calls: None,
-                tool_call_id: None,
                 reasoning_content: None,
-                cache_control: None,
+                tool_calls: None,
             },
             finish_reason: Some(FinishReason::Stop),
         }],
@@ -1046,7 +1037,9 @@ fn test_openai_responses_inbound_stream_event_finish_emits_completed() {
 
 #[test]
 fn test_openai_responses_inbound_stream_event_tool_calls() {
-    use galaxy_router::llm::protocol::model::{FunctionCall, Message, StreamChoice, ToolCall};
+    use galaxy_router::llm::protocol::model::{
+        StreamChoice, StreamDelta, StreamFunctionDelta, StreamToolCallDelta,
+    };
     let event = galaxy_router::llm::protocol::model::LlmStreamResponse {
         id: String::new(),
         object: "chunk".into(),
@@ -1054,21 +1047,19 @@ fn test_openai_responses_inbound_stream_event_tool_calls() {
         model: "o1".into(),
         choices: vec![StreamChoice {
             index: 0,
-            delta: Message {
-                role: Role::Assistant,
+            delta: StreamDelta {
+                role: Some(Role::Assistant),
                 content: None,
-                name: None,
-                tool_calls: Some(vec![ToolCall {
-                    id: "call_x".into(),
-                    call_type: "function".into(),
-                    function: FunctionCall {
-                        name: "search".into(),
-                        arguments: "{\"q\":\"rust\"}".into(),
-                    },
-                }]),
-                tool_call_id: None,
                 reasoning_content: None,
-                cache_control: None,
+                tool_calls: Some(vec![StreamToolCallDelta {
+                    index: 0,
+                    id: Some("call_x".into()),
+                    call_type: Some("function".into()),
+                    function: Some(StreamFunctionDelta {
+                        name: Some("search".into()),
+                        arguments: Some("{\"q\":\"rust\"}".into()),
+                    }),
+                }]),
             },
             finish_reason: None,
         }],
@@ -1109,9 +1100,15 @@ fn test_openai_responses_outbound_stream_event_function_call() {
         .tool_calls
         .as_ref()
         .expect("tool_calls present");
-    assert_eq!(calls[0].id, "c1");
-    assert_eq!(calls[0].function.name, "fn");
-    assert_eq!(calls[0].function.arguments, "{}");
+    assert_eq!(calls[0].id.as_deref(), Some("c1"));
+    assert_eq!(
+        calls[0].function.as_ref().and_then(|f| f.name.as_deref()),
+        Some("fn")
+    );
+    assert_eq!(
+        calls[0].function.as_ref().and_then(|f| f.arguments.as_deref()),
+        Some("{}")
+    );
 }
 
 #[test]

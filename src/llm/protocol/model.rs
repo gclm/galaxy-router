@@ -88,6 +88,30 @@ pub struct FunctionCall {
     pub arguments: String,
 }
 
+/// 流式函数调用 delta（OpenAI 流式：name/arguments 均可空，由客户端按 `index` 分片累积）
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct StreamFunctionDelta {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub arguments: Option<String>,
+}
+
+/// 流式工具调用 delta（OpenAI 标准：`index` 必填，客户端按 index 拼接分片；
+/// id/type/function 可空——首帧带 id+name，后续帧仅 arguments）。
+/// `index` 用 `#[serde(default)]`：上游带 index 就读入，不带则 default 0（兼容智谱等非标准上游）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StreamToolCallDelta {
+    #[serde(default)]
+    pub index: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    #[serde(default, rename = "type", skip_serializing_if = "Option::is_none")]
+    pub call_type: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub function: Option<StreamFunctionDelta>,
+}
+
 /// 消息
 ///
 /// 注意: `role` 字段在流式 delta 中可能缺失（只有第一个 chunk 包含 role），
@@ -108,6 +132,22 @@ pub struct Message {
     pub reasoning_content: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cache_control: Option<CacheControl>,
+}
+
+/// 流式 delta（区别于非流式 `Message`）：
+/// - `role` 可空（流式通常仅首帧带 role；缺失时不再被 default 成 `user`）
+/// - `tool_calls` 带 OpenAI 标准的 `index`（见 `StreamToolCallDelta`）
+/// - 去掉 message-only 的 `name`/`tool_call_id`/`cache_control`（流式不用）
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct StreamDelta {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub role: Option<Role>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content: Option<Content>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_content: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_calls: Option<Vec<StreamToolCallDelta>>,
 }
 
 /// 工具定义
@@ -217,7 +257,7 @@ pub struct Choice {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StreamChoice {
     pub index: u32,
-    pub delta: Message,
+    pub delta: StreamDelta,
     pub finish_reason: Option<FinishReason>,
 }
 

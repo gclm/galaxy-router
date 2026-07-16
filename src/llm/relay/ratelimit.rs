@@ -225,7 +225,7 @@ mod tests {
         {
             let mut windows = limiter.windows.write().await;
             let past = Instant::now() - std::time::Duration::from_secs(200);
-            for (_, state) in windows.iter_mut() {
+            for state in windows.values_mut() {
                 state.window_start = past;
             }
         }

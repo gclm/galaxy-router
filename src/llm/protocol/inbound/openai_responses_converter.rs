@@ -316,14 +316,25 @@ impl ResponsesStreamConverter {
     }
 
     /// 处理 tool_calls delta
-    fn handle_tool_calls(&mut self, tool_calls: &[ToolCall]) -> Vec<Vec<u8>> {
+    fn handle_tool_calls(&mut self, tool_calls: &[StreamToolCallDelta]) -> Vec<Vec<u8>> {
         // 关闭 message + reasoning item
         let mut events = self.close_message_item();
         events.extend(self.close_reasoning_item());
 
         for tc in tool_calls {
+            let id = tc.id.clone().unwrap_or_default();
+            let name = tc
+                .function
+                .as_ref()
+                .and_then(|f| f.name.clone())
+                .unwrap_or_default();
+            let arguments = tc
+                .function
+                .as_ref()
+                .and_then(|f| f.arguments.clone())
+                .unwrap_or_default();
             // 用 id 做 key（streaming 中 index 可能不稳定）
-            let idx = if tc.id.is_empty() {
+            let idx = if id.is_empty() {
                 0
             } else {
                 // 使用 tool_calls map 的当前大小作为 index
@@ -342,8 +353,8 @@ impl ResponsesStreamConverter {
                 self.tool_calls.insert(
                     idx,
                     ToolCallState {
-                        id: tc.id.clone(),
-                        name: tc.function.name.clone(),
+                        id: id.clone(),
+                        name: name.clone(),
                         arguments: String::new(),
                         output_index: self.output_index,
                         item_started: true,
@@ -357,10 +368,10 @@ impl ResponsesStreamConverter {
                         "output_index": self.output_index,
                         "item": {
                             "type": "function_call",
-                            "id": tc.id,
+                            "id": id,
                             "status": "in_progress",
-                            "call_id": tc.id,
-                            "name": tc.function.name
+                            "call_id": id,
+                            "name": name
                         }
                     }),
                 ));
@@ -370,17 +381,17 @@ impl ResponsesStreamConverter {
 
             // 累积 arguments
             if let Some(state) = self.tool_calls.get_mut(&idx) {
-                state.arguments.push_str(&tc.function.arguments);
+                state.arguments.push_str(&arguments);
 
                 // 发送 delta
-                if !tc.function.arguments.is_empty() {
+                if !arguments.is_empty() {
                     events.push(Self::sse_event(
                         "response.function_call_arguments.delta",
                         serde_json::json!({
                             "type": "response.function_call_arguments.delta",
                             "output_index": state.output_index,
                             "call_id": state.id,
-                            "delta": tc.function.arguments
+                            "delta": arguments
                         }),
                     ));
                 }

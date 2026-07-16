@@ -250,14 +250,11 @@ impl Outbound for AnthropicOutbound {
                     model,
                     choices: vec![StreamChoice {
                         index: 0,
-                        delta: Message {
-                            role: Role::Assistant,
+                        delta: StreamDelta {
+                            role: Some(Role::Assistant),
                             content: None,
-                            name: None,
-                            tool_calls: None,
-                            tool_call_id: None,
                             reasoning_content: None,
-                            cache_control: None,
+                            tool_calls: None,
                         },
                         finish_reason: None,
                     }],
@@ -277,14 +274,11 @@ impl Outbound for AnthropicOutbound {
                             model: String::new(),
                             choices: vec![StreamChoice {
                                 index: 0,
-                                delta: Message {
-                                    role: Role::Assistant,
+                                delta: StreamDelta {
+                                    role: Some(Role::Assistant),
                                     content: None,
-                                    name: None,
-                                    tool_calls: None,
-                                    tool_call_id: None,
                                     reasoning_content: Some(thinking.to_string()),
-                                    cache_control: None,
+                                    tool_calls: None,
                                 },
                                 finish_reason: None,
                             }],
@@ -301,14 +295,11 @@ impl Outbound for AnthropicOutbound {
                             model: String::new(),
                             choices: vec![StreamChoice {
                                 index: 0,
-                                delta: Message {
-                                    role: Role::Assistant,
+                                delta: StreamDelta {
+                                    role: Some(Role::Assistant),
                                     content: Some(Content::Text(delta_text.to_string())),
-                                    name: None,
-                                    tool_calls: None,
-                                    tool_call_id: None,
                                     reasoning_content: None,
-                                    cache_control: None,
+                                    tool_calls: None,
                                 },
                                 finish_reason: None,
                             }],
@@ -332,14 +323,11 @@ impl Outbound for AnthropicOutbound {
                     model: String::new(),
                     choices: vec![StreamChoice {
                         index: 0,
-                        delta: Message {
-                            role: Role::Assistant,
+                        delta: StreamDelta {
+                            role: Some(Role::Assistant),
                             content: None,
-                            name: None,
-                            tool_calls: None,
-                            tool_call_id: None,
                             reasoning_content: None,
-                            cache_control: None,
+                            tool_calls: None,
                         },
                         finish_reason,
                     }],

@@ -261,7 +261,7 @@ impl AnthropicStreamConverter {
     }
 
     /// 处理 tool_calls
-    fn handle_tool_calls(&mut self, tool_calls: &[ToolCall]) -> Vec<Vec<u8>> {
+    fn handle_tool_calls(&mut self, tool_calls: &[StreamToolCallDelta]) -> Vec<Vec<u8>> {
         let mut events = vec![];
 
         // 关闭 thinking 和 text block
@@ -270,6 +270,17 @@ impl AnthropicStreamConverter {
 
         for tc in tool_calls {
             // 用 index 追踪（streaming 中同一个 tool call 会多次出现）
+            let id = tc.id.clone().unwrap_or_default();
+            let name = tc
+                .function
+                .as_ref()
+                .and_then(|f| f.name.clone())
+                .unwrap_or_default();
+            let arguments = tc
+                .function
+                .as_ref()
+                .and_then(|f| f.arguments.clone())
+                .unwrap_or_default();
             let idx = self.current_tool_index;
 
             let is_new = !self.tool_calls.contains_key(&idx);
@@ -283,8 +294,8 @@ impl AnthropicStreamConverter {
                 self.tool_calls.insert(
                     idx,
                     AnthropicToolCallState {
-                        id: tc.id.clone(),
-                        name: tc.function.name.clone(),
+                        id: id.clone(),
+                        name: name.clone(),
                         arguments: String::new(),
                     },
                 );
@@ -296,34 +307,34 @@ impl AnthropicStreamConverter {
                         "index": self.content_index,
                         "content_block": {
                             "type": "tool_use",
-                            "id": tc.id,
-                            "name": tc.function.name,
+                            "id": id,
+                            "name": name,
                             "input": {}
                         }
                     }),
                 ));
 
                 // 如果有初始 arguments，发送 delta
-                if !tc.function.arguments.is_empty() {
+                if !arguments.is_empty() {
                     events.push(Self::sse_event("content_block_delta", serde_json::json!({
                         "type": "content_block_delta",
                         "index": self.content_index,
-                        "delta": { "type": "input_json_delta", "partial_json": tc.function.arguments }
+                        "delta": { "type": "input_json_delta", "partial_json": arguments }
                     })));
                     if let Some(state) = self.tool_calls.get_mut(&idx) {
-                        state.arguments.push_str(&tc.function.arguments);
+                        state.arguments.push_str(&arguments);
                     }
                 }
 
                 self.current_tool_index += 1;
             } else if let Some(state) = self.tool_calls.get_mut(&idx) {
                 // 追加 arguments
-                state.arguments.push_str(&tc.function.arguments);
-                if !tc.function.arguments.is_empty() {
+                state.arguments.push_str(&arguments);
+                if !arguments.is_empty() {
                     events.push(Self::sse_event("content_block_delta", serde_json::json!({
                         "type": "content_block_delta",
                         "index": self.content_index,
-                        "delta": { "type": "input_json_delta", "partial_json": tc.function.arguments }
+                        "delta": { "type": "input_json_delta", "partial_json": arguments }
                     })));
                 }
             }

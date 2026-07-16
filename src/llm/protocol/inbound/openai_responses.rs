@@ -247,14 +247,25 @@ impl Inbound for OpenAiResponsesInbound {
 
             if let Some(tool_calls) = &choice.delta.tool_calls {
                 for tc in tool_calls {
+                    let id = tc.id.clone().unwrap_or_default();
+                    let name = tc
+                        .function
+                        .as_ref()
+                        .and_then(|f| f.name.clone())
+                        .unwrap_or_default();
+                    let arguments = tc
+                        .function
+                        .as_ref()
+                        .and_then(|f| f.arguments.clone())
+                        .unwrap_or_default();
                     events.push(format!(
                         "event: response.function_call_arguments.delta\ndata: {}\n\n",
                         serde_json::json!({
                             "type": "response.function_call_arguments.delta",
                             "output_index": 0,
-                            "call_id": tc.id,
-                            "name": tc.function.name,
-                            "delta": tc.function.arguments
+                            "call_id": id,
+                            "name": name,
+                            "delta": arguments
                         })
                     ));
                 }
