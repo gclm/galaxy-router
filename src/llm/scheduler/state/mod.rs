@@ -223,7 +223,7 @@ impl LoadBalancerState {
     /// 清理过期的拉黑
     pub async fn cleanup_expired_blacklists(&self) {
         let mut states = self.channel_states.write().await;
-        for (_, status) in states.iter_mut() {
+        for status in states.values_mut() {
             if status.is_blacklisted
                 && let Some(until) = status.blacklist_until
                 && Utc::now() >= until
