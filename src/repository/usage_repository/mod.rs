@@ -1,19 +1,31 @@
-//! Usage 数据访问层（v1.1.2 从 metrics/query 迁入）。
+//! Usage 数据访问层（按查询类型拆子模块）。
 //!
-//! 统计/日志查询 SQL 全部隔离在此。行类型（UsageLogRow/UsageLogDetail）带
-//! `sqlx::FromRow` 留在本层；纯 DTO（StatsOverview 等）在 domain::usage。
+//! 本 mod.rs 持 `UsageRepository` trait + `SqliteUsageRepository` struct + 跨类共享的
+//! helper/类型；各查询类别在 leaf 文件（overview/trend/model/channel/api_key/logs/
+//! latency/write/maintenance）各自的 `impl UsageRepository for SqliteUsageRepository`
+//! 块中实现。行类型（UsageLogRow/UsageLogDetail）带 `sqlx::FromRow` 留本层；纯 DTO 在 domain::usage。
 
 use std::collections::HashMap;
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
-use sqlx::{AssertSqlSafe, SqlitePool};
+use sqlx::SqlitePool;
 
 use crate::domain::usage::{
     ApiKeyStats, ChannelStats, DailyStats, LogsFilter, ModelStats, PagedResult, RequestRecord,
     StatsOverview,
 };
 use crate::util::timeutil::tz_modifier;
+
+mod api_key;
+mod channel;
+mod latency;
+mod logs;
+mod maintenance;
+mod model;
+mod overview;
+mod trend;
+mod write;
 
 /// 请求日志（含渠道名和 Key 名）
 #[derive(Debug, Serialize, Deserialize, sqlx::FromRow)]
@@ -80,10 +92,7 @@ pub struct UsageLogDetail {
 }
 
 /// 按日期聚合的统计行
-type DailyRow = (String, i32, i32, i32, i32, i32, i32, i32, f64);
-
-/// 渠道统计行类型
-type ChannelStatsRow = (String, String, i32, i32, i32, i32, i32, f64);
+pub(super) type DailyRow = (String, i32, i32, i32, i32, i32, i32, i32, f64);
 
 #[async_trait]
 pub trait UsageRepository: Send + Sync {
@@ -146,18 +155,18 @@ impl SqliteUsageRepository {
         }
     }
 
-    fn tz_modifier(&self) -> String {
+    pub(super) fn tz_modifier(&self) -> String {
         tz_modifier(self.timezone_offset)
     }
 
-    fn now_local(&self) -> chrono::DateTime<chrono::Utc> {
+    pub(super) fn now_local(&self) -> chrono::DateTime<chrono::Utc> {
         chrono::Utc::now() + chrono::Duration::hours(self.timezone_offset as i64)
     }
 
     /// 本地"最近 days 天(含今天)"对应的 UTC 时间范围 [start, end)。
     /// created_at 以 UTC 存储,用裸列 `created_at >= ? AND created_at < ?` 比较才能命中
     /// idx_usage_logs_created_at(避免 `date(datetime(created_at,...))` 让索引失效、全表扫)。
-    fn range_utc_days(&self, days: i32) -> (String, String) {
+    pub(super) fn range_utc_days(&self, days: i32) -> (String, String) {
         let tz = self.timezone_offset as i64;
         let today = (chrono::Utc::now() + chrono::Duration::hours(tz)).date_naive();
         let start = today - chrono::Duration::days((days.max(1) - 1) as i64);
@@ -171,7 +180,7 @@ impl SqliteUsageRepository {
     }
 
     /// 本地日期范围 [start_local, end_local](含两端)对应的 UTC 范围 [start, end_next_day)。
-    fn range_utc_between(&self, start_local: &str, end_local: &str) -> (String, String) {
+    pub(super) fn range_utc_between(&self, start_local: &str, end_local: &str) -> (String, String) {
         let tz = self.timezone_offset as i64;
         let today = (chrono::Utc::now() + chrono::Duration::hours(tz)).date_naive();
         let start = chrono::NaiveDate::parse_from_str(start_local, "%Y-%m-%d").unwrap_or(today);
@@ -186,7 +195,7 @@ impl SqliteUsageRepository {
     }
 
     /// 将小时级结果补齐到完整 24 小时（00:00 ~ 23:00）
-    fn fill_hourly(&self, rows: Vec<DailyRow>) -> Vec<DailyStats> {
+    pub(super) fn fill_hourly(&self, rows: Vec<DailyRow>) -> Vec<DailyStats> {
         let map: HashMap<String, DailyStats> = rows
             .into_iter()
             .map(|r| {
@@ -214,582 +223,7 @@ impl SqliteUsageRepository {
     }
 }
 
-#[async_trait]
-impl UsageRepository for SqliteUsageRepository {
-    async fn get_overview(&self) -> Result<StatsOverview, sqlx::Error> {
-        let total: (i64, i64, i64, f64) = sqlx::query_as(
-            "SELECT
-                COUNT(*),
-                COALESCE(SUM(input_tokens), 0),
-                COALESCE(SUM(output_tokens), 0),
-                CAST(COALESCE(SUM(COALESCE(cost, 0)), 0.0) AS REAL)
-            FROM usage_logs",
-        )
-        .fetch_one(&self.pool)
-        .await?;
-
-        let (utc_start, utc_end) = self.range_utc_days(1);
-        let today_stats: (i64, i64, i64, f64) = sqlx::query_as(
-            "SELECT
-                COUNT(*),
-                COALESCE(SUM(input_tokens), 0),
-                COALESCE(SUM(output_tokens), 0),
-                CAST(COALESCE(SUM(COALESCE(cost, 0)), 0.0) AS REAL)
-            FROM usage_logs
-            WHERE created_at >= ? AND created_at < ?",
-        )
-        .bind(utc_start)
-        .bind(utc_end)
-        .fetch_one(&self.pool)
-        .await?;
-
-        Ok(StatsOverview {
-            total_requests: total.0,
-            total_input_tokens: total.1,
-            total_output_tokens: total.2,
-            total_cost: total.3,
-            today_requests: today_stats.0,
-            today_input_tokens: today_stats.1,
-            today_output_tokens: today_stats.2,
-            today_cost: today_stats.3,
-            latency_p50: None,
-            latency_p95: None,
-            latency_p99: None,
-        })
-    }
-
-    async fn get_latency_percentiles(
-        &self,
-        days: i32,
-    ) -> Result<(Option<f64>, Option<f64>, Option<f64>), sqlx::Error> {
-        let (utc_start, utc_end) = self.range_utc_days(days);
-
-        let latencies: Vec<i32> = sqlx::query_scalar(
-            "SELECT latency_ms FROM usage_logs \
-             WHERE latency_ms IS NOT NULL AND latency_ms > 0 \
-             AND created_at >= ? AND created_at < ? \
-             ORDER BY latency_ms ASC",
-        )
-        .bind(utc_start)
-        .bind(utc_end)
-        .fetch_all(&self.pool)
-        .await?;
-
-        Ok(compute_percentiles(&latencies))
-    }
-
-    async fn get_model_stats(&self, days: i32) -> Result<Vec<ModelStats>, sqlx::Error> {
-        let (utc_start, utc_end) = self.range_utc_days(days);
-        let stats = sqlx::query_as::<_, (String, i32, i32, i32, f64)>(
-            "SELECT
-                requested_model,
-                COUNT(*),
-                COALESCE(SUM(input_tokens), 0),
-                COALESCE(SUM(output_tokens), 0),
-                CAST(COALESCE(SUM(COALESCE(cost, 0)), 0.0) AS REAL)
-            FROM usage_logs
-            WHERE created_at >= ? AND created_at < ?
-            GROUP BY requested_model
-            ORDER BY COUNT(*) DESC",
-        )
-        .bind(utc_start)
-        .bind(utc_end)
-        .fetch_all(&self.pool)
-        .await?;
-
-        Ok(stats
-            .into_iter()
-            .map(|(model, requests, input, output, cost)| ModelStats {
-                model,
-                request_count: requests,
-                input_tokens: input,
-                output_tokens: output,
-                total_cost: cost,
-            })
-            .collect())
-    }
-
-    async fn get_channel_stats(&self, days: i32) -> Result<Vec<ChannelStats>, sqlx::Error> {
-        let (utc_start, utc_end) = self.range_utc_days(days);
-        let rows: Vec<ChannelStatsRow> = sqlx::query_as(
-            "SELECT
-                ul.channel_id,
-                COALESCE(c.name, 'unknown'),
-                COUNT(*),
-                SUM(CASE WHEN ul.status_code >= 200 AND ul.status_code < 400 THEN 1 ELSE 0 END),
-                SUM(CASE WHEN ul.status_code < 200 OR ul.status_code >= 400 THEN 1 ELSE 0 END),
-                COALESCE(SUM(ul.input_tokens), 0),
-                COALESCE(SUM(ul.output_tokens), 0),
-                CAST(COALESCE(SUM(COALESCE(ul.cost, 0)), 0.0) AS REAL)
-            FROM usage_logs ul
-            LEFT JOIN channels c ON ul.channel_id = c.id
-            WHERE ul.created_at >= ? AND ul.created_at < ?
-            GROUP BY ul.channel_id
-            ORDER BY COUNT(*) DESC",
-        )
-        .bind(utc_start)
-        .bind(utc_end)
-        .fetch_all(&self.pool)
-        .await?;
-
-        Ok(rows
-            .into_iter()
-            .map(
-                |(id, name, requests, success, failure, input, output, cost)| ChannelStats {
-                    channel_id: id,
-                    channel_name: name,
-                    request_count: requests,
-                    success_count: success,
-                    failure_count: failure,
-                    input_tokens: input,
-                    output_tokens: output,
-                    total_cost: cost,
-                },
-            )
-            .collect())
-    }
-
-    async fn get_daily_stats(&self, days: i32) -> Result<Vec<DailyStats>, sqlx::Error> {
-        let tz = self.tz_modifier();
-
-        if days <= 1 {
-            let (utc_start, utc_end) = self.range_utc_days(1);
-            let sql = format!(
-                "SELECT
-                    strftime('%H:00', datetime(created_at, '{}')),
-                    COUNT(*),
-                    SUM(CASE WHEN status_code >= 200 AND status_code < 400 THEN 1 ELSE 0 END),
-                    SUM(CASE WHEN status_code < 200 OR status_code >= 400 THEN 1 ELSE 0 END),
-                    COALESCE(SUM(input_tokens), 0),
-                    COALESCE(SUM(output_tokens), 0),
-                    COALESCE(SUM(cache_read_tokens), 0),
-                    COALESCE(SUM(cache_creation_tokens), 0),
-                    CAST(COALESCE(SUM(COALESCE(cost, 0)), 0.0) AS REAL)
-                FROM usage_logs
-                WHERE created_at >= ? AND created_at < ?
-                GROUP BY strftime('%H', datetime(created_at, '{}'))
-                ORDER BY strftime('%H', datetime(created_at, '{}')) ASC",
-                tz, tz, tz
-            );
-            let rows: Vec<DailyRow> = sqlx::query_as(AssertSqlSafe(sql))
-                .bind(utc_start)
-                .bind(utc_end)
-                .fetch_all(&self.pool)
-                .await?;
-
-            return Ok(self.fill_hourly(rows));
-        }
-
-        let (utc_start, utc_end) = self.range_utc_days(days);
-
-        let sql = format!(
-            "SELECT
-                date(datetime(created_at, '{}')),
-                COUNT(*),
-                SUM(CASE WHEN status_code >= 200 AND status_code < 400 THEN 1 ELSE 0 END),
-                SUM(CASE WHEN status_code < 200 OR status_code >= 400 THEN 1 ELSE 0 END),
-                COALESCE(SUM(input_tokens), 0),
-                COALESCE(SUM(output_tokens), 0),
-                COALESCE(SUM(cache_read_tokens), 0),
-                COALESCE(SUM(cache_creation_tokens), 0),
-                CAST(COALESCE(SUM(COALESCE(cost, 0)), 0.0) AS REAL)
-            FROM usage_logs
-            WHERE created_at >= ? AND created_at < ?
-            GROUP BY date(datetime(created_at, '{}'))
-            ORDER BY date(datetime(created_at, '{}')) ASC",
-            tz, tz, tz
-        );
-        let rows: Vec<DailyRow> = sqlx::query_as(AssertSqlSafe(sql))
-            .bind(utc_start)
-            .bind(utc_end)
-            .fetch_all(&self.pool)
-            .await?;
-
-        Ok(rows.into_iter().map(daily_row_to_stats).collect())
-    }
-
-    async fn get_daily_stats_by_range(
-        &self,
-        start: &str,
-        end: &str,
-    ) -> Result<Vec<DailyStats>, sqlx::Error> {
-        let tz = self.tz_modifier();
-        let (utc_start, utc_end) = self.range_utc_between(start, end);
-        let sql = format!(
-            "SELECT
-                date(datetime(created_at, '{}')),
-                COUNT(*),
-                SUM(CASE WHEN status_code >= 200 AND status_code < 400 THEN 1 ELSE 0 END),
-                SUM(CASE WHEN status_code < 200 OR status_code >= 400 THEN 1 ELSE 0 END),
-                COALESCE(SUM(input_tokens), 0),
-                COALESCE(SUM(output_tokens), 0),
-                COALESCE(SUM(cache_read_tokens), 0),
-                COALESCE(SUM(cache_creation_tokens), 0),
-                CAST(COALESCE(SUM(COALESCE(cost, 0)), 0.0) AS REAL)
-            FROM usage_logs
-            WHERE created_at >= ? AND created_at < ?
-            GROUP BY date(datetime(created_at, '{}'))
-            ORDER BY date(datetime(created_at, '{}')) ASC",
-            tz, tz, tz
-        );
-        let rows: Vec<DailyRow> = sqlx::query_as(AssertSqlSafe(sql))
-            .bind(utc_start)
-            .bind(utc_end)
-            .fetch_all(&self.pool)
-            .await?;
-
-        Ok(rows.into_iter().map(daily_row_to_stats).collect())
-    }
-
-    async fn get_model_stats_by_range(
-        &self,
-        start: &str,
-        end: &str,
-    ) -> Result<Vec<ModelStats>, sqlx::Error> {
-        let (utc_start, utc_end) = self.range_utc_between(start, end);
-        let stats = sqlx::query_as::<_, (String, i32, i32, i32, f64)>(
-            "SELECT
-                requested_model,
-                COUNT(*),
-                COALESCE(SUM(input_tokens), 0),
-                COALESCE(SUM(output_tokens), 0),
-                CAST(COALESCE(SUM(COALESCE(cost, 0)), 0.0) AS REAL)
-            FROM usage_logs
-            WHERE created_at >= ? AND created_at < ?
-            GROUP BY requested_model
-            ORDER BY COUNT(*) DESC",
-        )
-        .bind(utc_start)
-        .bind(utc_end)
-        .fetch_all(&self.pool)
-        .await?;
-
-        Ok(stats
-            .into_iter()
-            .map(|(model, requests, input, output, cost)| ModelStats {
-                model,
-                request_count: requests,
-                input_tokens: input,
-                output_tokens: output,
-                total_cost: cost,
-            })
-            .collect())
-    }
-
-    async fn get_channel_stats_by_range(
-        &self,
-        start: &str,
-        end: &str,
-    ) -> Result<Vec<ChannelStats>, sqlx::Error> {
-        let (utc_start, utc_end) = self.range_utc_between(start, end);
-        let rows: Vec<ChannelStatsRow> = sqlx::query_as(
-            "SELECT
-                ul.channel_id,
-                COALESCE(c.name, 'unknown'),
-                COUNT(*),
-                SUM(CASE WHEN ul.status_code >= 200 AND ul.status_code < 400 THEN 1 ELSE 0 END),
-                SUM(CASE WHEN ul.status_code < 200 OR ul.status_code >= 400 THEN 1 ELSE 0 END),
-                COALESCE(SUM(ul.input_tokens), 0),
-                COALESCE(SUM(ul.output_tokens), 0),
-                CAST(COALESCE(SUM(COALESCE(ul.cost, 0)), 0.0) AS REAL)
-            FROM usage_logs ul
-            LEFT JOIN channels c ON ul.channel_id = c.id
-            WHERE ul.created_at >= ? AND ul.created_at < ?
-            GROUP BY ul.channel_id
-            ORDER BY COUNT(*) DESC",
-        )
-        .bind(utc_start)
-        .bind(utc_end)
-        .fetch_all(&self.pool)
-        .await?;
-
-        Ok(rows
-            .into_iter()
-            .map(
-                |(id, name, requests, success, failure, input, output, cost)| ChannelStats {
-                    channel_id: id,
-                    channel_name: name,
-                    request_count: requests,
-                    success_count: success,
-                    failure_count: failure,
-                    input_tokens: input,
-                    output_tokens: output,
-                    total_cost: cost,
-                },
-            )
-            .collect())
-    }
-
-    async fn get_logs(&self, filter: LogsFilter) -> Result<PagedResult<UsageLogRow>, sqlx::Error> {
-        use sqlx::QueryBuilder;
-
-        let mut count_builder = QueryBuilder::new("SELECT COUNT(*) FROM usage_logs ul WHERE 1=1");
-        if let Some(ref model) = filter.model {
-            count_builder.push(" AND ul.requested_model = ");
-            count_builder.push_bind(model.clone());
-        }
-        if let Some(ref cid) = filter.channel_id {
-            count_builder.push(" AND ul.channel_id = ");
-            count_builder.push_bind(cid.clone());
-        }
-        if let Some(ref kid) = filter.api_key_id {
-            count_builder.push(" AND ul.api_key_id = ");
-            count_builder.push_bind(kid.clone());
-        }
-        match filter.status.as_deref() {
-            Some("success") => {
-                count_builder.push(" AND ul.status_code >= 200 AND ul.status_code < 400");
-            }
-            Some("failure") => {
-                count_builder.push(" AND (ul.status_code < 200 OR ul.status_code >= 400)");
-            }
-            _ => {}
-        }
-
-        let total: (i64,) = count_builder.build_query_as().fetch_one(&self.pool).await?;
-
-        let tz = self.tz_modifier();
-        let mut data_builder = QueryBuilder::new(format!(
-            r#"SELECT ul.id, ul.api_key_id, ak.name as api_key_name,
-                      ul.channel_id, c.name as channel_name,
-                      ul.route_id, ul.requested_model, ul.actual_model,
-                      ul.input_tokens, ul.output_tokens,
-                      ul.cache_read_tokens, ul.cache_creation_tokens,
-                      ul.cost, ul.latency_ms, ul.ttft_ms, ul.status_code, ul.error_message, datetime(ul.created_at, '{}') as created_at,
-                      ul.endpoint_type, ul.request_type, ul.is_stream, ul.upstream_key_hint, ul.user_agent, ul.attempts as raw_attempts
-               FROM usage_logs ul
-               LEFT JOIN api_keys ak ON ul.api_key_id = ak.id
-               LEFT JOIN channels c ON ul.channel_id = c.id
-               WHERE 1=1"#,
-            tz
-        ));
-        if let Some(ref model) = filter.model {
-            data_builder.push(" AND ul.requested_model = ");
-            data_builder.push_bind(model.clone());
-        }
-        if let Some(ref cid) = filter.channel_id {
-            data_builder.push(" AND ul.channel_id = ");
-            data_builder.push_bind(cid.clone());
-        }
-        if let Some(ref kid) = filter.api_key_id {
-            data_builder.push(" AND ul.api_key_id = ");
-            data_builder.push_bind(kid.clone());
-        }
-        match filter.status.as_deref() {
-            Some("success") => {
-                data_builder.push(" AND ul.status_code >= 200 AND ul.status_code < 400");
-            }
-            Some("failure") => {
-                data_builder.push(" AND (ul.status_code < 200 OR ul.status_code >= 400)");
-            }
-            _ => {}
-        }
-        data_builder.push(" ORDER BY ul.created_at DESC LIMIT ");
-        data_builder.push(filter.limit);
-        data_builder.push(" OFFSET ");
-        data_builder.push(filter.offset);
-
-        let rows: Vec<UsageLogRow> = data_builder
-            .build_query_as()
-            .fetch_all(&self.pool)
-            .await?
-            .into_iter()
-            .map(|mut row: UsageLogRow| {
-                row.attempts = row
-                    .raw_attempts
-                    .take()
-                    .and_then(|s| serde_json::from_str(&s).ok());
-                row
-            })
-            .collect();
-
-        Ok(PagedResult {
-            items: rows,
-            total: total.0,
-        })
-    }
-
-    async fn get_log_detail(&self, id: &str) -> Result<Option<UsageLogDetail>, sqlx::Error> {
-        let tz = self.tz_modifier();
-        let row = sqlx::query_as::<_, UsageLogDetail>(
-            AssertSqlSafe(format!(r#"SELECT ul.id, ul.api_key_id, ak.name as api_key_name,
-                      ul.channel_id, c.name as channel_name,
-                      ul.route_id, ul.requested_model, ul.actual_model,
-                      ul.input_tokens, ul.output_tokens,
-                      ul.cache_read_tokens, ul.cache_creation_tokens,
-                      ul.cost, ul.latency_ms, ul.ttft_ms, ul.status_code, ul.error_message, datetime(ul.created_at, '{}') as created_at,
-                      ul.endpoint_type, ul.request_type,
-                      up.request_content, up.response_content, ul.is_stream, ul.upstream_key_hint, ul.user_agent, ul.attempts as raw_attempts
-               FROM usage_logs ul
-               LEFT JOIN usage_payloads up ON up.log_id = ul.id
-               LEFT JOIN api_keys ak ON ul.api_key_id = ak.id
-               LEFT JOIN channels c ON ul.channel_id = c.id
-               WHERE ul.id = ?"#, tz).as_str()),
-        )
-        .bind(id)
-        .fetch_optional(&self.pool)
-        .await?
-        .map(|mut r| {
-            r.attempts = r.raw_attempts.take().and_then(|s| serde_json::from_str(&s).ok());
-            r
-        });
-
-        Ok(row)
-    }
-
-    async fn get_log_models(&self) -> Result<Vec<String>, sqlx::Error> {
-        let models = sqlx::query_scalar::<_, String>(
-            "SELECT DISTINCT requested_model FROM usage_logs ORDER BY requested_model",
-        )
-        .fetch_all(&self.pool)
-        .await?;
-
-        Ok(models)
-    }
-
-    async fn get_api_key_stats(&self, days: i32) -> Result<Vec<ApiKeyStats>, sqlx::Error> {
-        let cutoff = self.now_local() - chrono::Duration::days(days as i64);
-        let cutoff_str = cutoff.format("%Y-%m-%d %H:%M:%S").to_string();
-
-        let rows = sqlx::query_as::<_, (String, Option<String>, i32, i32, i32, i32, i32, f64, f64)>(
-            r#"
-            SELECT
-                ul.api_key_id,
-                ak.name AS api_key_name,
-                COUNT(*) AS request_count,
-                SUM(CASE WHEN ul.status_code >= 200 AND ul.status_code < 400 THEN 1 ELSE 0 END) AS success_count,
-                SUM(CASE WHEN ul.status_code IS NULL OR ul.status_code < 200 OR ul.status_code >= 400 THEN 1 ELSE 0 END) AS failure_count,
-                COALESCE(SUM(ul.input_tokens), 0) AS input_tokens,
-                COALESCE(SUM(ul.output_tokens), 0) AS output_tokens,
-                COALESCE(SUM(ul.cost), 0.0) AS total_cost,
-                COALESCE(AVG(CAST(ul.latency_ms AS REAL)), 0.0) AS avg_latency_ms
-            FROM usage_logs ul
-            LEFT JOIN api_keys ak ON ul.api_key_id = ak.id
-            WHERE ul.api_key_id IS NOT NULL AND ul.created_at >= ?
-            GROUP BY ul.api_key_id
-            ORDER BY total_cost DESC
-            "#,
-        )
-        .bind(&cutoff_str)
-        .fetch_all(&self.pool)
-        .await?;
-
-        Ok(rows
-            .into_iter()
-            .map(
-                |(
-                    api_key_id,
-                    api_key_name,
-                    request_count,
-                    success_count,
-                    failure_count,
-                    input_tokens,
-                    output_tokens,
-                    total_cost,
-                    avg_latency_ms,
-                )| {
-                    ApiKeyStats {
-                        api_key_id,
-                        api_key_name,
-                        request_count,
-                        success_count,
-                        failure_count,
-                        input_tokens,
-                        output_tokens,
-                        total_cost,
-                        avg_latency_ms,
-                    }
-                },
-            )
-            .collect())
-    }
-
-    async fn insert_usage_log(&self, record: &RequestRecord) -> Result<String, sqlx::Error> {
-        let id = uuid::Uuid::now_v7().to_string();
-        let attempts_json = if record.attempts.is_empty() {
-            None
-        } else {
-            Some(serde_json::to_string(&record.attempts).unwrap_or_default())
-        };
-        sqlx::query(
-            r#"
-            INSERT INTO usage_logs (
-                id, request_id, api_key_id, channel_id, route_id,
-                requested_model, actual_model,
-                input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens,
-                cost, latency_ms, ttft_ms, status_code, error_message,
-                endpoint_type, request_type, is_stream,
-                upstream_key_hint, attempts, user_agent
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            "#,
-        )
-        .bind(&id)
-        .bind(&record.request_id)
-        .bind(&record.api_key_id)
-        .bind(&record.channel_id)
-        .bind(&record.route_id)
-        .bind(&record.requested_model)
-        .bind(&record.actual_model)
-        .bind(record.input_tokens)
-        .bind(record.output_tokens)
-        .bind(record.cache_read_tokens)
-        .bind(record.cache_creation_tokens)
-        .bind(record.cost)
-        .bind(record.latency_ms)
-        .bind(record.ttft_ms)
-        .bind(record.status_code)
-        .bind(&record.error_message)
-        .bind(&record.endpoint_type)
-        .bind(&record.request_type)
-        .bind(record.is_stream)
-        .bind(&record.upstream_key_hint)
-        .bind(&attempts_json)
-        .bind(&record.user_agent)
-        .execute(&self.pool)
-        .await?;
-        Ok(id)
-    }
-
-    async fn insert_usage_payload(
-        &self,
-        log_id: &str,
-        request_content: Option<&str>,
-        response_content: Option<&str>,
-    ) -> Result<(), sqlx::Error> {
-        sqlx::query(
-            "INSERT OR IGNORE INTO usage_payloads (log_id, request_content, response_content) VALUES (?, ?, ?)",
-        )
-        .bind(log_id)
-        .bind(request_content)
-        .bind(response_content)
-        .execute(&self.pool)
-        .await?;
-        Ok(())
-    }
-
-    async fn aggregate_cost(&self, api_key_id: &str) -> Result<(f64, f64), sqlx::Error> {
-        let (monthly, daily): (f64, f64) = sqlx::query_as(
-            r#"SELECT
-                CAST(COALESCE(SUM(CASE WHEN strftime('%Y-%m', created_at) = strftime('%Y-%m', 'now') THEN COALESCE(cost, 0) ELSE 0 END), 0) AS REAL),
-                CAST(COALESCE(SUM(CASE WHEN date(created_at) = date('now') THEN COALESCE(cost, 0) ELSE 0 END), 0) AS REAL)
-            FROM usage_logs WHERE api_key_id = ?"#,
-        )
-        .bind(api_key_id)
-        .fetch_one(&self.pool)
-        .await?;
-        Ok((monthly, daily))
-    }
-
-    async fn delete_older_than(&self, days: i64) -> Result<u64, sqlx::Error> {
-        let result = sqlx::query("DELETE FROM usage_logs WHERE created_at < datetime('now', ?)")
-            .bind(format!("-{} days", days))
-            .execute(&self.pool)
-            .await?;
-        Ok(result.rows_affected())
-    }
-}
-
-fn daily_row_to_stats(row: DailyRow) -> DailyStats {
+pub(super) fn daily_row_to_stats(row: DailyRow) -> DailyStats {
     DailyStats {
         date: row.0,
         request_count: row.1,
@@ -803,23 +237,85 @@ fn daily_row_to_stats(row: DailyRow) -> DailyStats {
     }
 }
 
-/// 从有序延迟列表计算 p50/p95/p99
-fn compute_percentiles(sorted: &[i32]) -> (Option<f64>, Option<f64>, Option<f64>) {
-    if sorted.is_empty() {
-        return (None, None, None);
+/// 完整 trait 实现：每方法委托到对应查询类别的 leaf 模块（实际 SQL 在各 leaf）。
+/// trait impl 不可拆多块（Rust 约束），故集中在此作薄委托。
+#[async_trait]
+impl UsageRepository for SqliteUsageRepository {
+    async fn get_overview(&self) -> Result<StatsOverview, sqlx::Error> {
+        overview::get_overview(self).await
     }
-    let p = |pct: f64| -> f64 {
-        let idx = ((sorted.len() - 1) as f64 * pct).round() as usize;
-        sorted[idx.min(sorted.len() - 1)] as f64
-    };
-    (Some(p(0.50)), Some(p(0.95)), Some(p(0.99)))
+    async fn get_latency_percentiles(
+        &self,
+        days: i32,
+    ) -> Result<(Option<f64>, Option<f64>, Option<f64>), sqlx::Error> {
+        latency::get_latency_percentiles(self, days).await
+    }
+    async fn get_model_stats(&self, days: i32) -> Result<Vec<ModelStats>, sqlx::Error> {
+        model::get_model_stats(self, days).await
+    }
+    async fn get_channel_stats(&self, days: i32) -> Result<Vec<ChannelStats>, sqlx::Error> {
+        channel::get_channel_stats(self, days).await
+    }
+    async fn get_daily_stats(&self, days: i32) -> Result<Vec<DailyStats>, sqlx::Error> {
+        trend::get_daily_stats(self, days).await
+    }
+    async fn get_daily_stats_by_range(
+        &self,
+        start: &str,
+        end: &str,
+    ) -> Result<Vec<DailyStats>, sqlx::Error> {
+        trend::get_daily_stats_by_range(self, start, end).await
+    }
+    async fn get_model_stats_by_range(
+        &self,
+        start: &str,
+        end: &str,
+    ) -> Result<Vec<ModelStats>, sqlx::Error> {
+        model::get_model_stats_by_range(self, start, end).await
+    }
+    async fn get_channel_stats_by_range(
+        &self,
+        start: &str,
+        end: &str,
+    ) -> Result<Vec<ChannelStats>, sqlx::Error> {
+        channel::get_channel_stats_by_range(self, start, end).await
+    }
+    async fn get_logs(&self, filter: LogsFilter) -> Result<PagedResult<UsageLogRow>, sqlx::Error> {
+        logs::get_logs(self, filter).await
+    }
+    async fn get_log_detail(&self, id: &str) -> Result<Option<UsageLogDetail>, sqlx::Error> {
+        logs::get_log_detail(self, id).await
+    }
+    async fn get_log_models(&self) -> Result<Vec<String>, sqlx::Error> {
+        logs::get_log_models(self).await
+    }
+    async fn get_api_key_stats(&self, days: i32) -> Result<Vec<ApiKeyStats>, sqlx::Error> {
+        api_key::get_api_key_stats(self, days).await
+    }
+    async fn insert_usage_log(&self, record: &RequestRecord) -> Result<String, sqlx::Error> {
+        write::insert_usage_log(self, record).await
+    }
+    async fn insert_usage_payload(
+        &self,
+        log_id: &str,
+        request_content: Option<&str>,
+        response_content: Option<&str>,
+    ) -> Result<(), sqlx::Error> {
+        write::insert_usage_payload(self, log_id, request_content, response_content).await
+    }
+    async fn aggregate_cost(&self, api_key_id: &str) -> Result<(f64, f64), sqlx::Error> {
+        maintenance::aggregate_cost(self, api_key_id).await
+    }
+    async fn delete_older_than(&self, days: i64) -> Result<u64, sqlx::Error> {
+        maintenance::delete_older_than(self, days).await
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::infra::db::Database;
     use crate::domain::usage::{DailyStats, LogsFilter};
+    use crate::infra::db::Database;
 
     async fn make_pool() -> sqlx::SqlitePool {
         let db_path = format!("/tmp/galaxy_stats_mod_{}.db", uuid::Uuid::now_v7());
