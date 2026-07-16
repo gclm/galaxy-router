@@ -62,6 +62,13 @@ test-proxy:
 test-regression:
 	cargo test --test api --test proxy
 
+# 接口冒烟（黑盒端到端：启动 mock 上游 + 真实 binary，HTTP 测核心链路）
+test-smoke: build
+	python3 scripts/api_smoke.py
+
+# 完整验证（单元 + API + 代理 + 接口冒烟）：单测后跑接口自动化
+test-all: test test-smoke
+
 # CI 完整流程
 test-ci: clippy test-regression
 
