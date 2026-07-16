@@ -6,6 +6,8 @@ use super::stream_converter::StreamConverter;
 use crate::domain::channel::EndpointType;
 
 pub mod anthropic;
+mod anthropic_converter;
+mod openai_responses_converter;
 pub mod openai_chat;
 pub mod openai_responses;
 
