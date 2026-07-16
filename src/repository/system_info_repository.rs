@@ -7,6 +7,8 @@ use sqlx::SqlitePool;
 pub trait SystemInfoRepository: Send + Sync {
     /// 返回 (channel_count, route_count, api_key_count)
     async fn count_summary(&self) -> Result<(i64, i64, i64), sqlx::Error>;
+    /// VACUUM 回收磁盘空间（retention 删日志后释放；需无其他活跃事务，建议低峰 manual 触发）
+    async fn vacuum(&self) -> Result<(), sqlx::Error>;
 }
 
 pub struct SqliteSystemInfoRepository {
@@ -32,5 +34,10 @@ impl SystemInfoRepository for SqliteSystemInfoRepository {
             .fetch_one(&self.pool)
             .await?;
         Ok((channel_count, route_count, api_key_count))
+    }
+
+    async fn vacuum(&self) -> Result<(), sqlx::Error> {
+        sqlx::query("VACUUM").execute(&self.pool).await?;
+        Ok(())
     }
 }

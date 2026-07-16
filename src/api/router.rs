@@ -169,6 +169,7 @@ pub async fn create_router(
             "/system-info",
             Router::new()
                 .route("/", get(system_info::get))
+                .route("/vacuum", post(system_info::vacuum))
                 .with_state(app_state.clone()),
         )
         .nest(

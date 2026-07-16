@@ -5,6 +5,7 @@ use tokio::time::interval;
 use crate::llm::relay::ratelimit::RateLimiter;
 use crate::llm::scheduler::state::LoadBalancerState;
 use crate::repository::channel_repository::{ChannelRepository, SqliteChannelRepository};
+use crate::repository::settings_repository::{SettingsRepository, SqliteSettingsRepository};
 use crate::repository::usage_repository::{SqliteUsageRepository, UsageRepository};
 
 /// 健康探测默认间隔（秒）
@@ -162,14 +163,22 @@ impl Scheduler {
         loop {
             interval.tick().await;
 
+            // 保留天数可配（settings usage.retention_days，默认 30 天）
+            let days = SqliteSettingsRepository::new(self.pool.clone())
+                .get("usage.retention_days")
+                .await
+                .ok()
+                .flatten()
+                .and_then(|v| v.parse::<i64>().ok())
+                .unwrap_or(30);
             let result = SqliteUsageRepository::new(self.pool.clone(), 0)
-                .delete_older_than(90)
+                .delete_older_than(days)
                 .await;
 
             match result {
                 Ok(deleted) => {
                     if deleted > 0 {
-                        tracing::info!("清理了 {} 条过期请求日志（>90天）", deleted);
+                        tracing::info!("清理了 {} 条过期请求日志（>{}天）", deleted, days);
                     }
                 }
                 Err(e) => {

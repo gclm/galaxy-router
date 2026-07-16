@@ -41,7 +41,8 @@ impl StatsRecorder {
         // usage_logs 统计字段（repository 生成 PK + 序列化 attempts + INSERT）
         let id = self.usage.insert_usage_log(&record).await?;
 
-        // usage_payloads：受 usage.record_content 开关控制（默认 true），仅在有原文时写
+        // usage_payloads：受 usage.record_content 开关控制（默认 true，仅在有原文时写）。
+        // 高流量/生产场景建议在管理后台关闭（usage.record_content=false），配合 retention_days + VACUUM 治理 content 膨胀。
         let record_content = self
             .settings
             .get("usage.record_content")

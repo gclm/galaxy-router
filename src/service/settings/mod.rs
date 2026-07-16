@@ -25,6 +25,7 @@ const ALLOWED_SETTING_KEYS: &[&str] = &[
     "plugin.thinking_fix",
     "plugin.master_switch",
     "usage.record_content",
+    "usage.retention_days",
 ];
 
 #[derive(Clone)]
