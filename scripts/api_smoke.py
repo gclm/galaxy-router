@@ -28,13 +28,29 @@ ADMIN_USER, ADMIN_PASS = "admin", "admin12345"
 TIMEOUT = 30
 
 
-# ── mock 上游（OpenAI Chat Completions）──
+# ── mock 上游（OpenAI Chat Completions；记录收到的请求供协议转换/多模态黑盒断言）──
 class MockUpstream(http.server.BaseHTTPRequestHandler):
+    # 最近一次请求快照（path/body/auth）；单线程顺序测试，用例间靠 read_last_request() 清空隔离
+    last_request = {"path": None, "body": None, "auth": None}
+
     def do_POST(self):
+        length = int(self.headers.get("Content-Length", 0) or 0)
+        raw = self.rfile.read(length) if length else b""
+        try:
+            parsed = json.loads(raw) if raw else None
+        except Exception:
+            parsed = raw.decode(errors="replace")
+        MockUpstream.last_request = {
+            "path": self.path,
+            "body": parsed,
+            "auth": self.headers.get("Authorization"),
+        }
         if self.path.endswith("/chat/completions"):
             body = json.dumps({
                 "id": "chatcmpl-mock",
                 "object": "chat.completion",
+                "created": 1234567890,
+                "model": "smoke-model",
                 "choices": [{
                     "index": 0,
                     "message": {"role": "assistant", "content": "mock-ok"},
@@ -52,6 +68,13 @@ class MockUpstream(http.server.BaseHTTPRequestHandler):
 
     def log_message(self, *_):
         pass
+
+
+def read_last_request():
+    """读取并清空 mock 记录的最近一次请求（用例间隔离）。"""
+    req = dict(MockUpstream.last_request)
+    MockUpstream.last_request = {"path": None, "body": None, "auth": None}
+    return req
 
 
 def start_mock():
@@ -184,6 +207,69 @@ def main():
                            {"model": "smoke-model", "messages": [{"role": "user", "content": "hi"}], "max_tokens": 10},
                            token=api_key, expect=200)
         check("proxy 转发→mock", code == 200 and j.get("choices"))
+
+        # ── 协议转换：Anthropic client(/v1/messages) → openai_chat upstream（conversion 路径）──
+        read_last_request()  # 清空，隔离上一个用例的请求
+        code, j = http_req("POST", f"{base}/v1/messages", {
+            "model": "smoke-model",
+            "messages": [{"role": "user", "content": "hi"}],
+            "max_tokens": 10,
+        }, token=api_key, expect=200)
+        last = read_last_request()
+        conv_resp_ok = (
+            j.get("type") == "message"
+            and j.get("content") and j["content"][0].get("type") == "text"
+            and j.get("stop_reason") == "end_turn"
+            and "input_tokens" in j.get("usage", {}) and "output_tokens" in j.get("usage", {})
+        )
+        # mock 收到的应是 OpenAI Chat（content 字符串 "hi"，证明 Anthropic→OpenAI 转换）
+        conv_up_ok = (
+            last["body"] is not None
+            and last["path"] and last["path"].endswith("/chat/completions")
+            and last["body"].get("messages", [{}])[0].get("content") == "hi"
+        )
+        check("协议转换 anthropic→openai_chat", code == 200 and conv_resp_ok and conv_up_ok)
+
+        # ── 多模态 passthrough：openai_chat content 数组（text + image_url data URL）原样透传 ──
+        read_last_request()
+        code, j = http_req("POST", f"{base}/v1/chat/completions", {
+            "model": "smoke-model",
+            "messages": [{"role": "user", "content": [
+                {"type": "text", "text": "看图"},
+                {"type": "image_url", "image_url": {"url": "data:image/png;base64,aGVsbG8="}},
+            ]}],
+            "max_tokens": 10,
+        }, token=api_key, expect=200)
+        last = read_last_request()
+        recv = last["body"].get("messages", [{}])[0].get("content") if last["body"] else None
+        mm_pt_ok = (
+            isinstance(recv, list)
+            and any(p.get("type") == "image_url"
+                    and p.get("image_url", {}).get("url") == "data:image/png;base64,aGVsbG8="
+                    for p in recv)
+        )
+        check("多模态 passthrough content 数组", code == 200 and mm_pt_ok)
+
+        # ── 多模态 + 协议转换：Anthropic image(base64 source) → openai_chat image_url(data URL) ──
+        read_last_request()
+        code, j = http_req("POST", f"{base}/v1/messages", {
+            "model": "smoke-model",
+            "messages": [{"role": "user", "content": [
+                {"type": "text", "text": "看图"},
+                {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "aGVsbG8="}},
+            ]}],
+            "max_tokens": 10,
+        }, token=api_key, expect=200)
+        last = read_last_request()
+        recv = last["body"].get("messages", [{}])[0].get("content") if last["body"] else None
+        mm_conv_ok = (
+            isinstance(recv, list)
+            and any(p.get("type") == "image_url"
+                    and p.get("image_url", {}).get("url") == "data:image/png;base64,aGVsbG8="
+                    for p in recv)
+        )
+        check("多模态+协议转换 image base64→dataurl",
+              code == 200 and j.get("type") == "message" and mm_conv_ok)
 
         # stats（proxy 后应有记录）
         _, j = http_req("GET", f"{base}/api/v1/admin/stats/overview", token=token, expect=200)
