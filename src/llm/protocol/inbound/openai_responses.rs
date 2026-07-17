@@ -68,6 +68,39 @@ impl Inbound for OpenAiResponsesInbound {
                         let content = item_obj.get("content").map(|c| {
                             if let Some(s) = c.as_str() {
                                 Content::Text(s.to_string())
+                            } else if let Some(arr) = c.as_array() {
+                                let parts: Vec<ContentPart> = arr
+                                    .iter()
+                                    .filter_map(|item| match item["type"].as_str()? {
+                                        "input_text" | "text" => Some(ContentPart::Text {
+                                            text: item["text"].as_str()?.to_string(),
+                                            cache_control: None,
+                                        }),
+                                        "input_image" | "image_url" => {
+                                            // Responses input_image 的 image_url 为字符串 URL（兼容对象形式）
+                                            let url = item["image_url"]
+                                                .as_str()
+                                                .map(String::from)
+                                                .or_else(|| {
+                                                    item["image_url"]["url"]
+                                                        .as_str()
+                                                        .map(String::from)
+                                                })?;
+                                            Some(ContentPart::ImageUrl {
+                                                image_url: ImageUrl { url, detail: None },
+                                                cache_control: None,
+                                            })
+                                        }
+                                        "input_audio" => Some(ContentPart::InputAudio {
+                                            input_audio: InputAudio {
+                                                data: item["input_audio"]["data"].as_str()?.to_string(),
+                                                format: item["input_audio"]["format"].as_str()?.to_string(),
+                                            },
+                                        }),
+                                        _ => None,
+                                    })
+                                    .collect();
+                                Content::Parts(parts)
                             } else {
                                 Content::Parts(vec![ContentPart::Text {
                                     text: serde_json::to_string(c).unwrap_or_default(),
@@ -189,6 +222,8 @@ impl Inbound for OpenAiResponsesInbound {
                         items.push(serde_json::json!({
                             "type": "function_call",
                             "id": tc.id,
+                            "status": "completed",
+                            "call_id": tc.id,
                             "name": tc.function.name,
                             "arguments": tc.function.arguments
                         }));
@@ -199,101 +234,25 @@ impl Inbound for OpenAiResponsesInbound {
             })
             .unwrap_or_default();
 
-        let responses_format = serde_json::json!({
+        let mut responses_format = serde_json::json!({
             "id": response.id,
             "object": "response",
             "created_at": response.created,
             "model": response.model,
             "output": output,
-            "usage": response.usage,
             "status": "completed"
         });
+        // Responses API usage 字段为 input_tokens/output_tokens（与流式路径一致），非 Chat 的 prompt_tokens
+        if let Some(usage) = &response.usage {
+            responses_format["usage"] = serde_json::json!({
+                "input_tokens": usage.prompt_tokens,
+                "output_tokens": usage.completion_tokens,
+                "total_tokens": usage.total_tokens,
+            });
+        }
 
         serde_json::to_vec(&responses_format)
             .map_err(|e| InboundError::TransformError(format!("序列化响应失败: {}", e)))
-    }
-
-    fn transform_stream_event(&self, event: &LlmStreamResponse) -> Result<Vec<u8>, InboundError> {
-        let mut events = vec![];
-
-        if let Some(choice) = event.first_choice() {
-            if let Some(reasoning) = &choice.delta.reasoning_content
-                && !reasoning.is_empty()
-            {
-                events.push(format!(
-                    "event: response.reasoning.delta\ndata: {}\n\n",
-                    serde_json::json!({
-                        "type": "response.reasoning.delta",
-                        "output_index": 0,
-                        "delta": reasoning
-                    })
-                ));
-            }
-
-            if let Some(content) = &choice.delta.content
-                && let Content::Text(text) = content
-                && !text.is_empty()
-            {
-                events.push(format!(
-                    "event: response.output_text.delta\ndata: {}\n\n",
-                    serde_json::json!({
-                        "type": "response.output_text.delta",
-                        "output_index": 0,
-                        "content_index": 0,
-                        "delta": text
-                    })
-                ));
-            }
-
-            if let Some(tool_calls) = &choice.delta.tool_calls {
-                for tc in tool_calls {
-                    let id = tc.id.clone().unwrap_or_default();
-                    let name = tc
-                        .function
-                        .as_ref()
-                        .and_then(|f| f.name.clone())
-                        .unwrap_or_default();
-                    let arguments = tc
-                        .function
-                        .as_ref()
-                        .and_then(|f| f.arguments.clone())
-                        .unwrap_or_default();
-                    events.push(format!(
-                        "event: response.function_call_arguments.delta\ndata: {}\n\n",
-                        serde_json::json!({
-                            "type": "response.function_call_arguments.delta",
-                            "output_index": 0,
-                            "call_id": id,
-                            "name": name,
-                            "delta": arguments
-                        })
-                    ));
-                }
-            }
-
-            if choice.finish_reason.is_some() {
-                let mut response_obj = serde_json::json!({
-                    "id": event.id,
-                    "status": "completed"
-                });
-                if let Some(usage) = &event.usage {
-                    response_obj["usage"] = serde_json::json!({
-                        "input_tokens": usage.prompt_tokens,
-                        "output_tokens": usage.completion_tokens,
-                        "total_tokens": usage.total_tokens,
-                    });
-                }
-                events.push(format!(
-                    "event: response.completed\ndata: {}\n\n",
-                    serde_json::json!({
-                        "type": "response.completed",
-                        "response": response_obj
-                    })
-                ));
-            }
-        }
-
-        Ok(events.join("").into_bytes())
     }
 
     fn create_stream_converter(&self) -> Box<dyn StreamConverter> {

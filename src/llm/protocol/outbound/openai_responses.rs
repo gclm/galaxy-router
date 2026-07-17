@@ -32,6 +32,12 @@ impl Outbound for OpenAiResponsesOutbound {
                                 ContentPart::Text { text, .. } => {
                                     serde_json::json!({ "type": "input_text", "text": text })
                                 }
+                                ContentPart::ImageUrl { image_url, .. } => {
+                                    serde_json::json!({ "type": "input_image", "image_url": image_url.url })
+                                }
+                                ContentPart::InputAudio { input_audio } => {
+                                    serde_json::json!({ "type": "input_audio", "input_audio": { "data": input_audio.data, "format": input_audio.format } })
+                                }
                                 _ => serde_json::json!({ "type": "input_text", "text": "" }),
                             })
                             .collect();
@@ -50,10 +56,11 @@ impl Outbound for OpenAiResponsesOutbound {
         let mut body = serde_json::json!({
             "model": request.model,
             "input": input,
-            "stream": request.stream,
-            "temperature": request.temperature,
-            "max_output_tokens": request.max_completion_tokens,
         });
+        // 仅注入非 null 字段，避免上游对 null 值敏感（对齐 outbound/openai_chat.rs）
+        if let Some(v) = request.stream { body["stream"] = serde_json::json!(v); }
+        if let Some(v) = request.temperature { body["temperature"] = serde_json::json!(v); }
+        if let Some(v) = request.max_completion_tokens { body["max_output_tokens"] = serde_json::json!(v); }
 
         if let Some(tools) = &request.tools {
             let responses_tools: Vec<_> = tools

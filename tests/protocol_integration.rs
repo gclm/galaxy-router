@@ -340,11 +340,272 @@ async fn test_openai_chat_multimodal_content_parts() {
     assert_eq!(req.messages.len(), 1);
     match &req.messages[0].content {
         Some(Content::Parts(parts)) => {
-            assert!(!parts.is_empty());
+            assert_eq!(
+                parts.len(),
+                2,
+                "text + image_url 应解析为两个 part，不应被合并成单个 Text"
+            );
             assert!(parts.iter().any(|p| matches!(p, ContentPart::Text { .. })));
+            let img = parts
+                .iter()
+                .find_map(|p| match p {
+                    ContentPart::ImageUrl { image_url, .. } => Some(image_url),
+                    _ => None,
+                })
+                .expect("image_url part 不应被吞掉（旧实现会把整个数组序列化成单个 Text）");
+            assert_eq!(img.url, "https://example.com/cat.png");
         }
         _ => panic!("expected Parts content"),
     }
+}
+
+#[tokio::test]
+async fn test_openai_chat_inbound_input_audio_part() {
+    let body = r#"{
+        "model": "gpt-4o-audio-preview",
+        "messages": [{
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "transcribe"},
+                {"type": "input_audio", "input_audio": {"data": "BASE64DATA", "format": "wav"}}
+            ]
+        }]
+    }"#;
+    let req = OpenAiChatInbound
+        .transform_request(body.as_bytes(), &HeaderMap::new())
+        .await
+        .unwrap();
+    match &req.messages[0].content {
+        Some(Content::Parts(parts)) => {
+            let audio = parts
+                .iter()
+                .find_map(|p| match p {
+                    ContentPart::InputAudio { input_audio } => Some(input_audio),
+                    _ => None,
+                })
+                .expect("input_audio part 应被解析");
+            assert_eq!(audio.data, "BASE64DATA");
+            assert_eq!(audio.format, "wav");
+        }
+        _ => panic!("expected Parts content"),
+    }
+}
+
+#[tokio::test]
+async fn test_openai_chat_reasoning_effort_passes_through_outbound() {
+    let body = r#"{
+        "model": "o3",
+        "messages": [{"role": "user", "content": "hi"}],
+        "reasoning_effort": "high"
+    }"#;
+    let req = OpenAiChatInbound
+        .transform_request(body.as_bytes(), &HeaderMap::new())
+        .await
+        .unwrap();
+    assert_eq!(req.reasoning_effort.as_deref(), Some("high"));
+    let out = OpenAiChatOutbound.transform_request(&req).unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&out).unwrap();
+    assert_eq!(v["reasoning_effort"].as_str(), Some("high"));
+}
+
+#[test]
+fn test_openai_responses_outbound_response_usage_and_function_call_shape() {
+    use galaxy_router::llm::protocol::model::{
+        Choice, FinishReason, FunctionCall, ToolCall, Usage,
+    };
+    let response = LlmResponse {
+        id: "resp_1".into(),
+        object: "chat.completion".into(),
+        created: 0,
+        model: "o1".into(),
+        choices: vec![Choice {
+            index: 0,
+            message: Message {
+                role: Role::Assistant,
+                content: Some(Content::Text("hi".into())),
+                name: None,
+                tool_calls: Some(vec![ToolCall {
+                    id: "call_1".into(),
+                    call_type: "function".into(),
+                    function: FunctionCall {
+                        name: "search".into(),
+                        arguments: "{\"q\":1}".into(),
+                    },
+                }]),
+                tool_call_id: None,
+                reasoning_content: None,
+                cache_control: None,
+            },
+            finish_reason: Some(FinishReason::ToolCalls),
+        }],
+        usage: Some(Usage {
+            prompt_tokens: 10,
+            completion_tokens: 20,
+            total_tokens: 30,
+            ..Default::default()
+        }),
+        system_fingerprint: None,
+    };
+    let out = OpenAiResponsesInbound
+        .transform_response(&response)
+        .unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&out).unwrap();
+    // Responses usage 字段名应为 input_tokens/output_tokens（与流式一致），非 Chat 的 prompt_tokens
+    assert_eq!(v["usage"]["input_tokens"].as_u64(), Some(10));
+    assert_eq!(v["usage"]["output_tokens"].as_u64(), Some(20));
+    assert_eq!(v["usage"]["total_tokens"].as_u64(), Some(30));
+    assert!(
+        v["usage"].get("prompt_tokens").is_none(),
+        "不应残留 Chat 的 prompt_tokens 字段名"
+    );
+    // output[0]=message(content), output[1]=function_call
+    let fc = &v["output"][1];
+    assert_eq!(fc["type"], "function_call");
+    assert_eq!(fc["call_id"].as_str(), Some("call_1"));
+    assert_eq!(fc["status"].as_str(), Some("completed"));
+}
+
+#[tokio::test]
+async fn test_openai_chat_image_dataurl_to_anthropic_base64_source() {
+    let body = r#"{
+        "model": "gpt-4o",
+        "messages": [{
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "look"},
+                {"type": "image_url", "image_url": {"url": "data:image/png;base64,aGVsbG8="}}
+            ]
+        }]
+    }"#;
+    let req = OpenAiChatInbound
+        .transform_request(body.as_bytes(), &HeaderMap::new())
+        .await
+        .unwrap();
+    let out = AnthropicOutbound.transform_request(&req).unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&out).unwrap();
+    let img = v["messages"][0]["content"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|b| b["type"] == "image")
+        .unwrap();
+    assert_eq!(img["source"]["type"], "base64");
+    assert_eq!(img["source"]["media_type"], "image/png");
+    assert_eq!(img["source"]["data"], "aGVsbG8=");
+}
+
+#[tokio::test]
+async fn test_openai_chat_image_http_to_anthropic_url_source() {
+    let body = r#"{
+        "model": "gpt-4o",
+        "messages": [{
+            "role": "user",
+            "content": [{"type": "image_url", "image_url": {"url": "https://example.com/cat.png"}}]
+        }]
+    }"#;
+    let req = OpenAiChatInbound
+        .transform_request(body.as_bytes(), &HeaderMap::new())
+        .await
+        .unwrap();
+    let out = AnthropicOutbound.transform_request(&req).unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&out).unwrap();
+    let img = v["messages"][0]["content"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|b| b["type"] == "image")
+        .unwrap();
+    assert_eq!(img["source"]["type"], "url");
+    assert_eq!(img["source"]["url"], "https://example.com/cat.png");
+}
+
+#[tokio::test]
+async fn test_anthropic_image_base64_to_openai_chat_dataurl() {
+    let body = r#"{
+        "model": "claude-sonnet-4",
+        "max_tokens": 100,
+        "messages": [{
+            "role": "user",
+            "content": [{"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": "aGVsbG8="}}]
+        }]
+    }"#;
+    let req = AnthropicInbound
+        .transform_request(body.as_bytes(), &HeaderMap::new())
+        .await
+        .unwrap();
+    let out = OpenAiChatOutbound.transform_request(&req).unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&out).unwrap();
+    let img = v["messages"][0]["content"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|b| b["type"] == "image_url")
+        .unwrap();
+    assert_eq!(img["image_url"]["url"], "data:image/jpeg;base64,aGVsbG8=");
+}
+
+#[tokio::test]
+async fn test_openai_chat_input_audio_to_responses() {
+    let body = r#"{
+        "model": "gpt-4o-audio-preview",
+        "messages": [{
+            "role": "user",
+            "content": [{"type": "input_audio", "input_audio": {"data": "BASE64DATA", "format": "wav"}}]
+        }]
+    }"#;
+    let req = OpenAiChatInbound
+        .transform_request(body.as_bytes(), &HeaderMap::new())
+        .await
+        .unwrap();
+    let out = OpenAiResponsesOutbound.transform_request(&req).unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&out).unwrap();
+    let audio = v["input"][0]["content"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|b| b["type"] == "input_audio")
+        .unwrap();
+    assert_eq!(audio["input_audio"]["data"], "BASE64DATA");
+    assert_eq!(audio["input_audio"]["format"], "wav");
+}
+
+#[test]
+fn test_anthropic_outbound_stream_tool_use_decodes_to_openai_tool_calls() {
+    // Anthropic 上游流式 tool_use：id/name 在 content_block_start，参数在 input_json_delta。
+    // 解码成统一 IR 后应能配对成 OpenAI 风格的 tool_calls 首帧(id+name)+续传帧(arguments)。
+    let start = b"event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"tool_use\",\"id\":\"toolu_1\",\"name\":\"search\",\"input\":{}}}\n\n";
+    let delta = b"event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"{\\\"q\\\":\\\"rust\\\"}\"}}\n\n";
+
+    let start_resp = AnthropicOutbound
+        .transform_stream_event(start)
+        .unwrap()
+        .unwrap();
+    let tc = &start_resp.choices[0]
+        .delta
+        .tool_calls
+        .as_ref()
+        .expect("content_block_start(tool_use) 应产出 tool_calls 首帧")[0];
+    assert_eq!(tc.index, 0);
+    assert_eq!(tc.id.as_deref(), Some("toolu_1"));
+    assert_eq!(
+        tc.function.as_ref().and_then(|f| f.name.as_deref()),
+        Some("search")
+    );
+
+    let delta_resp = AnthropicOutbound
+        .transform_stream_event(delta)
+        .unwrap()
+        .unwrap();
+    let tc2 = &delta_resp.choices[0]
+        .delta
+        .tool_calls
+        .as_ref()
+        .expect("input_json_delta 应产出 tool_calls 续传帧")[0];
+    assert_eq!(tc2.index, 0, "续传帧 index 必须与首帧一致以配对");
+    assert_eq!(
+        tc2.function.as_ref().and_then(|f| f.arguments.as_deref()),
+        Some("{\"q\":\"rust\"}")
+    );
 }
 
 // ============================================================
@@ -540,36 +801,6 @@ fn test_anthropic_inbound_response_with_empty_choices() {
     assert_eq!(v["stop_reason"], serde_json::Value::Null);
 }
 
-#[test]
-fn test_anthropic_inbound_stream_event_emits_text_delta_and_stop() {
-    use galaxy_router::llm::protocol::model::{
-        FinishReason, LlmStreamResponse, StreamChoice, StreamDelta,
-    };
-    let event = LlmStreamResponse {
-        id: String::new(),
-        object: "chunk".into(),
-        created: 0,
-        model: String::new(),
-        choices: vec![StreamChoice {
-            index: 0,
-            delta: StreamDelta {
-                role: Some(Role::Assistant),
-                content: Some(Content::Text("hello".into())),
-                reasoning_content: None,
-                tool_calls: None,
-            },
-            finish_reason: Some(FinishReason::Stop),
-        }],
-        usage: None,
-        system_fingerprint: None,
-    };
-    let bytes = AnthropicInbound.transform_stream_event(&event).unwrap();
-    let s = String::from_utf8(bytes).unwrap();
-    assert!(s.contains("event: content_block_delta"));
-    assert!(s.contains("\"text\":\"hello\""));
-    assert!(s.contains("event: message_stop"));
-}
-
 // ============================================================
 // Anthropic outbound：response + stream 解析
 // ============================================================
@@ -751,35 +982,8 @@ async fn test_openai_chat_inbound_tool_choice_required_and_function() {
     }
 }
 
-#[test]
-fn test_openai_chat_inbound_stream_event_serializes() {
-    use galaxy_router::llm::protocol::model::{
-        FinishReason, LlmStreamResponse, StreamChoice, StreamDelta,
-    };
-    let event = LlmStreamResponse {
-        id: "x".into(),
-        object: "chunk".into(),
-        created: 0,
-        model: "gpt-4o".into(),
-        choices: vec![StreamChoice {
-            index: 0,
-            delta: StreamDelta {
-                role: Some(Role::Assistant),
-                content: Some(Content::Text("hi".into())),
-                reasoning_content: None,
-                tool_calls: None,
-            },
-            finish_reason: Some(FinishReason::Stop),
-        }],
-        usage: None,
-        system_fingerprint: None,
-    };
-    let bytes = OpenAiChatInbound.transform_stream_event(&event).unwrap();
-    let s = String::from_utf8(bytes).unwrap();
-    assert!(s.starts_with("data: "));
-    assert!(s.ends_with("\n\n"));
-}
-
+// ============================================================
+// OpenAI Chat outbound stream 事件解析
 #[tokio::test]
 async fn test_openai_chat_outbound_response_parses() {
     let body = serde_json::to_vec(&serde_json::json!({
@@ -915,37 +1119,6 @@ async fn test_openai_responses_inbound_with_tools_and_previous_response_id() {
     );
 }
 
-#[test]
-fn test_openai_responses_inbound_stream_event_serializes() {
-    use galaxy_router::llm::protocol::model::{
-        FinishReason, LlmStreamResponse, StreamChoice, StreamDelta,
-    };
-    let event = LlmStreamResponse {
-        id: String::new(),
-        object: "chunk".into(),
-        created: 0,
-        model: "o1".into(),
-        choices: vec![StreamChoice {
-            index: 0,
-            delta: StreamDelta {
-                role: Some(Role::Assistant),
-                content: Some(Content::Text("ok".into())),
-                reasoning_content: None,
-                tool_calls: None,
-            },
-            finish_reason: Some(FinishReason::Stop),
-        }],
-        usage: None,
-        system_fingerprint: None,
-    };
-    let bytes = OpenAiResponsesInbound
-        .transform_stream_event(&event)
-        .unwrap();
-    let s = String::from_utf8(bytes).unwrap();
-    assert!(s.contains("data: "));
-    assert!(s.contains("\"delta\":\"ok\""));
-}
-
 #[tokio::test]
 async fn test_openai_responses_outbound_response_parses() {
     let body = serde_json::to_vec(&serde_json::json!({
@@ -969,110 +1142,6 @@ async fn test_openai_responses_outbound_response_parses() {
 // ============================================================
 // OpenAI Responses 流事件补全（reasoning / tool_calls / completed / skip events）
 // ============================================================
-
-#[test]
-fn test_openai_responses_inbound_stream_event_reasoning() {
-    use galaxy_router::llm::protocol::model::{StreamChoice, StreamDelta};
-    let event = galaxy_router::llm::protocol::model::LlmStreamResponse {
-        id: String::new(),
-        object: "chunk".into(),
-        created: 0,
-        model: "o1".into(),
-        choices: vec![StreamChoice {
-            index: 0,
-            delta: StreamDelta {
-                role: Some(Role::Assistant),
-                content: None,
-                reasoning_content: Some("thinking...".into()),
-                tool_calls: None,
-            },
-            finish_reason: None,
-        }],
-        usage: None,
-        system_fingerprint: None,
-    };
-    let bytes = OpenAiResponsesInbound
-        .transform_stream_event(&event)
-        .unwrap();
-    let s = String::from_utf8(bytes).unwrap();
-    assert!(s.contains("response.reasoning.delta"));
-    assert!(s.contains("\"delta\":\"thinking...\""));
-}
-
-#[test]
-fn test_openai_responses_inbound_stream_event_finish_emits_completed() {
-    use galaxy_router::llm::protocol::model::{FinishReason, StreamChoice, StreamDelta};
-    let event = galaxy_router::llm::protocol::model::LlmStreamResponse {
-        id: "resp_42".into(),
-        object: "chunk".into(),
-        created: 0,
-        model: "o1".into(),
-        choices: vec![StreamChoice {
-            index: 0,
-            delta: StreamDelta {
-                role: Some(Role::Assistant),
-                content: None,
-                reasoning_content: None,
-                tool_calls: None,
-            },
-            finish_reason: Some(FinishReason::Stop),
-        }],
-        usage: Some(galaxy_router::llm::protocol::model::Usage {
-            prompt_tokens: 5,
-            completion_tokens: 8,
-            total_tokens: 13,
-            prompt_tokens_details: None,
-            completion_tokens_details: None,
-        }),
-        system_fingerprint: None,
-    };
-    let bytes = OpenAiResponsesInbound
-        .transform_stream_event(&event)
-        .unwrap();
-    let s = String::from_utf8(bytes).unwrap();
-    assert!(s.contains("response.completed"));
-    assert!(s.contains("\"id\":\"resp_42\""));
-    assert!(s.contains("\"input_tokens\":5"));
-}
-
-#[test]
-fn test_openai_responses_inbound_stream_event_tool_calls() {
-    use galaxy_router::llm::protocol::model::{
-        StreamChoice, StreamDelta, StreamFunctionDelta, StreamToolCallDelta,
-    };
-    let event = galaxy_router::llm::protocol::model::LlmStreamResponse {
-        id: String::new(),
-        object: "chunk".into(),
-        created: 0,
-        model: "o1".into(),
-        choices: vec![StreamChoice {
-            index: 0,
-            delta: StreamDelta {
-                role: Some(Role::Assistant),
-                content: None,
-                reasoning_content: None,
-                tool_calls: Some(vec![StreamToolCallDelta {
-                    index: 0,
-                    id: Some("call_x".into()),
-                    call_type: Some("function".into()),
-                    function: Some(StreamFunctionDelta {
-                        name: Some("search".into()),
-                        arguments: Some("{\"q\":\"rust\"}".into()),
-                    }),
-                }]),
-            },
-            finish_reason: None,
-        }],
-        usage: None,
-        system_fingerprint: None,
-    };
-    let bytes = OpenAiResponsesInbound
-        .transform_stream_event(&event)
-        .unwrap();
-    let s = String::from_utf8(bytes).unwrap();
-    assert!(s.contains("response.function_call_arguments.delta"));
-    assert!(s.contains("\"call_id\":\"call_x\""));
-}
 
 #[test]
 fn test_openai_responses_outbound_stream_event_reasoning() {

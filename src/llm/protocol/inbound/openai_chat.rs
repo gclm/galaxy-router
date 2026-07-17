@@ -30,6 +30,8 @@ struct OpenAiChatRequest {
     tool_choice: Option<serde_json::Value>,
     #[serde(default)]
     stop: Option<Vec<String>>,
+    #[serde(default)]
+    reasoning_effort: Option<String>,
 }
 
 /// OpenAI 消息
@@ -106,6 +108,33 @@ impl Inbound for OpenAiChatInbound {
                 let content = m.content.map(|c| {
                     if let Some(s) = c.as_str() {
                         Content::Text(s.to_string())
+                    } else if let Some(arr) = c.as_array() {
+                        let parts: Vec<ContentPart> = arr
+                            .iter()
+                            .filter_map(|item| match item["type"].as_str()? {
+                                "text" => Some(ContentPart::Text {
+                                    text: item["text"].as_str()?.to_string(),
+                                    cache_control: None,
+                                }),
+                                "image_url" => Some(ContentPart::ImageUrl {
+                                    image_url: ImageUrl {
+                                        url: item["image_url"]["url"].as_str()?.to_string(),
+                                        detail: item["image_url"]["detail"]
+                                            .as_str()
+                                            .map(String::from),
+                                    },
+                                    cache_control: None,
+                                }),
+                                "input_audio" => Some(ContentPart::InputAudio {
+                                    input_audio: InputAudio {
+                                        data: item["input_audio"]["data"].as_str()?.to_string(),
+                                        format: item["input_audio"]["format"].as_str()?.to_string(),
+                                    },
+                                }),
+                                _ => None,
+                            })
+                            .collect();
+                        Content::Parts(parts)
                     } else {
                         Content::Parts(vec![ContentPart::Text {
                             text: serde_json::to_string(&c).unwrap_or_default(),
@@ -182,7 +211,7 @@ impl Inbound for OpenAiChatInbound {
             tools,
             tool_choice,
             stop: request.stop,
-            reasoning_effort: None,
+            reasoning_effort: request.reasoning_effort,
             extra: std::collections::HashMap::new(),
         })
     }
@@ -190,12 +219,6 @@ impl Inbound for OpenAiChatInbound {
     fn transform_response(&self, response: &LlmResponse) -> Result<Vec<u8>, InboundError> {
         serde_json::to_vec(response)
             .map_err(|e| InboundError::TransformError(format!("序列化响应失败: {}", e)))
-    }
-
-    fn transform_stream_event(&self, event: &LlmStreamResponse) -> Result<Vec<u8>, InboundError> {
-        let data = serde_json::to_string(event)
-            .map_err(|e| InboundError::TransformError(format!("序列化流式事件失败: {}", e)))?;
-        Ok(format!("data: {}\n\n", data).into_bytes())
     }
 
     fn create_stream_converter(&self) -> Box<dyn StreamConverter> {

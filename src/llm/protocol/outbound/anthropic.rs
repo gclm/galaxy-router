@@ -71,6 +71,18 @@ impl Outbound for AnthropicOutbound {
                                         "tool_use_id": tool_call_id,
                                         "content": content
                                     }),
+                                    ContentPart::ImageUrl { image_url, .. } => {
+                                        match crate::llm::protocol::multimodal::parse_data_url(&image_url.url) {
+                                            Some((media_type, data)) => serde_json::json!({
+                                                "type": "image",
+                                                "source": { "type": "base64", "media_type": media_type, "data": data }
+                                            }),
+                                            None => serde_json::json!({
+                                                "type": "image",
+                                                "source": { "type": "url", "url": image_url.url }
+                                            }),
+                                        }
+                                    }
                                     _ => serde_json::json!({ "type": "text", "text": "" }),
                                 })
                                 .collect();
@@ -96,7 +108,7 @@ impl Outbound for AnthropicOutbound {
         let mut body = serde_json::json!({
             "model": request.model,
             "messages": messages,
-            "max_tokens": request.max_completion_tokens.unwrap_or(4096),
+            "max_tokens": request.max_completion_tokens.or(request.max_tokens).unwrap_or(4096),
         });
 
         if let Some(system) = system {
@@ -262,6 +274,42 @@ impl Outbound for AnthropicOutbound {
                     system_fingerprint: None,
                 }))
             }
+            "content_block_start" => {
+                // tool_use 的 id/name 在首帧带；text/thinking 的 start 无 delta 内容
+                if parsed["content_block"]["type"].as_str() == Some("tool_use") {
+                    let index = parsed["index"].as_u64().unwrap_or(0) as u32;
+                    let id = parsed["content_block"]["id"].as_str().unwrap_or("").to_string();
+                    let name = parsed["content_block"]["name"].as_str().unwrap_or("").to_string();
+                    Ok(Some(LlmStreamResponse {
+                        id: String::new(),
+                        object: "chat.completion.chunk".to_string(),
+                        created: chrono::Utc::now().timestamp(),
+                        model: String::new(),
+                        choices: vec![StreamChoice {
+                            index: 0,
+                            delta: StreamDelta {
+                                role: Some(Role::Assistant),
+                                content: None,
+                                reasoning_content: None,
+                                tool_calls: Some(vec![StreamToolCallDelta {
+                                    index,
+                                    id: Some(id),
+                                    call_type: Some("function".to_string()),
+                                    function: Some(StreamFunctionDelta {
+                                        name: Some(name),
+                                        arguments: None,
+                                    }),
+                                }]),
+                            },
+                            finish_reason: None,
+                        }],
+                        usage: None,
+                        system_fingerprint: None,
+                    }))
+                } else {
+                    Ok(None)
+                }
+            }
             "content_block_delta" => {
                 let delta_type = parsed["delta"]["type"].as_str().unwrap_or("");
                 match delta_type {
@@ -286,6 +334,41 @@ impl Outbound for AnthropicOutbound {
                             system_fingerprint: None,
                         }))
                     }
+                    "input_json_delta" => {
+                        // tool_use 参数分片，按 content block index 配对到 content_block_start
+                        let index = parsed["index"].as_u64().unwrap_or(0) as u32;
+                        let args = parsed["delta"]["partial_json"]
+                            .as_str()
+                            .unwrap_or("")
+                            .to_string();
+                        Ok(Some(LlmStreamResponse {
+                            id: String::new(),
+                            object: "chat.completion.chunk".to_string(),
+                            created: chrono::Utc::now().timestamp(),
+                            model: String::new(),
+                            choices: vec![StreamChoice {
+                                index: 0,
+                                delta: StreamDelta {
+                                    role: Some(Role::Assistant),
+                                    content: None,
+                                    reasoning_content: None,
+                                    tool_calls: Some(vec![StreamToolCallDelta {
+                                        index,
+                                        id: None,
+                                        call_type: None,
+                                        function: Some(StreamFunctionDelta {
+                                            name: None,
+                                            arguments: Some(args),
+                                        }),
+                                    }]),
+                                },
+                                finish_reason: None,
+                            }],
+                            usage: None,
+                            system_fingerprint: None,
+                        }))
+                    }
+                    "signature_delta" => Ok(None),
                     _ => {
                         let delta_text = parsed["delta"]["text"].as_str().unwrap_or("");
                         Ok(Some(LlmStreamResponse {

@@ -89,6 +89,7 @@ impl Outbound for OpenAiChatOutbound {
         if let Some(ref v) = tools { body["tools"] = serde_json::json!(v); }
         if let Some(ref v) = tool_choice { body["tool_choice"] = v.clone(); }
         if let Some(ref v) = request.stop { body["stop"] = serde_json::json!(v); }
+        if let Some(ref v) = request.reasoning_effort { body["reasoning_effort"] = serde_json::json!(v); }
 
         serde_json::to_vec(&body)
             .map_err(|e| OutboundError::TransformError(format!("序列化请求失败: {}", e)))

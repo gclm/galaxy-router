@@ -129,7 +129,6 @@ impl AnthropicStreamConverter {
     }
 
     /// 关闭 thinking block
-    /// 在 content_block_stop 之前补发 signature_delta 事件（如果有 pending signature）
     fn close_thinking_block(&mut self) -> Vec<Vec<u8>> {
         if !self.has_thinking_content_started {
             return vec![];

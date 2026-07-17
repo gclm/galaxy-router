@@ -102,22 +102,47 @@ impl Inbound for AnthropicInbound {
                                 .get("cache_control")
                                 .and_then(|cc| serde_json::from_value(cc.clone()).ok()),
                         }),
-                        "image" => Some(ContentPart::ImageUrl {
-                            image_url: ImageUrl {
-                                url: item["source"]["data"].as_str()?.to_string(),
-                                detail: None,
-                            },
-                            cache_control: None,
-                        }),
+                        "image" => {
+                            // 兼容 Anthropic source 的 base64 / url 两种类型；
+                            // base64 统一编码成 data URL 存入 IR，url 直接透传
+                            let src = &item["source"];
+                            let url = match src["type"].as_str() {
+                                Some("url") => src["url"].as_str()?.to_string(),
+                                Some("base64") => {
+                                    let media_type = src["media_type"].as_str().unwrap_or("image/png");
+                                    let data = src["data"].as_str()?;
+                                    crate::llm::protocol::multimodal::build_data_url(media_type, data)
+                                }
+                                _ => src["data"].as_str()?.to_string(),
+                            };
+                            Some(ContentPart::ImageUrl {
+                                image_url: ImageUrl { url, detail: None },
+                                cache_control: None,
+                            })
+                        }
                         "tool_use" => Some(ContentPart::ToolUse {
                             id: item["id"].as_str()?.to_string(),
                             name: item["name"].as_str()?.to_string(),
                             input: item["input"].clone(),
                         }),
-                        "tool_result" => Some(ContentPart::ToolResult {
-                            tool_call_id: item["tool_use_id"].as_str()?.to_string(),
-                            content: item["content"].as_str().unwrap_or("").to_string(),
-                        }),
+                        "tool_result" => {
+                            // content 可为字符串或 block 数组；数组取各 block 文本拼接
+                            let content = item["content"].as_str().map(String::from).unwrap_or_else(|| {
+                                item["content"]
+                                    .as_array()
+                                    .map(|arr| {
+                                        arr.iter()
+                                            .filter_map(|b| b["text"].as_str())
+                                            .collect::<Vec<_>>()
+                                            .join("")
+                                    })
+                                    .unwrap_or_default()
+                            });
+                            Some(ContentPart::ToolResult {
+                                tool_call_id: item["tool_use_id"].as_str()?.to_string(),
+                                content,
+                            })
+                        }
                         "thinking" => {
                             if let Some(text) = item["thinking"].as_str() {
                                 reasoning_content = Some(text.to_string());
@@ -255,34 +280,6 @@ impl Inbound for AnthropicInbound {
 
         serde_json::to_vec(&anthropic_response)
             .map_err(|e| InboundError::TransformError(format!("序列化响应失败: {}", e)))
-    }
-
-    fn transform_stream_event(&self, event: &LlmStreamResponse) -> Result<Vec<u8>, InboundError> {
-        let mut events = vec![];
-
-        if let Some(choice) = event.first_choice() {
-            if let Some(content) = &choice.delta.content
-                && let Content::Text(text) = content
-            {
-                events.push(format!(
-                    "event: content_block_delta\ndata: {}\n\n",
-                    serde_json::json!({
-                        "type": "content_block_delta",
-                        "index": 0,
-                        "delta": { "type": "text_delta", "text": text }
-                    })
-                ));
-            }
-
-            if choice.finish_reason.is_some() {
-                events.push(format!(
-                    "event: message_stop\ndata: {}\n\n",
-                    serde_json::json!({ "type": "message_stop" })
-                ));
-            }
-        }
-
-        Ok(events.join("").into_bytes())
     }
 
     fn create_stream_converter(&self) -> Box<dyn StreamConverter> {
