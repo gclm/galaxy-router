@@ -11,14 +11,12 @@ use crate::service::stats::recorder::{
 };
 use crate::service::stats::usage::{calculate_cost, resolve_stream_usage};
 use crate::llm::protocol::sse::{
-    apply_sse_usage, collect_sse_content, extract_error_from_sse, extract_usage_from_sse,
-    find_sse_boundary, format_stream_error_event, sanitize_upstream_error,
+    extract_error_from_sse, find_sse_boundary, sanitize_upstream_error,
 };
-use crate::llm::relay::converter::RelayPipeline;
 use crate::llm::relay::prepare::{extract_request_text, failed_attempt_stats, prepare_proxy_request};
 use crate::llm::relay::run::{
     RelayAttemptError, RelayCandidate, RelayRequest, RelayStreamAttemptExecutor,
-    RelayStreamAttemptResult, RelayStreamSuccess,
+    RelayStreamAttemptResult,
 };
 use crate::error::proxy::{ProxyError, sse_stream_error_status};
 use crate::app_state::AppState;
@@ -27,21 +25,22 @@ use crate::llm::scheduler::selector::SelectionResult;
 use axum::http::StatusCode;
 use futures::Stream;
 
-use super::stream_error::{decrement_active_once, rewrite_thinking_passthrough, StreamPanicGuard};
+use super::stream_error::{decrement_active_once, StreamPanicGuard};
+use super::stream_key_loop::run_key_stream_loop;
 
 pub(crate) type RelayBodyStream = Pin<Box<dyn Stream<Item = Result<Bytes, Infallible>> + Send>>;
 
 /// 流式代理执行器：将 RelayStreamRun 的候选迭代与真实 SSE 执行连接。
 #[derive(Clone)]
 pub(crate) struct ProxyStreamRelayExecutor {
-    state: AppState,
+    pub(super) state: AppState,
     request_id: String,
     headers: axum::http::HeaderMap,
     body: serde_json::Value,
     client_endpoint: EndpointType,
     api_key_id: Option<String>,
-    queue_permit: Arc<Mutex<Option<tokio::sync::OwnedSemaphorePermit>>>,
-    attempt_stats: Arc<Mutex<Vec<AttemptStats>>>,
+    pub(super) queue_permit: Arc<Mutex<Option<tokio::sync::OwnedSemaphorePermit>>>,
+    pub(super) attempt_stats: Arc<Mutex<Vec<AttemptStats>>>,
 }
 
 impl ProxyStreamRelayExecutor {
@@ -106,7 +105,7 @@ impl ProxyStreamRelayExecutor {
 
     /// 执行单次流式代理请求（从 proxy/execute.rs 内迁）
     #[allow(clippy::too_many_arguments)]
-    async fn execute_proxy_stream(
+    pub(super) async fn execute_proxy_stream(
         &self,
         upstream_api_key: &str,
         upstream_key_hint: &str,
@@ -302,14 +301,6 @@ impl ProxyStreamRelayExecutor {
             Result<Bytes, std::convert::Infallible>,
         >(STREAM_BUFFER_SIZE);
 
-        // 辅助：发送数据，客户端断开时返回 false
-        async fn stream_send(
-            tx: &tokio::sync::mpsc::Sender<Result<Bytes, std::convert::Infallible>>,
-            data: Bytes,
-        ) -> bool {
-            tx.send(Ok(data)).await.is_ok()
-        }
-
         // 流处理 + 统计记录全在一个 spawned task 里
         let active_decremented_spawn = active_decremented.clone();
         let route_id = selection.route_id.clone();
@@ -356,342 +347,47 @@ impl ProxyStreamRelayExecutor {
             let _permit = permit;
             let mut _panic_guard = panic_guard;
             let mut stream = std::pin::pin!(upstream_stream);
-            let mut last_usage: Option<serde_json::Value> = None;
-            let mut input_usage: Option<serde_json::Value> = None;
-            let mut buffer = Vec::new();
-            let mut collected_text = String::new();
-            let mut collected_reasoning = String::new();
-            let mut collected_tool_calls: Vec<serde_json::Value> = Vec::new();
-            let mut stream_error: Option<String> = None;
-            let mut ttft_ms: Option<i32> = None;
-            let mut first_token_seen = false;
 
             // thinking 流式 processor：needs_conversion 路径累积 reasoning 承接落库
-            // （删原内联收集后由 processor 承接；passthrough 路径仍用 collect_sse_content）
-            let ctx = PluginContext {
+            // （passthrough 路径仍用 collect_sse_content）
+            let plugin_ctx = PluginContext {
                 upstream_endpoint: upstream_endpoint_clone.clone(),
                 channel_id: sc_channel_id.clone(),
                 host_key: sc_upstream_key_hint.clone(),
                 client_name: sc_user_agent.clone(),
             };
-            let mut thinking_processor = state_clone
+            let thinking_processor = state_clone
                 .plugin_chain
-                .new_stream_processor(&ctx)
+                .new_stream_processor(&plugin_ctx)
                 .await;
 
+            // 流消费累积状态（两循环 + 收尾共用）与只读上下文
+            let mut st = super::stream_loop::StreamCollectState {
+                thinking_processor,
+                ..Default::default()
+            };
+            let loop_ctx = super::stream_loop::LoopCtx {
+                upstream_endpoint: &upstream_endpoint_clone,
+                client_endpoint: &sc_client_endpoint,
+                start_time: &start_time,
+            };
+
             if needs_conversion {
-                let mut converter = RelayPipeline::create_stream_converter(
-                    &sc_client_endpoint,
-                    &upstream_endpoint_clone,
+                super::stream_loop::run_conversion_loop(
+                    &mut st,
+                    &loop_ctx,
+                    stream.as_mut(),
+                    &stream_tx,
                 )
-                .expect("stream converter creation should not fail for conversion path")
-                .expect("conversion path should return Some converter");
-
-                while let Some(chunk) = stream.next().await {
-                    match chunk {
-                        Ok(bytes) => {
-                            buffer.extend_from_slice(&bytes);
-
-                            while let Some(event_end) = find_sse_boundary(&buffer) {
-                                let event_bytes = buffer[..event_end].to_vec();
-                                buffer = buffer[event_end..].to_vec();
-
-                                if event_bytes.iter().all(|b| *b == b'\n' || *b == b'\r') {
-                                    continue;
-                                }
-
-                                if let Ok(text) = std::str::from_utf8(&event_bytes)
-                                    && let Some(source) =
-                                        extract_usage_from_sse(text, &upstream_endpoint_clone)
-                                {
-                                    apply_sse_usage(source, &mut last_usage, &mut input_usage);
-                                }
-                                let mut is_error_event = false;
-                                if stream_error.is_none()
-                                    && let Ok(text) = std::str::from_utf8(&event_bytes)
-                                    && let Some(error) =
-                                        extract_error_from_sse(text, &upstream_endpoint_clone)
-                                {
-                                    stream_error = Some(error);
-                                    is_error_event = true;
-                                }
-                                if is_error_event {
-                                    if let Some(error) = stream_error.as_deref()
-                                        && !stream_send(
-                                            &stream_tx,
-                                            Bytes::from(format_stream_error_event(
-                                                error,
-                                                &sc_client_endpoint,
-                                            )),
-                                        )
-                                        .await
-                                    {
-                                        break;
-                                    }
-                                    continue;
-                                }
-
-                                if !first_token_seen {
-                                    ttft_ms = Some(start_time.elapsed().as_millis() as i32);
-                                    first_token_seen = true;
-                                }
-
-                                match RelayPipeline::decode_stream_event(
-                                    &upstream_endpoint_clone,
-                                    &event_bytes,
-                                ) {
-                                    Ok(Some(mut llm_stream)) => {
-                                        // 收集内容用于统计
-                                        if let Some(choice) = llm_stream.first_choice() {
-                                            if let Some(crate::llm::protocol::model::Content::Text(t)) =
-                                                &choice.delta.content
-                                                && !t.is_empty()
-                                            {
-                                                collected_text.push_str(t);
-                                            }
-                                            if let Some(tcs) = &choice.delta.tool_calls {
-                                                for tc in tcs {
-                                                    let id = tc.id.as_deref().unwrap_or("");
-                                                    let name = tc
-                                                        .function
-                                                        .as_ref()
-                                                        .and_then(|f| f.name.as_deref())
-                                                        .unwrap_or("");
-                                                    let args = tc
-                                                        .function
-                                                        .as_ref()
-                                                        .and_then(|f| f.arguments.as_deref())
-                                                        .unwrap_or("");
-                                                    if !id.is_empty() {
-                                                        // 新 tool call
-                                                        collected_tool_calls.push(
-                                                            serde_json::json!({
-                                                                "id": id,
-                                                                "name": name,
-                                                                "arguments": args,
-                                                            }),
-                                                        );
-                                                    } else if let Some(last) =
-                                                        collected_tool_calls.last_mut()
-                                                    {
-                                                        // 续传 chunk — 追加 arguments
-                                                        if let Some(prev) =
-                                                            last["arguments"].as_str()
-                                                        {
-                                                            let combined =
-                                                                format!("{}{}", prev, args);
-                                                            last["arguments"] =
-                                                                serde_json::Value::String(combined);
-                                                        }
-                                                    }
-                                                }
-                                            }
-                                        }
-                                        // thinking 流式 hook：剥离正文 content 的 <think> 归 reasoning_content（改写转发流）
-                                        if let Some(p) = thinking_processor.as_mut() {
-                                            p.observe(&mut llm_stream);
-                                        }
-                                        // 有状态转换：一个事件可能产生多个 SSE 输出
-                                        match converter.convert(&llm_stream) {
-                                            Ok(converted_events) => {
-                                                for converted in converted_events {
-                                                    if !stream_send(
-                                                        &stream_tx,
-                                                        Bytes::from(converted),
-                                                    )
-                                                    .await
-                                                    {
-                                                        break;
-                                                    }
-                                                }
-                                            }
-                                            Err(e) => {
-                                                tracing::error!("Stream conversion error: {}", e);
-                                            }
-                                        }
-                                    }
-                                    Ok(None) => {}
-                                    Err(e) => {
-                                        tracing::error!("Stream outbound conversion error: {}", e);
-                                    }
-                                }
-                            }
-                        }
-                        Err(e) => {
-                            tracing::error!("Upstream stream error: {}", e);
-                            break;
-                        }
-                    }
-                }
-
-                if !buffer.is_empty() && !buffer.iter().all(|b| *b == b'\n' || *b == b'\r') {
-                    if let Ok(text) = std::str::from_utf8(&buffer)
-                        && let Some(source) = extract_usage_from_sse(text, &upstream_endpoint_clone)
-                    {
-                        apply_sse_usage(source, &mut last_usage, &mut input_usage);
-                    }
-                    let mut is_error_event = false;
-                    if stream_error.is_none()
-                        && let Ok(text) = std::str::from_utf8(&buffer)
-                        && let Some(error) = extract_error_from_sse(text, &upstream_endpoint_clone)
-                    {
-                        stream_error = Some(error);
-                        is_error_event = true;
-                    }
-                    if !is_error_event {
-                        if let Ok(Some(llm_stream)) =
-                            RelayPipeline::decode_stream_event(&upstream_endpoint_clone, &buffer)
-                        {
-                            match converter.convert(&llm_stream) {
-                                Ok(converted_events) => {
-                                    for converted in converted_events {
-                                        stream_send(&stream_tx, Bytes::from(converted)).await;
-                                    }
-                                }
-                                Err(e) => {
-                                    tracing::error!("Stream conversion error (drain): {}", e);
-                                }
-                            }
-                        }
-                    } else if let Some(error) = stream_error.as_deref() {
-                        stream_send(
-                            &stream_tx,
-                            Bytes::from(format_stream_error_event(error, &sc_client_endpoint)),
-                        )
-                        .await;
-                    }
-                }
-
-                // 发送流结束事件
-                match converter.finish() {
-                    Ok(finish_events) => {
-                        for event_bytes in finish_events {
-                            stream_send(&stream_tx, Bytes::from(event_bytes)).await;
-                        }
-                    }
-                    Err(e) => {
-                        tracing::error!("Stream finish error: {}", e);
-                    }
-                }
+                .await;
             } else {
-                // thinking passthrough 改写：仅 OpenAiChat（DeepSeek/QwQ 直连客户端，<think> 混 content）。
-                // 其他协议 passthrough 透传（其上游用结构化 thinking_delta，且 inbound encode 会破坏流结构）。
-                let thinking_pt_rewrite = thinking_processor.is_some()
-                    && upstream_endpoint_clone == EndpointType::OpenAiChat;
-                while let Some(chunk) = stream.next().await {
-                    match chunk {
-                        Ok(bytes) => {
-                            buffer.extend_from_slice(&bytes);
-
-                            let mut client_disconnected = false;
-                            while let Some(event_end) = find_sse_boundary(&buffer) {
-                                let event_bytes = buffer[..event_end].to_vec();
-                                buffer = buffer[event_end..].to_vec();
-
-                                if event_bytes.iter().all(|b| *b == b'\n' || *b == b'\r') {
-                                    continue;
-                                }
-
-                                // TTFT：在第一个有效 SSE 事件处记录（比"第一个 chunk"更精确）
-                                if !first_token_seen {
-                                    ttft_ms = Some(start_time.elapsed().as_millis() as i32);
-                                    first_token_seen = true;
-                                }
-
-                                if let Ok(text) = std::str::from_utf8(&event_bytes) {
-                                    if let Some(source) =
-                                        extract_usage_from_sse(text, &upstream_endpoint_clone)
-                                    {
-                                        apply_sse_usage(source, &mut last_usage, &mut input_usage);
-                                    }
-                                    if stream_error.is_none()
-                                        && let Some(error) =
-                                            extract_error_from_sse(text, &upstream_endpoint_clone)
-                                    {
-                                        stream_error = Some(error);
-                                    }
-                                    // 落库收集：thinking 改写时 reasoning 由 processor 累积，collect 用 dummy 避免重复
-                                    if thinking_pt_rewrite {
-                                        let mut _dummy_reasoning = String::new();
-                                        collect_sse_content(
-                                            text,
-                                            &upstream_endpoint_clone,
-                                            &mut collected_text,
-                                            &mut _dummy_reasoning,
-                                            &mut collected_tool_calls,
-                                        );
-                                    } else {
-                                        collect_sse_content(
-                                            text,
-                                            &upstream_endpoint_clone,
-                                            &mut collected_text,
-                                            &mut collected_reasoning,
-                                            &mut collected_tool_calls,
-                                        );
-                                    }
-                                }
-
-                                // 转发：thinking 改写时 decode→observe→reencode；否则透传原始字节
-                                let send_bytes = if thinking_pt_rewrite {
-                                    rewrite_thinking_passthrough(
-                                        &upstream_endpoint_clone,
-                                        &event_bytes,
-                                        thinking_processor.as_mut(),
-                                    )
-                                } else {
-                                    Bytes::from(event_bytes)
-                                };
-                                if !stream_send(&stream_tx, send_bytes).await {
-                                    client_disconnected = true;
-                                }
-                                if client_disconnected {
-                                    break;
-                                }
-                            }
-                            if client_disconnected {
-                                break;
-                            }
-                        }
-                        Err(e) => {
-                            tracing::error!("Stream error: {}", e);
-                            break;
-                        }
-                    }
-                }
-
-                // 处理 buffer 中残余的最后一个事件
-                if !buffer.is_empty()
-                    && !buffer.iter().all(|b| *b == b'\n' || *b == b'\r')
-                    && let Ok(text) = std::str::from_utf8(&buffer)
-                {
-                    if let Some(source) = extract_usage_from_sse(text, &upstream_endpoint_clone) {
-                        apply_sse_usage(source, &mut last_usage, &mut input_usage);
-                    }
-                    if stream_error.is_none()
-                        && let Some(error) = extract_error_from_sse(text, &upstream_endpoint_clone)
-                    {
-                        stream_error = Some(error);
-                    }
-                    // 残余事件：thinking 改写时 reasoning 由 processor，collect 用 dummy（残余通常无 content/reasoning）
-                    if thinking_pt_rewrite {
-                        let mut _dummy_reasoning = String::new();
-                        collect_sse_content(
-                            text,
-                            &upstream_endpoint_clone,
-                            &mut collected_text,
-                            &mut _dummy_reasoning,
-                            &mut collected_tool_calls,
-                        );
-                    } else {
-                        collect_sse_content(
-                            text,
-                            &upstream_endpoint_clone,
-                            &mut collected_text,
-                            &mut collected_reasoning,
-                            &mut collected_tool_calls,
-                        );
-                    }
-                }
+                super::stream_loop::run_passthrough_loop(
+                    &mut st,
+                    &loop_ctx,
+                    stream.as_mut(),
+                    &stream_tx,
+                )
+                .await;
             }
 
             // === 流结束：统计记录（即使客户端断开也会执行） ===
@@ -700,10 +396,10 @@ impl ProxyStreamRelayExecutor {
             let latency_ms = start_time.elapsed().as_millis() as i64;
             let usage = resolve_stream_usage(
                 &upstream_endpoint_clone,
-                last_usage,
-                input_usage,
+                st.last_usage,
+                st.input_usage,
                 &req_text_for_estimation,
-                &collected_text,
+                &st.collected_text,
             );
             let cost =
                 calculate_cost(&state_clone.model_registry, &target_model_clone, usage).await;
@@ -714,13 +410,13 @@ impl ProxyStreamRelayExecutor {
 
             // thinking 流式 hook：流结束取累积 reasoning，合并进 collected_reasoning
             // （needs_conversion 路径删了内联收集，由 processor 承接；passthrough 仍由 collect_sse_content 填）
-            if let Some(p) = thinking_processor.as_mut()
+            if let Some(p) = st.thinking_processor.as_mut()
                 && let Some(r) = p.finish_reasoning()
             {
-                collected_reasoning.push_str(&r);
+                st.collected_reasoning.push_str(&r);
             }
 
-            let (status_code, error_message, response_content) = if let Some(error) = stream_error {
+            let (status_code, error_message, response_content) = if let Some(error) = st.stream_error.take() {
                 state_clone
                     .lb_state
                     .record_failure(&channel_id_clone, false)
@@ -732,7 +428,7 @@ impl ProxyStreamRelayExecutor {
                     .record_success_with_ttft(
                         &channel_id_clone,
                         latency_ms as f64,
-                        ttft_ms.map(|v| v as f64),
+                        st.ttft_ms.map(|v| v as f64),
                     )
                     .await;
                 // per-key 熔断：流成功结束，重置该 key 的熔断状态
@@ -741,16 +437,16 @@ impl ProxyStreamRelayExecutor {
                     .circuit_breaker
                     .record_success(&channel_id_clone, &sc_upstream_key_hint)
                     .await;
-                let resp = if collected_text.is_empty()
-                    && collected_reasoning.is_empty()
-                    && collected_tool_calls.is_empty()
+                let resp = if st.collected_text.is_empty()
+                    && st.collected_reasoning.is_empty()
+                    && st.collected_tool_calls.is_empty()
                     && input_tokens == 0
                     && output_tokens == 0
                 {
                     None
                 } else {
                     let mut resp_json = serde_json::json!({
-                        "content": collected_text,
+                        "content": st.collected_text,
                         "usage": {
                             "input_tokens": input_tokens,
                             "output_tokens": output_tokens,
@@ -758,11 +454,11 @@ impl ProxyStreamRelayExecutor {
                             "cache_creation_tokens": cache_creation,
                         }
                     });
-                    if !collected_reasoning.is_empty() {
-                        resp_json["reasoning"] = serde_json::json!(collected_reasoning);
+                    if !st.collected_reasoning.is_empty() {
+                        resp_json["reasoning"] = serde_json::json!(st.collected_reasoning);
                     }
-                    if !collected_tool_calls.is_empty() {
-                        resp_json["tool_calls"] = serde_json::json!(collected_tool_calls);
+                    if !st.collected_tool_calls.is_empty() {
+                        resp_json["tool_calls"] = serde_json::json!(st.collected_tool_calls);
                     }
                     Some(resp_json.to_string())
                 };
@@ -786,7 +482,7 @@ impl ProxyStreamRelayExecutor {
                 cache_creation,
                 cost,
                 latency_ms,
-                ttft_ms,
+                st.ttft_ms,
                 status_code,
                 error_message,
                 sc_client_endpoint.as_str().to_string(),
@@ -879,7 +575,7 @@ impl RelayStreamAttemptExecutor for ProxyStreamRelayExecutor {
         };
 
         // 503 同渠道退避重试（参考 sub2api HandleSelectionExhausted 模式）
-        let first_pass = self.run_key_stream_loop(&selection, candidate).await;
+        let first_pass = run_key_stream_loop(self, &selection, candidate).await;
         if first_pass.should_retry_503() {
             tracing::warn!(
                 "所有 key 返回 503，2s 后同渠道重试 (stream): channel={}",
@@ -891,170 +587,11 @@ impl RelayStreamAttemptExecutor for ProxyStreamRelayExecutor {
                 .circuit_breaker
                 .reset_channel(&candidate.channel_id)
                 .await;
-            return self
-                .run_key_stream_loop(&selection, candidate)
+            return run_key_stream_loop(self, &selection, candidate)
                 .await
                 .into_stream_result();
         }
         first_pass.into_stream_result()
-    }
-}
-
-impl ProxyStreamRelayExecutor {
-    /// 单轮遍历所有 key 执行流式代理请求。
-    ///
-    /// 返回 StreamKeyLoopOutcome 让上层判断是否要做"503 同渠道退避重试"。
-    async fn run_key_stream_loop(
-        &self,
-        selection: &SelectionResult,
-        candidate: &RelayCandidate,
-    ) -> StreamKeyLoopOutcome {
-        let api_key_attempts = self.state.api_key_attempts(&selection.channel);
-        let mut last_error = None;
-        let mut executed_count = 0u32;
-        let mut all_executed_503 = true;
-
-        for upstream_api_key in &api_key_attempts {
-            let key_hint = selection.channel.key_hint(upstream_api_key);
-
-            // per-key 熔断：该 key 已熔断则跳过，直接试下一个 key
-            let (tripped, _) = self
-                .state
-                .lb_state
-                .circuit_breaker
-                .is_tripped(&candidate.channel_id, &key_hint)
-                .await;
-            if tripped {
-                tracing::debug!(
-                    "key 熔断跳过: channel={}, key={}",
-                    candidate.channel_id,
-                    key_hint
-                );
-                continue;
-            }
-
-            let mut local_attempts = self
-                .attempt_stats
-                .lock()
-                .map(|mut stats| std::mem::take(&mut *stats))
-                .unwrap_or_default();
-            let queue_permit = self
-                .queue_permit
-                .lock()
-                .expect("queue_permit mutex poisoned")
-                .take();
-
-            let result = self
-                .execute_proxy_stream(
-                    upstream_api_key,
-                    &key_hint,
-                    selection,
-                    &mut local_attempts,
-                    queue_permit,
-                )
-                .await;
-
-            if let Ok(mut stats) = self.attempt_stats.lock() {
-                *stats = local_attempts;
-            }
-
-            match result {
-                Ok((status, stream, content_type, _ttft)) => {
-                    return StreamKeyLoopOutcome::Success(RelayStreamSuccess {
-                        status,
-                        stream,
-                        content_type,
-                        _capacity_permit: None,
-                    });
-                }
-                Err(ProxyError::UpstreamError { status, body }) => {
-                    executed_count += 1;
-                    let upstream_error = ProxyError::UpstreamError {
-                        status,
-                        body: body.clone(),
-                    };
-                    let error = RelayAttemptError::from_proxy_error(upstream_error);
-                    let is_key_retryable = error
-                        .proxy_error
-                        .as_ref()
-                        .map(|e| e.is_key_retryable())
-                        .unwrap_or(false);
-
-                    if status != axum::http::StatusCode::SERVICE_UNAVAILABLE {
-                        all_executed_503 = false;
-                    }
-
-                    if is_key_retryable {
-                        self.state
-                            .lb_state
-                            .circuit_breaker
-                            .record_failure(&candidate.channel_id, &key_hint)
-                            .await;
-                        last_error = Some(error);
-                        continue;
-                    }
-                    return StreamKeyLoopOutcome::NonKeyRetryableError(error);
-                }
-                Err(e) => {
-                    // 仅 UpstreamError 走 key-retryable 路径（上方分支）。
-                    // 其余 ProxyError 变体（DatabaseError / RequestError / TransformError 等）
-                    // 非上游错误，不应触发换 key，直接 NonKeyRetryableError。
-                    return StreamKeyLoopOutcome::NonKeyRetryableError(
-                        RelayAttemptError::from_proxy_error(e),
-                    );
-                }
-            }
-        }
-
-        StreamKeyLoopOutcome::AllKeysTried {
-            last_error,
-            all_executed_503: executed_count > 0 && all_executed_503,
-        }
-    }
-}
-
-/// 流式 run_key_stream_loop 的返回结果。
-enum StreamKeyLoopOutcome {
-    Success(RelayStreamSuccess),
-    NonKeyRetryableError(RelayAttemptError),
-    AllKeysTried {
-        last_error: Option<RelayAttemptError>,
-        all_executed_503: bool,
-    },
-}
-
-impl StreamKeyLoopOutcome {
-    fn should_retry_503(&self) -> bool {
-        matches!(
-            self,
-            StreamKeyLoopOutcome::AllKeysTried {
-                all_executed_503: true,
-                ..
-            }
-        )
-    }
-
-    fn into_stream_result(self) -> RelayStreamAttemptResult {
-        match self {
-            StreamKeyLoopOutcome::Success(success) => RelayStreamAttemptResult {
-                response: Ok(success),
-                response_written: true,
-            },
-            StreamKeyLoopOutcome::NonKeyRetryableError(err)
-            | StreamKeyLoopOutcome::AllKeysTried {
-                last_error: Some(err),
-                ..
-            } => RelayStreamAttemptResult {
-                response: Err(err),
-                response_written: false,
-            },
-            StreamKeyLoopOutcome::AllKeysTried {
-                last_error: None, ..
-            } => RelayStreamAttemptResult {
-                response: Err(RelayAttemptError::new(500, "all api keys exhausted")),
-                response_written: false,
-            },
-        }
     }
 }
 
